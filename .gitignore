@@ -1,0 +1,11 @@
+.cache/
+__pycache__/
+*.pyc
+
+# Your catch log is yours. It is the only irreplaceable thing here and it
+# should never be pushed anywhere by accident.
+data/catch_log.jsonl
+
+# Chart features are regenerated from NOAA with `python3 -m tiderace charts`.
+# Committing them bloats history on every refresh and goes stale silently.
+data/charts/

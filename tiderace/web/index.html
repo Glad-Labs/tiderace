@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tiderace — Narragansett Bay</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#0B1518; --panel:#122126; --panel-2:#16292F; --hair:#274048;
+  --ink:#E4ECEE; --ink-2:#C2D3D7; --muted:#8CA3A8;
+  --accent:#F04FA0; --depth:#4FB3C7;
+  --good:#4FBF89; --warn:#D9A521; --crit:#E0705F;
+  --display:'Archivo','Helvetica Neue',Arial,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  background:var(--ground); color:var(--ink);
+  font-family:var(--display); font-size:14px; overflow:hidden;
+}
+#app{display:grid; grid-template-columns:1fr 360px; height:100%}
+#map{width:100%; height:100%; background:var(--ground)}
+
+/* ------------------------------------------------------------ top bar */
+#bar{
+  position:absolute; top:12px; left:12px; z-index:5;
+  display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  background:rgba(18,33,38,.94); border:1px solid var(--hair);
+  border-radius:6px; padding:8px 10px; backdrop-filter:blur(8px);
+  max-width:calc(100% - 24px);
+}
+.brand{
+  font-weight:700; letter-spacing:-.02em; font-size:15px; padding-right:10px;
+  border-right:1px solid var(--hair); margin-right:2px; white-space:nowrap;
+}
+.brand span{color:var(--accent)}
+select,button{
+  font-family:var(--display); font-size:13px; font-weight:500;
+  background:var(--panel-2); color:var(--ink); border:1px solid var(--hair);
+  border-radius:4px; padding:6px 9px; cursor:pointer;
+}
+select:hover,button:hover{border-color:var(--depth)}
+button.primary{background:var(--accent); border-color:var(--accent); color:#12060D; font-weight:600}
+button.primary:hover{filter:brightness(1.1)}
+label.chk{display:flex; align-items:center; gap:5px; font-size:12px; color:var(--ink-2); cursor:pointer}
+
+/* ---------- chart overlay menu ---------- */
+#layers{
+  display:none; position:absolute; top:calc(100% + 6px); right:0; z-index:6;
+  background:rgba(18,33,38,.97); border:1px solid var(--hair); border-radius:6px;
+  padding:9px 11px; min-width:220px; backdrop-filter:blur(8px);
+}
+#layers.open{display:block}
+#layers h4{margin:0 0 7px; font-size:10px; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--accent); font-family:var(--mono); font-weight:600}
+#layers label{display:flex; align-items:center; gap:7px; font-size:12px;
+  color:var(--ink-2); cursor:pointer; padding:3px 0}
+#layers .sw{width:10px; height:10px; border-radius:50%; flex:none; border:1px solid rgba(0,0,0,.5)}
+#layers .cnt{margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--muted)}
+#layers .hint{margin:7px 0 0; padding-top:7px; border-top:1px solid var(--hair);
+  font-size:10.5px; color:var(--muted); line-height:1.45; font-family:var(--mono)}
+
+/* ------------------------------------------------------ time scrubber */
+#timebar{
+  position:absolute; bottom:14px; left:12px; right:calc(360px + 12px); z-index:5;
+  background:rgba(18,33,38,.94); border:1px solid var(--hair); border-radius:6px;
+  padding:10px 14px 12px; backdrop-filter:blur(8px);
+}
+#timebar .row{display:flex; align-items:baseline; gap:12px; margin-bottom:7px}
+#tlabel{font-family:var(--mono); font-size:13px; font-weight:600; color:var(--accent)}
+#tsub{font-family:var(--mono); font-size:11px; color:var(--muted); letter-spacing:.05em}
+input[type=range]{width:100%; accent-color:var(--accent); cursor:pointer}
+#ticks{display:flex; justify-content:space-between; font-family:var(--mono);
+  font-size:10px; color:var(--muted); margin-top:3px; letter-spacing:.04em}
+
+/* -------------------------------------------------------------- panel */
+#panel{
+  background:var(--panel); border-left:1px solid var(--hair);
+  overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:14px;
+}
+.ph{
+  font-family:var(--mono); font-size:10px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--accent);
+  display:flex; align-items:center; gap:8px;
+}
+.ph::after{content:""; flex:1; height:1px; background:var(--hair)}
+.card{background:var(--panel-2); border:1px solid var(--hair); border-radius:5px; padding:12px}
+.card h3{margin:0 0 2px; font-size:15px; letter-spacing:-.01em}
+.card .sub{font-family:var(--mono); font-size:10px; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--muted)}
+.big{font-size:34px; font-weight:700; letter-spacing:-.03em; line-height:1;
+  font-variant-numeric:tabular-nums}
+.kv{display:grid; grid-template-columns:auto 1fr; gap:4px 12px; margin-top:10px;
+  font-family:var(--mono); font-size:11.5px}
+.kv dt{color:var(--muted); letter-spacing:.05em}
+.kv dd{margin:0; color:var(--ink-2); font-variant-numeric:tabular-nums}
+.why{margin-top:10px; padding-top:10px; border-top:1px solid var(--hair);
+  font-size:12px; color:var(--ink-2); line-height:1.5}
+.rank{display:flex; flex-direction:column; gap:1px}
+.rank button{
+  display:grid; grid-template-columns:38px 1fr auto; gap:9px; align-items:center;
+  width:100%; text-align:left; background:var(--panel-2); border:1px solid transparent;
+  border-radius:4px; padding:7px 9px; font-size:12.5px;
+}
+.rank button:hover{border-color:var(--depth)}
+.rank button.on{border-color:var(--accent)}
+.rank .s{font-family:var(--mono); font-weight:600; font-variant-numeric:tabular-nums; font-size:12px}
+.rank .m{font-family:var(--mono); font-size:10px; color:var(--muted)}
+.empty{color:var(--muted); font-size:12.5px; line-height:1.55}
+.note{font-size:11.5px; color:var(--muted); line-height:1.5}
+form{display:flex; flex-direction:column; gap:7px}
+input[type=text],input[type=number],input[type=datetime-local]{
+  font-family:var(--mono); font-size:12px; background:var(--ground); color:var(--ink);
+  border:1px solid var(--hair); border-radius:4px; padding:6px 8px; width:100%;
+}
+input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+.two{display:grid; grid-template-columns:1fr 1fr; gap:7px}
+.ok{color:var(--good); font-family:var(--mono); font-size:11.5px}
+.err{color:var(--crit); font-family:var(--mono); font-size:11.5px}
+.maplibregl-popup-content{background:var(--panel); color:var(--ink);
+  border:1px solid var(--hair); border-radius:5px; font-family:var(--mono); font-size:11px}
+.maplibregl-popup-tip{border-top-color:var(--panel)!important}
+.maplibregl-ctrl-attrib{font-size:10px!important}
+#spark{width:100%; height:52px; display:block; margin-top:10px}
+#loading{
+  position:absolute; inset:0; z-index:9; display:grid; place-items:center;
+  background:rgba(11,21,24,.86); font-family:var(--mono); font-size:12px;
+  color:var(--depth); letter-spacing:.1em; text-transform:uppercase;
+}
+#loading.hide{display:none}
+@media (max-width:900px){
+  #app{grid-template-columns:1fr; grid-template-rows:1fr 300px}
+  #panel{border-left:none; border-top:1px solid var(--hair)}
+  #timebar{right:12px; bottom:314px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div style="position:relative">
+    <div id="map"></div>
+    <div id="bar">
+      <div class="brand">tide<span>race</span></div>
+      <select id="species"></select>
+      <label class="chk"><input type="checkbox" id="marks" checked> seamarks</label>
+      <label class="chk"><input type="checkbox" id="labels" checked> labels</label>
+      <button id="layersbtn" title="Chart overlays">charts ▾</button>
+      <div id="layers"></div>
+    </div>
+    <div id="timebar">
+      <div class="row"><span id="tlabel">—</span><span id="tsub"></span></div>
+      <input type="range" id="time" min="0" max="0" value="0" step="1">
+      <div id="ticks"></div>
+    </div>
+    <div id="loading">loading noaa data…</div>
+  </div>
+  <aside id="panel">
+    <div>
+      <p class="ph">Ranked now</p>
+      <div class="rank" id="rank"></div>
+    </div>
+    <div id="detail"></div>
+    <div id="logbox"></div>
+    <p class="note" style="margin-top:auto;padding-top:12px;border-top:1px solid var(--hair)">
+      Charts © NOAA ENC (public domain) · basemap © OpenStreetMap · seamarks © OpenSeaMap<br>
+      tiderace is <a href="https://www.gnu.org/licenses/agpl-3.0.html"
+        style="color:var(--depth)">AGPL-3.0</a> —
+      <a id="src" href="#" style="color:var(--depth)">get the source</a>
+    </p>
+  </aside>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+let GRID = null, TI = 0, SEL = null, MARKERS = {};
+
+// Score -> colour. Deliberately not a rainbow: a single hue ramping from the
+// water tone to the accent, so rank reads as intensity rather than category.
+function colour(s){
+  if (s == null) return '#5D7075';
+  const t = Math.max(0, Math.min(1, s / 100));
+  const stops = [[0.00,[45,70,78]],[0.45,[79,179,199]],[0.75,[214,120,170]],[1.00,[240,79,160]]];
+  let a = stops[0], b = stops[stops.length-1];
+  for (let i=0;i<stops.length-1;i++){ if (t>=stops[i][0] && t<=stops[i+1][0]){ a=stops[i]; b=stops[i+1]; break; } }
+  const f = (t-a[0])/((b[0]-a[0])||1);
+  const c = a[1].map((v,i)=>Math.round(v+(b[1][i]-v)*f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+const map = new maplibregl.Map({
+  container:'map',
+  style:{
+    version:8,
+    sources:{
+      osm:{type:'raster', tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+           tileSize:256, maxzoom:19,
+           attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'},
+      seamark:{type:'raster', tiles:['https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png'],
+           tileSize:256, maxzoom:18,
+           attribution:'© <a href="https://www.openseamap.org/">OpenSeaMap</a>'}
+    },
+    layers:[
+      {id:'osm', type:'raster', source:'osm',
+       paint:{'raster-saturation':-0.55,'raster-brightness-min':0.05,'raster-brightness-max':0.72,'raster-contrast':0.12}},
+      {id:'seamark', type:'raster', source:'seamark', paint:{'raster-opacity':0.95}}
+    ]
+  },
+  center:[-71.35, 41.53], zoom:10.2, minZoom:8, maxZoom:16, attributionControl:true
+});
+map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'top-right');
+map.addControl(new maplibregl.ScaleControl({unit:'nautical'}), 'bottom-right');
+
+$('#marks').onchange = e => {
+  if (!MAP_READY) return;
+  map.setLayoutProperty('seamark', 'visibility', e.target.checked ? 'visible' : 'none');
+};
+$('#labels').onchange = e =>
+  Object.values(MARKERS).forEach(m => m.el.querySelector('.lbl').style.display = e.target.checked?'':'none');
+
+// ------------------------------------------------------------------ markers
+let MAP_READY = false;
+map.on('load', () => { MAP_READY = true; syncMarkers(); loadCharts(); });
+map.on('error', e => console.warn('map:', e && e.error && e.error.message));
+
+// The map is a view onto the data, not a prerequisite for it. If WebGL is
+// unavailable or the tile host is blocked, the ranked list, the spot detail
+// and the log form must all still work -- so nothing below is gated on the
+// map finishing.
+function syncMarkers(){
+  if (!MAP_READY || !GRID) return;
+  Object.values(MARKERS).forEach(m => m.remove());
+  MARKERS = {};
+  GRID.spots.forEach(s => MARKERS[s.key] = makeMarker(s));
+  paint();
+}
+
+function makeMarker(sp){
+  const el = document.createElement('div');
+  el.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;transform:translate(-9px,-9px)';
+  el.innerHTML =
+    `<div class="dot" style="width:18px;height:18px;border-radius:50%;border:2px solid #0B1518;
+        box-shadow:0 0 0 1px rgba(228,236,238,.35);flex:none"></div>
+     <div class="lbl" style="font-family:var(--mono);font-size:10px;font-weight:600;
+        color:#E4ECEE;text-shadow:0 1px 3px #0B1518,0 0 6px #0B1518;white-space:nowrap">${sp.name}</div>`;
+  el.onclick = () => select(sp.key);
+  const m = new maplibregl.Marker({element:el, anchor:'center'})
+      .setLngLat([sp.lon, sp.lat]).addTo(map);
+  m.el = el;
+  return m;
+}
+
+function paint(){
+  if (!GRID) return;
+  const t = GRID.times[TI];
+  const d = new Date(t);
+  $('#tlabel').textContent = d.toLocaleString([], {weekday:'short', hour:'2-digit', minute:'2-digit'});
+  const det = GRID.spots.find(s=>s.detail.length)?.detail[TI];
+  $('#tsub').textContent = det ? `${det.light_phase} · moon ${det.moon_phase.toLowerCase()}` : '';
+
+  GRID.spots.forEach(sp => {
+    const s = sp.scores[TI];
+    const m = MARKERS[sp.key];
+    if (!m) return;   // map not ready yet -- panel still renders below
+    const dot = m.el.querySelector('.dot');
+    dot.style.background = colour(s);
+    const size = s == null ? 12 : 12 + (s/100)*12;
+    dot.style.width = dot.style.height = size + 'px';
+    m.el.style.transform = `translate(${-size/2}px,${-size/2}px)`;
+    m.el.style.zIndex = Math.round(s || 0);
+  });
+  renderRank(); renderDetail();
+}
+
+function renderRank(){
+  const rows = GRID.spots
+    .map(sp => ({sp, s: sp.scores[TI]}))
+    .filter(r => r.s != null)
+    .sort((a,b) => b.s - a.s).slice(0, 8);
+  $('#rank').innerHTML = rows.map(r => {
+    const d = r.sp.detail[TI] || {};
+    return `<button data-k="${r.sp.key}" class="${SEL===r.sp.key?'on':''}">
+      <span class="s" style="color:${colour(r.s)}">${r.s.toFixed(0)}</span>
+      <span>${r.sp.name}<br><span class="m">${(d.current_speed??0).toFixed(2)} kt ${d.current_dir||''}</span></span>
+      <span class="m">${d.wind_kt!=null?d.wind_kt.toFixed(0)+' kt':''}</span>
+    </button>`;
+  }).join('') || '<p class="empty">No spots scored at this time.</p>';
+  $('#rank').querySelectorAll('button').forEach(b => b.onclick = () => select(b.dataset.k));
+}
+
+function sparkline(scores){
+  const w = 320, h = 52, n = scores.length;
+  const pts = scores.map((s,i) => [i/(n-1)*w, h - (s/100)*(h-6) - 3]);
+  const d = pts.map((p,i) => (i?'L':'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  const x = TI/(n-1)*w;
+  return `<svg id="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <path d="${d} L ${w} ${h} L 0 ${h} Z" fill="rgba(240,79,160,.14)"/>
+    <path d="${d}" fill="none" stroke="#F04FA0" stroke-width="1.6"/>
+    <line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="#4FB3C7" stroke-width="1" stroke-dasharray="3 3"/>
+  </svg>`;
+}
+
+function renderDetail(){
+  if (!SEL){ $('#detail').innerHTML =
+    `<p class="ph">Spot</p><p class="empty">Pick a spot on the map or in the list to see its
+     conditions, its 48-hour curve, and to log a trip there.</p>`; $('#logbox').innerHTML=''; return; }
+  const sp = GRID.spots.find(s => s.key === SEL);
+  if (!sp) return;
+  const s = sp.scores[TI], d = sp.detail[TI] || {};
+  $('#detail').innerHTML = `
+    <p class="ph">Spot</p>
+    <div class="card">
+      <h3>${sp.name}</h3>
+      <div class="sub">${sp.kind}${sp.best_stage?' · best on '+sp.best_stage:''}</div>
+      <div class="big" style="color:${colour(s)};margin-top:10px">${s!=null?s.toFixed(1):'—'}</div>
+      ${sp.scores.length ? sparkline(sp.scores) : ''}
+      <dl class="kv">
+        <dt>current</dt><dd>${(d.current_speed??0).toFixed(2)} kt ${d.current_dir||''}</dd>
+        <dt>water</dt><dd>${d.water_temp_f!=null?d.water_temp_f.toFixed(1)+' °F':'—'}</dd>
+        <dt>wind</dt><dd>${d.wind_kt!=null?d.wind_kt.toFixed(0)+' kt '+(d.wind_dir||''):'—'}</dd>
+        <dt>light</dt><dd>${d.light_phase||'—'}</dd>
+        <dt>moon</dt><dd>${d.moon_phase||'—'} ${d.moon_illum!=null?'('+Math.round(d.moon_illum*100)+'%)':''}</dd>
+        <dt>tide</dt><dd>${d.next_tide||'—'}</dd>
+        ${sp.bottom ? `<dt>bottom</dt><dd>${sp.bottom.bottom}${sp.bottom.quality?' ('+sp.bottom.quality+')':''}
+           <span style="color:var(--muted)">· ${sp.bottom.distance_nm} nm</span></dd>` : ''}
+      </dl>
+      <div class="why">${d.why||''}</div>
+    </div>
+    <p class="note" style="margin-top:8px">${sp.notes}</p>`;
+  renderLogForm(sp);
+}
+
+function renderLogForm(sp){
+  const now = new Date(GRID.times[TI]);
+  const local = new Date(now.getTime() - now.getTimezoneOffset()*60000).toISOString().slice(0,16);
+  $('#logbox').innerHTML = `
+    <p class="ph">Log a trip</p>
+    <form id="logform">
+      <div class="two">
+        <input type="number" name="count" min="0" value="0" placeholder="fish" required>
+        <input type="number" name="biggest_in" min="0" step="0.5" placeholder="biggest (in)">
+      </div>
+      <input type="datetime-local" name="started_at" value="${local}">
+      <input type="text" name="method" placeholder="method — live eel, bucktail…">
+      <input type="text" name="bait_observed" placeholder="bait seen — peanut bunker…">
+      <input type="text" name="notes" placeholder="notes">
+      <button class="primary" type="submit">Log at ${sp.name}</button>
+      <p class="note">Blanks count. A model trained only on good days learns every day is good.</p>
+      <div id="logmsg"></div>
+    </form>`;
+  $('#logform').onsubmit = async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const body = {spot: sp.key, species: GRID.species};
+    for (const [k,v] of f.entries()) if (v !== '') body[k] = v;
+    const msg = $('#logmsg');
+    msg.className=''; msg.textContent = 'saving…';
+    try{
+      const r = await fetch('/api/log', {method:'POST', headers:{'Content-Type':'application/json'},
+                                         body: JSON.stringify(body)});
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      msg.className='ok';
+      msg.textContent = `saved · ${j.summary.trips} trips, ${j.summary.fish} fish, ${j.summary.blanks} blanks`;
+      e.target.reset();
+    }catch(err){ msg.className='err'; msg.textContent = 'failed: ' + err.message; }
+  };
+}
+
+function select(key){
+  SEL = key; paint();
+  if (!MAP_READY) return;
+  const sp = GRID.spots.find(s => s.key === key);
+  if (sp) map.easeTo({center:[sp.lon, sp.lat], zoom: Math.max(map.getZoom(), 11.5), duration:600});
+}
+
+// ----------------------------------------------------------- chart overlays
+// Styling follows what matters for fishing rather than chart convention:
+// rocks are coloured by tide exposure (a rock that covers and uncovers is the
+// classic striper piece), wrecks by whether a depth is charted at all, and
+// seabed by substrate — tautog want boulder, fluke want sand.
+const CHART_STYLE = {
+  rocks: {
+    colour: ['match', ['get','water_level'],
+      'covers and uncovers', '#D9A521',
+      'awash',               '#E0705F',
+      'always under water',  '#4FB3C7',
+      '#8CA3A8'],
+    radius: [ 'interpolate', ['linear'], ['zoom'], 10, 1.6, 13, 3.2, 16, 5.5 ],
+    swatch: '#D9A521', minzoom: 10
+  },
+  wrecks: {
+    colour: ['case', ['has','depth_ft'], '#F04FA0', '#B5197A'],
+    radius: [ 'interpolate', ['linear'], ['zoom'], 9, 3.5, 13, 6, 16, 9 ],
+    swatch: '#F04FA0', minzoom: 8
+  },
+  obstructions: {
+    colour: '#C58BD8',
+    radius: [ 'interpolate', ['linear'], ['zoom'], 10, 2, 13, 3.6, 16, 6 ],
+    swatch: '#C58BD8', minzoom: 10
+  },
+  turbulence: { colour:'#5FE3C0',
+    radius:['interpolate',['linear'],['zoom'],8,5,14,11], swatch:'#5FE3C0', minzoom:8 },
+  kelp: { colour:'#4FBF89',
+    radius:['interpolate',['linear'],['zoom'],10,2.5,15,6], swatch:'#4FBF89', minzoom:10 },
+  seabed: {
+    // S-57 packs compound substrates into one string ("sand,rock",
+    // "mud,shells,pebbles") -- 28 distinct combinations in this bay alone, so
+    // exact matching drops nearly all of them to grey. Test for the hardest
+    // substrate present instead, which is also the one that holds fish.
+    colour: ['case',
+      ['>=', ['index-of', 'boulder', ['coalesce',['get','bottom'],'']], 0], '#E0705F',
+      ['>=', ['index-of', 'rock',    ['coalesce',['get','bottom'],'']], 0], '#E08A3C',
+      ['>=', ['index-of', 'stone',   ['coalesce',['get','bottom'],'']], 0], '#E08A3C',
+      ['>=', ['index-of', 'gravel',  ['coalesce',['get','bottom'],'']], 0], '#D9A521',
+      ['>=', ['index-of', 'pebbles', ['coalesce',['get','bottom'],'']], 0], '#D9A521',
+      ['>=', ['index-of', 'sand',    ['coalesce',['get','bottom'],'']], 0], '#E8DCA8',
+      ['>=', ['index-of', 'shells',  ['coalesce',['get','bottom'],'']], 0], '#C2D3D7',
+      ['>=', ['index-of', 'mud',     ['coalesce',['get','bottom'],'']], 0], '#8A7355',
+      ['>=', ['index-of', 'silt',    ['coalesce',['get','bottom'],'']], 0], '#8A7355',
+      '#5D7075'],
+    radius: [ 'interpolate', ['linear'], ['zoom'], 11, 2, 14, 4, 16, 6 ],
+    swatch: '#E08A3C', minzoom: 11
+  }
+};
+const CHART_ON = {rocks:false, wrecks:true, obstructions:false,
+                  turbulence:true, kelp:false, seabed:false};
+const CHART_DATA = {};
+
+fetch('/api/meta').then(r=>r.json()).then(m => {
+  if (m.source_url) $('#src').href = m.source_url;
+}).catch(()=>{});
+
+async function loadCharts(){
+  let meta;
+  try{ meta = await (await fetch('/api/charts')).json(); }
+  catch(e){ return; }
+  const box = $('#layers');
+  if (!meta.layers || !meta.layers.length){
+    box.innerHTML = `<h4>Chart overlays</h4>
+      <p class="hint">Not downloaded yet.<br>Run: python3 -m tiderace charts</p>`;
+    return;
+  }
+
+  box.innerHTML = '<h4>Chart overlays</h4>' + meta.layers.map(l => {
+    const st = CHART_STYLE[l.name] || {};
+    return `<label title="${l.label}">
+      <span class="sw" style="background:${st.swatch||'#8CA3A8'}"></span>
+      <input type="checkbox" data-layer="${l.name}" ${CHART_ON[l.name]?'checked':''}>
+      ${l.name}<span class="cnt" id="cnt-${l.name}"></span></label>`;
+  }).join('') + `<p class="hint">NOAA ENC · public domain<br>click any feature for detail</p>`;
+
+  for (const l of meta.layers){
+    const st = CHART_STYLE[l.name];
+    if (!st) continue;
+    if (MAP_READY && map.getSource('c-' + l.name)) continue;
+
+    // loadCharts() runs on boot (to populate the menu) and again when the map
+    // becomes ready. Cache the GeoJSON so a slow map load does not re-pull
+    // three quarters of a megabyte.
+    if (!CHART_DATA[l.name]) CHART_DATA[l.name] = await (await fetch(l.url)).json();
+    const gj = CHART_DATA[l.name];
+    document.querySelector('#cnt-' + l.name).textContent = gj.features.length;
+    if (!MAP_READY) continue;
+    map.addSource('c-' + l.name, {type:'geojson', data:gj});
+    map.addLayer({
+      id: 'c-' + l.name, type:'circle', source:'c-' + l.name,
+      minzoom: st.minzoom || 9,
+      layout:{visibility: CHART_ON[l.name] ? 'visible' : 'none'},
+      paint:{
+        'circle-color': st.colour,
+        'circle-radius': st.radius,
+        'circle-opacity': 0.9,
+        'circle-stroke-width': 0.6,
+        'circle-stroke-color': 'rgba(11,21,24,.85)'
+      }
+    }, undefined);
+    map.on('click', 'c-' + l.name, e => chartPopup(e, l.name));
+    map.on('mouseenter', 'c-' + l.name, () => map.getCanvas().style.cursor = 'pointer');
+    map.on('mouseleave', 'c-' + l.name, () => map.getCanvas().style.cursor = '');
+  }
+
+  box.querySelectorAll('input[data-layer]').forEach(cb => cb.onchange = () => {
+    const id = 'c-' + cb.dataset.layer;
+    CHART_ON[cb.dataset.layer] = cb.checked;
+    if (MAP_READY && map.getLayer(id))
+      map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none');
+  });
+}
+
+function chartPopup(e, layer){
+  const f = e.features && e.features[0];
+  if (!f) return;
+  const p = f.properties || {};
+  const rows = Object.entries(p)
+    .filter(([k]) => k !== 'depth_m')
+    .map(([k,v]) => `${k.replace(/_/g,' ')}: <b>${v}</b>`).join('<br>');
+  new maplibregl.Popup({closeButton:false, maxWidth:'260px'})
+    .setLngLat(e.lngLat)
+    .setHTML(`<b style="color:#F04FA0">${layer.replace(/s$/,'')}</b><br>${rows || 'no charted detail'}`)
+    .addTo(map);
+}
+
+$('#layersbtn').onclick = e => { e.stopPropagation(); $('#layers').classList.toggle('open'); };
+document.addEventListener('click', e => {
+  if (!$('#layers').contains(e.target) && e.target !== $('#layersbtn'))
+    $('#layers').classList.remove('open');
+});
+
+// -------------------------------------------------------------------- boot
+async function loadSpecies(){
+  const meta = await (await fetch('/api/meta')).json();
+  $('#species').innerHTML = meta.species
+    .map(s => `<option value="${s.key}">${s.name}</option>`).join('');
+  $('#species').value = 'striped_bass';
+}
+
+async function loadGrid(){
+  $('#loading').classList.remove('hide');
+  const sp = $('#species').value;
+  GRID = await (await fetch(`/api/grid?species=${sp}&hours=48`)).json();
+
+  syncMarkers();
+
+  const t = $('#time');
+  t.max = Math.max(0, GRID.times.length - 1);
+  TI = Math.min(TI, +t.max); t.value = TI;
+
+  $('#ticks').innerHTML = [0, .25, .5, .75, 1]
+    .map(f => { const i = Math.round(f*(GRID.times.length-1));
+      return `<span>${new Date(GRID.times[i]).toLocaleString([], {weekday:'short',hour:'2-digit'})}</span>`; })
+    .join('');
+
+  if (SEL && !GRID.spots.some(s => s.key === SEL)) SEL = null;
+  paint();
+  $('#loading').classList.add('hide');
+}
+
+$('#time').oninput = e => { TI = +e.target.value; paint(); };
+$('#species').onchange = loadGrid;
+(async function boot(){
+  try{
+    await loadSpecies();
+    await loadGrid();
+    if (!MAP_READY) await loadCharts();   // still populate the menu + counts
+  }catch(err){
+    $('#loading').innerHTML =
+      `<div style="text-align:center;line-height:1.7">could not reach the forecast API<br>
+       <span style="color:#8CA3A8;text-transform:none;letter-spacing:0">${err.message}</span></div>`;
+  }
+})();
+</script>
+</body>
+</html>
