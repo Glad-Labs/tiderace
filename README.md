@@ -6,6 +6,8 @@ endpoints using only the Python standard library.
 
 ```bash
 python3 -m tiderace serve                          # map UI at localhost:8765
+python3 -m tiderace evaluate                       # does it beat doing nothing?
+python3 tests.py                                   # 16 tests, no network needed
 python3 -m tiderace --species striped_bass         # terminal forecast
 python3 -m tiderace --species fluke --spot dyer_island
 python3 -m tiderace spots
@@ -134,6 +136,41 @@ tiderace/
   log.py        catch log + condition snapshotting
   cli.py        forecast / spots / log / history
 ```
+
+## Regulations
+
+`tiderace/regs.py` gates every forecast on RI season dates and surfaces slot,
+size and bag limits. A forecast that ranks a closed species is not just wrong,
+it is telling you to break the law and pressure a fishery that is meant to be
+left alone.
+
+These values are **transcribed by hand and not authoritative.** RIDEM amends
+them mid-season. `CHECKED_ON` and `STALE_AFTER_DAYS` make staleness visible
+rather than silent, and the CLI prints the source on every run. Confirm before
+you fish.
+
+## Does it actually work?
+
+```bash
+python3 -m tiderace evaluate
+```
+
+The bar is not "better than random" — it is **better than the free advice every
+angler already gives you**: fish moving water at dawn or dusk. That baseline
+needs no app, no NOAA calls and no model, and it is implemented in
+`evaluate.baseline()` so the comparison is honest. If tiderace cannot beat it,
+tiderace is a decoration on a tide chart.
+
+Two biases make naive evaluation flattering, and both are structural:
+
+- **Selection.** You only log trips you took, and you took them when conditions
+  looked good. The model is scored on a sample it helped choose.
+- **Feedback.** Once the app recommends a spot you fish it, log it, and the
+  model learns that spot is productive *because it sent you there*.
+
+Every log entry carries `decided_by` (`angler` or `app`) so those two can be
+compared rather than silently blended. If most of your log is app-chosen,
+`evaluate` says so and stops claiming accuracy.
 
 ## Verified
 
