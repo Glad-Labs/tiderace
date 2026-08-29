@@ -225,7 +225,7 @@ $('#labels').onchange = e =>
 
 // ------------------------------------------------------------------ markers
 let MAP_READY = false;
-map.on('load', () => { MAP_READY = true; syncMarkers(); loadCharts(); });
+map.on('load', () => { MAP_READY = true; syncMarkers(); loadCharts(); loadBait(); });
 map.on('error', e => console.warn('map:', e && e.error && e.error.message));
 
 // The map is a view onto the data, not a prerequisite for it. If WebGL is
@@ -326,6 +326,7 @@ function renderDetail(){
         <dt>light</dt><dd>${d.light_phase||'—'}</dd>
         <dt>moon</dt><dd>${d.moon_phase||'—'} ${d.moon_illum!=null?'('+Math.round(d.moon_illum*100)+'%)':''}</dd>
         <dt>tide</dt><dd>${d.next_tide||'—'}</dd>
+        ${d.bait_note ? `<dt>bait</dt><dd style="color:#5FE3C0">${d.bait_note}</dd>` : ''}
         ${sp.bottom ? `<dt>bottom</dt><dd>${sp.bottom.bottom}${sp.bottom.quality?' ('+sp.bottom.quality+')':''}
            <span style="color:var(--muted)">· ${sp.bottom.distance_nm} nm</span></dd>` : ''}
       </dl>
@@ -504,6 +505,50 @@ function chartPopup(e, layer){
     .setLngLat(e.lngLat)
     .setHTML(`<b style="color:#F04FA0">${layer.replace(/s$/,'')}</b><br>${rows || 'no charted detail'}`)
     .addTo(map);
+}
+
+// Bait sightings fade as they age -- a three-day-old report should look like
+// what it is, not like something you saw this morning.
+async function loadBait(){
+  if (!MAP_READY) return;
+  let gj;
+  try{ gj = await (await fetch('/api/bait')).json(); }catch(e){ return; }
+  if (map.getSource('bait')) { map.getSource('bait').setData(gj); return; }
+  if (!gj.features || !gj.features.length) return;
+
+  map.addSource('bait', {type:'geojson', data:gj});
+  map.addLayer({
+    id:'bait-halo', type:'circle', source:'bait',
+    paint:{
+      'circle-color':'#5FE3C0',
+      'circle-radius':['interpolate',['linear'],['zoom'],9,10,14,34],
+      'circle-opacity':['*',['get','freshness'],0.16],
+      'circle-blur':0.7
+    }
+  });
+  map.addLayer({
+    id:'bait', type:'circle', source:'bait',
+    paint:{
+      'circle-color':['case',['==',['get','abundance'],'none'],'#E0705F','#5FE3C0'],
+      'circle-radius':['match',['get','abundance'],
+        'loaded',9,'decent',7,'scattered',5,'trace',4,'none',5, 6],
+      'circle-opacity':['max',0.25,['get','freshness']],
+      'circle-stroke-width':1.2,
+      'circle-stroke-color':'rgba(11,21,24,.9)'
+    }
+  });
+  map.on('click','bait', e => {
+    const p = e.features[0].properties;
+    const label = p.abundance === 'none' ? `no ${p.bait} seen`
+                                         : `${p.abundance} ${p.bait}`;
+    new maplibregl.Popup({closeButton:false})
+      .setLngLat(e.lngLat)
+      .setHTML(`<b style="color:#5FE3C0">${label}</b><br>${p.age_days}d ago · ${p.source}` +
+               (p.notes ? `<br>${p.notes}` : ''))
+      .addTo(map);
+  });
+  map.on('mouseenter','bait',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','bait',()=>map.getCanvas().style.cursor='');
 }
 
 $('#layersbtn').onclick = e => { e.stopPropagation(); $('#layers').classList.toggle('open'); };

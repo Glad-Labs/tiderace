@@ -9,3 +9,6 @@ data/catch_log.jsonl
 # Chart features are regenerated from NOAA with `python3 -m tiderace charts`.
 # Committing them bloats history on every refresh and goes stale silently.
 data/charts/
+
+# Your own marks. Never committed, never transmitted, never exported.
+data/my_spots.json

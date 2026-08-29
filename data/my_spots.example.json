@@ -1,0 +1,15 @@
+[
+  {
+    "key": "the_rockpile",
+    "name": "The Rockpile",
+    "lat": 41.5123,
+    "lon": -71.3456,
+    "current_station": "ACT2121",
+    "tide_station": "8452660",
+    "kind": "reef",
+    "notes": "Boulder field, fishes best last two hours of the ebb",
+    "species": ["striped_bass", "tautog"],
+    "quality": {"striped_bass": 0.95, "tautog": 0.9},
+    "best_stage": "ebb"
+  }
+]

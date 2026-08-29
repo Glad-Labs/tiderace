@@ -65,7 +65,7 @@ class Entry:
     logged_at: str = ""
 
 
-def snapshot(spot_key: str, when: datetime) -> dict:
+def snapshot(spot_key: str, when: datetime, species: str | None = None) -> dict:
     """Freeze the physical conditions at a spot and time.
 
     Called at log time so the training example is complete even if NOAA later
@@ -73,7 +73,7 @@ def snapshot(spot_key: str, when: datetime) -> dict:
     """
     spot = spots.get(spot_key)
     rows = features.build(spot, when.replace(minute=0, second=0, microsecond=0),
-                          hours=2, step_minutes=30)
+                          hours=2, step_minutes=30, species=species)
     if not rows:
         return {}
     row = min(rows, key=lambda r: abs((r["time"] - when).total_seconds()))
@@ -84,7 +84,9 @@ def snapshot(spot_key: str, when: datetime) -> dict:
 def record(entry: Entry, path: str = LOG_PATH) -> Entry:
     if not entry.conditions:
         try:
-            entry.conditions = snapshot(entry.spot, datetime.fromisoformat(entry.started_at))
+            entry.conditions = snapshot(entry.spot,
+                                        datetime.fromisoformat(entry.started_at),
+                                        entry.species)
         except Exception:
             entry.conditions = {}
     entry.logged_at = datetime.now().isoformat(timespec="seconds")

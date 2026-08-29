@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from . import astro, sources
+from . import astro, bait, sources
 from .sources import SourceError
 from .spots import Spot
 
@@ -52,7 +52,7 @@ def _wind_against_tide(wind_dir: str | None, current_compass: int | None,
 
 
 def build(spot: Spot, start: datetime, hours: int = 48,
-          step_minutes: int = 30) -> list[dict]:
+          step_minutes: int = 30, species: str | None = None) -> list[dict]:
     """Feature rows at `step_minutes` resolution starting at `start`."""
     end = start + timedelta(hours=hours)
     pad_start = start - timedelta(days=1)
@@ -62,6 +62,10 @@ def build(spot: Spot, start: datetime, hours: int = 48,
     tides = sources.tide_extremes(spot.tide_station, pad_start, pad_end)
     temp_series = sources.water_temp(spot.tide_station, start - timedelta(days=2), end)
     wx, press = _weather(spot, start, end)
+
+    # Bait sightings are read once, not per row -- the file is small but the
+    # loop is 96 iterations deep.
+    sightings = bait.load() if species else []
 
     fallback_temp = temp_series[-1]["temp_f"] if temp_series else None
     if fallback_temp is None:
@@ -78,8 +82,14 @@ def build(spot: Spot, start: datetime, hours: int = 48,
         wind_dir = _nearest(wx, t, "wind_dir")
         speed = cur["speed"] if cur else 0.0
 
+        b = (bait.bait_at(spot.lat, spot.lon, t, species, sightings)
+             if species else {"signal": 0.0, "known": False})
+
         rows.append({
             "time": t,
+            "bait_signal": b["signal"],
+            "bait_known": b.get("known", False),
+            "bait_note": bait.describe(b) if b.get("known") else None,
             "month": t.month,
             "spot": spot.key,
             "solar_elev": round(elev, 2),

@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from . import bait as baitmod
 from . import charts, features, regs, score, spots
 from . import log as catchlog
 from .sources import SourceError
@@ -43,7 +44,7 @@ def build_grid(species: str, start: datetime, hours: int = 48,
     out_spots = []
     for spot in spots.for_species(species):
         try:
-            rows = features.build(spot, start, hours, step_minutes)
+            rows = features.build(spot, start, hours, step_minutes, species=species)
         except SourceError as exc:
             out_spots.append({
                 "key": spot.key, "name": spot.name, "lat": spot.lat, "lon": spot.lon,
@@ -74,6 +75,8 @@ def build_grid(species: str, start: datetime, hours: int = 48,
                 "moon_phase": r["moon_phase"],
                 "moon_illum": r["moon_illum"],
                 "next_tide": r["next_tide"],
+                "bait_note": r.get("bait_note"),
+                "bait_signal": r.get("bait_signal"),
                 "why": score.explain(res),
             } for r, res in zip(rows, results)],
         })
@@ -153,6 +156,29 @@ class Handler(BaseHTTPRequestHandler):
                         {"error": "not cached — run: python3 -m tiderace charts"}, 404)
                 with open(path, "rb") as fh:
                     return self._send(fh.read(), "application/geo+json")
+            if url.path == "/api/bait":
+                rows = baitmod.load()
+                now = datetime.now()
+                feats = []
+                for r in rows:
+                    try:
+                        age = (now - datetime.fromisoformat(r["when"])).total_seconds() / 86400
+                    except (KeyError, ValueError):
+                        continue
+                    if age > 21:            # older than three weeks is noise
+                        continue
+                    feats.append({
+                        "type": "Feature",
+                        "geometry": {"type": "Point",
+                                     "coordinates": [r["lon"], r["lat"]]},
+                        "properties": {
+                            "bait": r["bait"], "abundance": r.get("abundance"),
+                            "age_days": round(age, 1),
+                            "freshness": round(0.5 ** (age / baitmod.HALF_LIFE_DAYS), 3),
+                            "source": r.get("source", "own"),
+                            "notes": r.get("notes"),
+                        }})
+                return self._send_json({"type": "FeatureCollection", "features": feats})
             if url.path == "/api/log":
                 return self._send_json({"entries": catchlog.load(),
                                         "summary": catchlog.summary()})
@@ -200,6 +226,10 @@ class Handler(BaseHTTPRequestHandler):
 def serve(host: str = "127.0.0.1", port: int = 8765) -> int:
     srv = ThreadingHTTPServer((host, port), Handler)
     print(f"\n  tiderace  →  http://{host}:{port}")
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print("\n  ! This is bound beyond localhost, so anyone who can reach this")
+        print("  ! machine can read your catch log and your private marks.")
+        print("  ! There is no authentication. Use 127.0.0.1 unless you mean it.\n")
     print(f"  {len(spots.SPOTS)} spots · {len(score.PROFILES)} species · ctrl-c to stop\n")
     try:
         srv.serve_forever()

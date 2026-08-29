@@ -19,6 +19,12 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 
+# Weather lookups are the only place a *spot coordinate* leaves this machine.
+# NWS grid cells are ~2.5 km, so querying at 4 decimal places (~11 m) discloses
+# far more precision than the answer contains. Two decimals is ~1.1 km: no loss
+# of forecast accuracy, and your marks do not end up in someone's access log.
+WX_PRECISION = 2
+
 CO_OPS = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 NWS = "https://api.weather.gov"
 UA = "tiderace (github.com/gladlabs; mattg@gladlabs.io)"
@@ -70,6 +76,11 @@ def _coops(**params) -> dict:
     params.setdefault("time_zone", "lst_ldt")
     params.setdefault("format", "json")
     return _fetch(CO_OPS + "?" + urllib.parse.urlencode(params))
+
+
+def _coarse(lat: float, lon: float) -> tuple[float, float]:
+    """Round a coordinate to the resolution the weather actually has."""
+    return round(lat, WX_PRECISION), round(lon, WX_PRECISION)
 
 
 def _dt(s: str) -> datetime:
@@ -200,6 +211,7 @@ def latest_water_temp(station: str) -> float | None:
 
 def nws_hourly(lat: float, lon: float) -> list[dict]:
     """Hourly forecast: wind, air temp, sky cover, pressure trend proxy."""
+    lat, lon = _coarse(lat, lon)
     pt = _fetch(f"{NWS}/points/{lat:.4f},{lon:.4f}", ttl=86400)
     url = pt["properties"]["forecastHourly"]
     data = _fetch(url, ttl=3600)
@@ -227,6 +239,7 @@ def nws_hourly(lat: float, lon: float) -> list[dict]:
 
 def nws_pressure(lat: float, lon: float) -> list[dict]:
     """Barometric pressure series from the raw gridpoint (Pa -> mb)."""
+    lat, lon = _coarse(lat, lon)
     pt = _fetch(f"{NWS}/points/{lat:.4f},{lon:.4f}", ttl=86400)
     props = pt["properties"]
     grid = _fetch(f"{NWS}/gridpoints/{props['gridId']}/{props['gridX']},{props['gridY']}",
@@ -253,6 +266,7 @@ def nws_observations(lat: float, lon: float, begin: datetime,
     week would otherwise land in the log with every weather field null -- and
     a training example missing half its features is close to worthless.
     """
+    lat, lon = _coarse(lat, lon)
     pt = _fetch(f"{NWS}/points/{lat:.4f},{lon:.4f}", ttl=86400)
     try:
         stations = _fetch(pt["properties"]["observationStations"], ttl=86400)

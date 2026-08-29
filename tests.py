@@ -8,9 +8,9 @@ website is slow trains you to ignore it.
 from __future__ import annotations
 
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
-from tiderace import astro, evaluate, regs, score, spots
+from tiderace import astro, bait, evaluate, regs, score, spots
 from tiderace.features import _local_tz, _wind_against_tide
 from tiderace.sources import current_at
 
@@ -118,6 +118,88 @@ class Spots(unittest.TestCase):
             for sp, v in s.quality.items():
                 self.assertTrue(0.0 <= v <= 1.0, f"{s.key}/{sp} prior out of range")
                 self.assertIn(sp, s.species, f"{s.key} rates {sp} it does not list")
+
+
+class Bait(unittest.TestCase):
+    NOW = datetime(2026, 8, 28, 20, 0)
+
+    def _one(self, what, days=0, nm=0.0, abundance="loaded", conf="high"):
+        return [{"bait": what, "lat": 41.44 + nm / 60.0, "lon": -71.42,
+                 "when": (self.NOW - timedelta(days=days)).isoformat(),
+                 "abundance": abundance, "confidence": conf}]
+
+    def _sig(self, rows, species="striped_bass"):
+        return bait.bait_at(41.44, -71.42, self.NOW, species, rows)["signal"]
+
+    def test_decay_actually_decays(self):
+        """Regression: signal was a weighted mean, so the decay weight cancelled
+        in the ratio and a fortnight-old rumour scored like a fresh sighting."""
+        fresh = self._sig(self._one("bunker", days=0))
+        half = self._sig(self._one("bunker", days=bait.HALF_LIFE_DAYS))
+        old = self._sig(self._one("bunker", days=16))
+        self.assertAlmostEqual(half, fresh / 2, places=1)
+        self.assertLess(old, 0.15)
+        self.assertGreater(fresh, half)
+
+    def test_distance_decays(self):
+        near = self._sig(self._one("bunker", nm=0))
+        far = self._sig(self._one("bunker", nm=2))
+        self.assertGreater(near, far)
+        self.assertEqual(self._sig(self._one("bunker", nm=10)), 0.0)
+
+    def test_relevance_scales_magnitude_not_just_weight(self):
+        """Bunker is everything to a bass and nothing to a tautog."""
+        self.assertGreater(self._sig(self._one("bunker"), "striped_bass"), 0.9)
+        self.assertEqual(self._sig(self._one("bunker"), "tautog"), 0.0)
+        self.assertGreater(self._sig(self._one("crabs"), "tautog"), 0.9)
+
+    def test_absence_is_negative_but_ignorance_is_neutral(self):
+        seen_nothing = self._sig(self._one("bunker", abundance="none"))
+        self.assertLess(seen_nothing, -0.3)
+        self.assertEqual(self._sig([]), 0.0)          # nobody looked
+        self.assertEqual(bait.modifier(0.0), 1.0)
+
+    def test_modifier_bounds(self):
+        self.assertAlmostEqual(bait.modifier(1.0), 1.35)
+        self.assertAlmostEqual(bait.modifier(-1.0), 0.75)
+        for sig in (-1, -0.5, 0, 0.5, 1):
+            self.assertTrue(0.7 <= bait.modifier(sig) <= 1.4)
+
+    def test_abundance_is_monotonic(self):
+        vals = [self._sig(self._one("bunker", abundance=a))
+                for a in ("trace", "scattered", "decent", "loaded")]
+        self.assertEqual(vals, sorted(vals))
+
+    def test_future_sightings_ignored(self):
+        future = [{"bait": "bunker", "lat": 41.44, "lon": -71.42,
+                   "when": (self.NOW + timedelta(days=3)).isoformat(),
+                   "abundance": "loaded", "confidence": "high"}]
+        self.assertEqual(self._sig(future), 0.0)
+
+    def test_bait_reaches_the_scorer(self):
+        base = score.score("striped_bass", {
+            "month": 9, "water_temp_f": 62, "current_speed": 1.4,
+            "light_phase": "golden", "wind_kt": 8, "pressure_trend_3h": -1,
+            "spring_strength": .7})
+        fed = score.score("striped_bass", {
+            "month": 9, "water_temp_f": 62, "current_speed": 1.4,
+            "light_phase": "golden", "wind_kt": 8, "pressure_trend_3h": -1,
+            "spring_strength": .7, "bait_signal": 1.0})
+        self.assertGreater(fed["score"], base["score"])
+        self.assertIn("bait", fed["modifiers"])
+
+
+class Privacy(unittest.TestCase):
+    def test_weather_coordinates_are_coarsened(self):
+        """Your marks must not reach a third party at 11 m precision."""
+        from tiderace.sources import _coarse
+        lat, lon = _coarse(41.512345, -71.345678)
+        self.assertEqual((lat, lon), (41.51, -71.35))
+
+    def test_public_set_excludes_private_marks(self):
+        pub = spots.public_only()
+        self.assertTrue(all(not s.private for s in pub))
+        self.assertEqual(len(pub), len([s for s in spots.SPOTS if not s.private]))
 
 
 class Evaluation(unittest.TestCase):

@@ -7,6 +7,7 @@ import json
 import sys
 from datetime import datetime, timedelta
 
+from . import bait as baitmod
 from . import features, regs, score, spots
 from . import log as catchlog
 from .sources import SourceError
@@ -104,6 +105,16 @@ def run(argv=None) -> int:
     lg.add_argument("--notes")
     lg.add_argument("--source", default="manual", choices=("manual", "voice", "report"))
 
+    bt = sub.add_parser("bait", help="record a bait sighting (or its absence)")
+    bt.add_argument("--spot", help="spot key; or give --lat/--lon")
+    bt.add_argument("--lat", type=float); bt.add_argument("--lon", type=float)
+    bt.add_argument("--bait", required=True, choices=baitmod.BAIT_TYPES)
+    bt.add_argument("--abundance", default="decent", choices=sorted(baitmod.ABUNDANCE))
+    bt.add_argument("--at", help="ISO datetime (default: now)")
+    bt.add_argument("--source", default="own", choices=("own", "report", "voice"))
+    bt.add_argument("--confidence", default="high", choices=("high", "medium", "low"))
+    bt.add_argument("--notes")
+
     sub.add_parser("history", help="summarise the catch log")
     sub.add_parser("evaluate", help="does the model beat the free baseline?")
 
@@ -124,6 +135,8 @@ def run(argv=None) -> int:
         return _cmd_log(args)
     if args.cmd == "history":
         return _cmd_history()
+    if args.cmd == "bait":
+        return _cmd_bait(args)
     if args.cmd == "evaluate":
         from . import evaluate as ev
         print()
@@ -172,6 +185,47 @@ def _cmd_log(args) -> int:
     return 0
 
 
+def _cmd_bait(args) -> int:
+    if args.spot:
+        sp = spots.get(args.spot)
+        lat, lon = sp.lat, sp.lon
+    elif args.lat is not None and args.lon is not None:
+        lat, lon = args.lat, args.lon
+    else:
+        print("need --spot, or both --lat and --lon", file=sys.stderr)
+        return 1
+
+    when = datetime.fromisoformat(args.at) if args.at else datetime.now()
+    baitmod.record(baitmod.Sighting(
+        bait=args.bait, lat=lat, lon=lon,
+        when=when.isoformat(timespec="minutes"),
+        abundance=args.abundance, spot=args.spot, source=args.source,
+        confidence=args.confidence, notes=args.notes))
+
+    verb = "no" if args.abundance == "none" else args.abundance
+    print(f"logged: {verb} {args.bait} at "
+          f"{args.spot or f'{lat:.4f},{lon:.4f}'} ({when:%Y-%m-%d %H:%M})")
+
+    # Which spots does this sighting actually move, and for which target?
+    moved = []
+    for sp in spots.SPOTS:
+        best = max(
+            ((baitmod.bait_at(sp.lat, sp.lon, when, t)["signal"], t) for t in sp.species),
+            key=lambda x: abs(x[0]), default=(0.0, None))
+        if abs(best[0]) > 0.05:
+            moved.append((sp.name, best[1], best[0]))
+    moved.sort(key=lambda x: -abs(x[2]))
+
+    if moved:
+        print("  now influencing:")
+        for name, target, sig in moved[:5]:
+            print(f"    {name:<26} {target:<16} {sig:+.2f}  "
+                  f"x{baitmod.modifier(sig):.2f}")
+    else:
+        print("  no spots close enough for this to matter")
+    return 0
+
+
 def _cmd_history() -> int:
     s = catchlog.summary()
     if not s["trips"]:
@@ -205,7 +259,7 @@ def _cmd_forecast(args) -> int:
 
     for spot in targets:
         try:
-            rows = features.build(spot, start, args.hours)
+            rows = features.build(spot, start, args.hours, species=args.species)
         except SourceError as exc:
             failures.append(f"{spot.name}: {exc}")
             continue
@@ -265,6 +319,8 @@ def _cmd_forecast(args) -> int:
         print(f"         current {cur:<18} water {temp:<9} wind {wind}")
         print(f"         {row['light_phase']:<9} moon {row['moon_phase'].lower()}"
               f" ({row['moon_illum']*100:.0f}%)   {row['next_tide'] or ''}")
+        if row.get("bait_note"):
+            print(f"         bait: {row['bait_note']}")
         print(f"         → {score.explain(b)}")
 
     print()

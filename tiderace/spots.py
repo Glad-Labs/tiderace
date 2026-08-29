@@ -14,6 +14,8 @@ Every station id below was verified live against CO-OPS.
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass, field
 
 
@@ -31,6 +33,7 @@ class Spot:
     quality: dict[str, float] = field(default_factory=dict)   # species -> 0..1 prior
     best_stage: str | None = None          # "ebb" | "flood" | None
     wx_point: tuple[float, float] | None = None  # land point for NWS grid
+    private: bool = False                  # your mark, not a public landmark
 
     def prior(self, species: str) -> float:
         return self.quality.get(species, 0.6)
@@ -138,6 +141,56 @@ SPOTS: list[Spot] = [
          None, (41.3730, -71.4958)),
 ]
 
+# --------------------------------------------------------------- your marks
+#
+# The nineteen spots above are public landmarks — they are on every chart and
+# in every guidebook, so naming them gives nothing away. Your own marks are a
+# different matter entirely, and the first thing anyone says when they hear
+# about an app like this is "don't give away my good spots".
+#
+# So private marks live in a gitignored file that nothing in this project ever
+# transmits: no sharing, no sync, no export by default. Weather lookups for
+# them are coarsened to ~1 km before they reach NOAA (see sources._coarse), so
+# even the one unavoidable outbound call does not carry the real position.
+
+PRIVATE_PATH = os.environ.get(
+    "TIDERACE_SPOTS",
+    os.path.join(os.path.dirname(__file__), "..", "data", "my_spots.json"))
+
+
+def load_private(path: str | None = None) -> list[Spot]:
+    """Load your own marks. Missing or malformed file is never fatal."""
+    path = path or PRIVATE_PATH
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path) as fh:
+            raw = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    out = []
+    for r in raw if isinstance(raw, list) else raw.get("spots", []):
+        try:
+            out.append(Spot(
+                key=r["key"], name=r["name"],
+                lat=float(r["lat"]), lon=float(r["lon"]),
+                current_station=r["current_station"],
+                tide_station=r.get("tide_station", NEWPORT),
+                kind=r.get("kind", "mark"), notes=r.get("notes", ""),
+                species=tuple(r.get("species", ())),
+                quality=r.get("quality", {}),
+                best_stage=r.get("best_stage"),
+                wx_point=tuple(r["wx_point"]) if r.get("wx_point") else None,
+                private=True,
+            ))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+SPOTS.extend(load_private())
+
 BY_KEY = {s.key: s for s in SPOTS}
 
 
@@ -149,3 +202,9 @@ def get(key: str) -> Spot:
 
 def for_species(species: str) -> list[Spot]:
     return [s for s in SPOTS if species in s.species]
+
+
+def public_only() -> list[Spot]:
+    """Everything except your own marks. The only set anything shareable
+    should ever be built from."""
+    return [s for s in SPOTS if not s.private]

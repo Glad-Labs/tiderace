@@ -220,6 +220,14 @@ def score(species: str, feat: dict, exposed: bool = False,
     if species == "fluke" and feat.get("wind_against_tide"):
         mods["wind_against_tide"] = 0.6
 
+    # Bait scales everything rather than nudging one term: perfect water with
+    # nothing to eat in it is still an empty spot. No reports means unknown,
+    # which is neutral -- only an explicit "nothing around" scores below 1.
+    bait_signal = feat.get("bait_signal")
+    if bait_signal:
+        from .bait import modifier as _bait_mod
+        mods["bait"] = round(_bait_mod(bait_signal), 3)
+
     for m in mods.values():
         total *= m
 
@@ -253,9 +261,14 @@ def explain(result: dict, top_n: int = 3) -> str:
     # spot_quality is always < 1 by construction, so only mention it when the
     # spot is genuinely a weak choice rather than merely not the very best.
     thresholds = {"spot_quality": 0.78}
+    pretty = {"bait": "bait nearby", "heat_night": "heat pushing the bite to dark",
+              "heat_daytime": "daytime heat", "tide_stage": "wrong tide stage",
+              "spot_quality": "spot quality", "spring_tide": "neap tide",
+              "wind_against_tide": "wind against tide"}
     for k, v in result["modifiers"].items():
+        name = pretty.get(k, k.replace("_", " "))
         if v < thresholds.get(k, 0.95):
-            bits.append(f"held back by {k.replace('_', ' ')}")
+            bits.append(f"held back by {name}")
         elif v > 1.05:
-            bits.append(f"boosted for {k.replace('_', ' ')}")
+            bits.append(f"boosted for {name}")
     return "; ".join(bits) if bits else "middling on every axis"

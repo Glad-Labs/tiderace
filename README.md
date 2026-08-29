@@ -137,6 +137,59 @@ tiderace/
   cli.py        forecast / spots / log / history
 ```
 
+## Bait
+
+The dominant variable, and the one you cannot compute. Tide and light come out
+of an equation; bait does not. So it is an **observation layer that decays in
+space and time**, not another physics term.
+
+```bash
+python3 -m tiderace bait --spot conimicut --bait "peanut bunker" --abundance loaded
+python3 -m tiderace bait --spot whale_rock --bait bunker --abundance none   # also useful
+```
+
+Three things this gets right that a `bait: yes/no` flag would not:
+
+- **Relevance is per predator.** A wall of adult bunker is everything to a bass
+  and literally nothing to a tautog, which wants crabs. Sightings are scored
+  through what the target actually eats.
+- **Absence is evidence, but only when observed.** No reports means *unknown*
+  and scores neutral. Somebody explicitly reporting "nothing around" is a real
+  negative. Conflating those two penalises every spot nobody has visited.
+- **It decays.** Half-life of four days, spatial falloff over ~1.2 nm. A
+  sighting two miles away and a week old barely registers.
+
+Bait multiplies the whole score (0.75× to 1.35×) rather than nudging one term —
+perfect water with nothing to eat in it is still an empty spot.
+
+This is also the highest-value target for the LLM extraction layer: published
+reports talk about bait constantly, and turning "bunker still thick off the
+point" into a dated, located, structured row is exactly the job language models
+are good at.
+
+## Privacy
+
+**Nothing you record leaves this machine.** There is no sharing, no sync, no
+account, no telemetry. The only outbound calls are GETs to NOAA and NWS for
+tide, current and weather.
+
+- The server binds to `127.0.0.1` and warns loudly if you ever move it.
+- `data/catch_log.jsonl`, `data/bait_log.jsonl` and `data/my_spots.json` are
+  gitignored — they are the irreplaceable part and should never be pushed by
+  accident.
+- **Your own marks go in `data/my_spots.json`** (see `my_spots.example.json`).
+  The nineteen built-in spots are public landmarks on every chart; your marks
+  are not, and `spots.public_only()` is the only set anything shareable should
+  ever be built from.
+- Weather lookups are the one place a coordinate leaves the machine, so they
+  are rounded to ~1 km first. NWS grid cells are ~2.5 km, so nothing is lost
+  from the forecast — but your mark does not end up in an access log at 11 m
+  precision.
+
+The first thing anyone says when they hear about an app like this is *"don't
+give away my good spots."* They are right, and local-first keeps that decision
+open forever — whereas shipping sharing closes it permanently.
+
 ## Regulations
 
 `tiderace/regs.py` gates every forecast on RI season dates and surfaces slot,
