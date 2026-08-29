@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 from . import bait as baitmod
 from . import config as cfgmod
-from . import features, gso, regs, score, spots
+from . import features, gso, regs, score, spots, web
 from . import log as catchlog
 from .sources import SourceError
 
@@ -124,6 +124,19 @@ def run(argv=None) -> int:
                     choices=("recreational", "commercial"))
     cf.add_argument("--license-holder")
 
+    sc = sub.add_parser("scrape", help="extract facts from RIDEM and fishing reports")
+    sc.add_argument("--source", choices=sorted(web.SOURCES), action="append",
+                    help="which source (repeatable; default: all)")
+    sc.add_argument("--url", help="an arbitrary URL instead of a configured source")
+    sc.add_argument("--apply-bait", action="store_true",
+                    help="write high-confidence bait sightings straight to the bait log")
+    sc.add_argument("--force", action="store_true", help="bypass the page cache")
+    sc.add_argument("--check", action="store_true",
+                    help="show robots status for every source and exit")
+
+    rv = sub.add_parser("review", help="review extracted facts awaiting approval")
+    rv.add_argument("--kind", choices=("regulation", "bait", "catch_report"))
+
     rg = sub.add_parser("regs", help="compare recreational and commercial rules")
     rg.add_argument("--species", choices=sorted(score.PROFILES))
 
@@ -152,6 +165,10 @@ def run(argv=None) -> int:
         return _cmd_log(args)
     if args.cmd == "history":
         return _cmd_history()
+    if args.cmd == "scrape":
+        return _cmd_scrape(args)
+    if args.cmd == "review":
+        return _cmd_review(args)
     if args.cmd == "config":
         return _cmd_config(args)
     if args.cmd == "regs":
@@ -207,6 +224,93 @@ def _cmd_log(args) -> int:
           + (f" — {entry.license_holder}" if entry.license_holder else ""))
     if not n:
         print("  ! conditions snapshot failed -- entry saved without features")
+    return 0
+
+
+def _cmd_scrape(args) -> int:
+    from . import extract
+
+    if args.check:
+        print()
+        print(f"  {'source':<22}{'kind':<12}{'robots':<9}delay  url")
+        print("  " + "─" * 88)
+        for r in web.check_sources():
+            print(f"  {r['key']:<22}{r['kind']:<12}"
+                  f"{('allowed' if r['robots_allowed'] else 'BLOCKED'):<9}"
+                  f"{r.get('crawl_delay_s', 0):>4.0f}s  {r['url']}")
+        print()
+        return 0
+
+    targets = []
+    if args.url:
+        targets = [("custom", args.url, "report")]
+    else:
+        for key in (args.source or sorted(web.SOURCES)):
+            src = web.SOURCES[key]
+            targets.append((key, src["url"], src["kind"]))
+
+    print()
+    for key, url, kind in targets:
+        print(f"  {key}  ({kind})")
+        try:
+            if kind == "regulation":
+                out = extract.extract_regulations(url, force=args.force)
+                n = len(out.get("changes", []))
+                print(f"    {n} rule change(s) found · {out['queued']} queued for review")
+                for c in out.get("changes", [])[:6]:
+                    print(f"      [{c['confidence']:<6}] {c['license_mode']:<12} "
+                          f"{c['species']}: {c['value'][:60]}")
+            else:
+                out = extract.extract_report(url, force=args.force,
+                                             apply_bait=args.apply_bait)
+                nb, nc = len(out.get("bait", [])), len(out.get("catches", []))
+                print(f"    {nb} bait sighting(s), {nc} catch report(s)"
+                      f" · {out['applied_bait']} bait applied")
+                for b in out.get("bait", [])[:6]:
+                    m = b.get("matched_spot") or "unmatched"
+                    print(f"      [{b['confidence']:<6}] {b['abundance']:<10} "
+                          f"{b['bait']:<16} {b['place'][:26]:<26} → {m}")
+
+            for inj in out.get("injection_suspected", []):
+                print(f"    ! instruction-shaped text ignored: {inj[:90]}")
+        except extract.ExtractionUnavailable as e:
+            print(f"    ! {e}")
+        except web.FetchError as e:
+            print(f"    ! fetch failed: {e}")
+    print()
+    print("  Nothing above has changed the forecast. Regulations need approval:")
+    print("    python3 -m tiderace review\n")
+    return 0
+
+
+def _cmd_review(args) -> int:
+    from . import extract
+    rows = extract.pending(args.kind)
+    if not rows:
+        print("\n  Nothing awaiting review.\n")
+        return 0
+
+    print(f"\n  {len(rows)} item(s) awaiting review")
+    print("  " + "─" * 74)
+    for r in rows:
+        kind = r.get("kind", "?")
+        print(f"\n  [{kind}] {r.get('species') or r.get('bait', '')}"
+              f"  ({r.get('confidence', '?')} confidence)")
+        if kind == "regulation":
+            print(f"    {r.get('license_mode')} · {r.get('change_type')} · "
+                  f"{r.get('value', '')}")
+            if r.get("effective_date"):
+                print(f"    effective {r['effective_date']}")
+        else:
+            print(f"    {r.get('abundance', '')} at {r.get('place', '')}"
+                  f" → {r.get('matched_spot') or 'unmatched'}")
+        print(f"    \"{r.get('quote', '')[:110]}\"")
+        print(f"    {r.get('source_url', '')}")
+
+    print("\n  " + "─" * 74)
+    print("  Regulations are NOT applied automatically. Check each against the")
+    print("  source, then edit tiderace/regs.py by hand and bump CHECKED_ON.")
+    print(f"  Queue: {extract.REVIEW_PATH}\n")
     return 0
 
 

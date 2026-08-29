@@ -1,0 +1,4 @@
+# Optional. The forecast, map, charts and logging all run on the standard
+# library alone -- this is only needed for `tiderace scrape`, which uses Claude
+# to turn prose into structured rows.
+anthropic>=1.0

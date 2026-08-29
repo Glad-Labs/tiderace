@@ -20,3 +20,6 @@ data/gso/
 
 # Local settings, including whose licence you fish under.
 data/config.json
+
+# Extraction review queue — claims awaiting human approval, not facts.
+data/review_queue.jsonl

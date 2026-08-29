@@ -7,10 +7,11 @@ website is slow trains you to ignore it.
 
 from __future__ import annotations
 
+import os
 import unittest
 from datetime import date, datetime, timedelta
 
-from tiderace import astro, bait, evaluate, gso, regs, score, spots
+from tiderace import astro, bait, evaluate, extract, gso, regs, score, spots, web
 
 STALE_REC = regs.STALE_AFTER_DAYS
 from tiderace.features import _local_tz, _wind_against_tide
@@ -321,6 +322,110 @@ class Commercial(unittest.TestCase):
         for sp in score.PROFILES:
             self.assertIn(sp, regs.RULES, f"{sp} missing recreational rule")
             self.assertIn(sp, regs.COMMERCIAL, f"{sp} missing commercial rule")
+
+
+class WebFetching(unittest.TestCase):
+    """Offline only -- no test here touches the network."""
+
+    def test_html_to_text_drops_chrome_and_keeps_prose(self):
+        markup = """<html><head><title>RI Report</title>
+          <style>.x{color:red}</style><script>var a=1;</script></head>
+          <body><nav>menu menu</nav>
+          <p>Bunker are thick off Conimicut.</p>
+          <div>Bass to 30 inches on the ebb.</div>
+          <footer>copyright</footer></body></html>"""
+        text = web.to_text(markup)
+        self.assertIn("Bunker are thick off Conimicut.", text)
+        self.assertIn("Bass to 30 inches", text)
+        for junk in ("var a=1", "color:red", "menu menu", "copyright"):
+            self.assertNotIn(junk, text)
+
+    def test_title_extraction(self):
+        self.assertEqual(web.title_of("<html><title>Fish &amp; Chips</title>"),
+                         "Fish & Chips")
+        self.assertEqual(web.title_of("<html><body>no title</body></html>"), "")
+
+    def test_entities_and_whitespace_are_normalised(self):
+        text = web.to_text("<p>Bass   &amp;   blues</p>\n\n\n<p>on   the ebb</p>")
+        self.assertIn("Bass & blues", text)
+        self.assertNotIn("   ", text)
+
+    def test_every_source_declares_a_kind(self):
+        for key, src in web.SOURCES.items():
+            self.assertIn(src["kind"], ("regulation", "report"), key)
+            self.assertTrue(src["url"].startswith("https://"), key)
+
+
+class Extraction(unittest.TestCase):
+    def test_place_matching_rejects_generic_geography(self):
+        """Regression: matching on shared generic words put 'Newport Bridge'
+        at the Mount Hope Bridge, and 'Block Island' -- twelve miles offshore --
+        at Rose Island."""
+        self.assertIsNone(extract._match_spot("Newport Bridge area"))
+        self.assertIsNone(extract._match_spot("Block Island"))
+        self.assertIsNone(extract._match_spot("the south shore"))
+        self.assertIsNone(extract._match_spot(""))
+
+    def test_place_matching_finds_real_spots(self):
+        for text, want in [("Whale Rock", "whale_rock"),
+                           ("the Mount Hope Bridge", "mount_hope"),
+                           ("off Beavertail", "beavertail"),
+                           ("Point Judith breachway", "pt_judith_breachway"),
+                           ("Fort Wetherill", "fort_wetherill")]:
+            got = extract._match_spot(text)
+            self.assertIsNotNone(got, text)
+            self.assertEqual(got.key, want, text)
+
+    def test_schemas_are_strict_and_demand_provenance(self):
+        """Every extracted claim must carry a quote and a confidence, so a
+        human can check it without re-reading the page."""
+        for schema in (extract.REG_SCHEMA, extract.REPORT_SCHEMA):
+            self.assertFalse(schema["additionalProperties"])
+            self.assertIn("injection_suspected", schema["properties"])
+        for arr in ("changes",):
+            item = extract.REG_SCHEMA["properties"][arr]["items"]
+            self.assertIn("quote", item["required"])
+            self.assertIn("confidence", item["required"])
+        for arr in ("bait", "catches"):
+            item = extract.REPORT_SCHEMA["properties"][arr]["items"]
+            self.assertIn("quote", item["required"])
+            self.assertIn("confidence", item["required"])
+
+    def test_system_prompt_defends_against_injection(self):
+        p = extract.SYSTEM.lower()
+        self.assertIn("untrusted", p)
+        self.assertIn("never an instruction", p)
+        self.assertIn("do not comply", p)
+
+    def test_bait_vocabulary_matches_the_bait_model(self):
+        """The extractor must not emit bait types the scorer has never heard of."""
+        described = extract.REPORT_SCHEMA["properties"]["bait"]["items"]["properties"]
+        vocab = described["bait"]["description"]
+        for known in ("bunker", "sand eels", "squid", "crabs"):
+            self.assertIn(known, vocab)
+        allowed = set(described["abundance"]["enum"])
+        self.assertEqual(allowed, set(bait.ABUNDANCE))
+
+    def test_review_queue_roundtrip(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "q.jsonl")
+            extract._queue({"kind": "regulation", "status": "pending",
+                            "species": "scup"}, path)
+            extract._queue({"kind": "bait", "status": "applied",
+                            "bait": "bunker"}, path)
+            self.assertEqual(len(extract.load_queue(path)), 2)
+            self.assertEqual(len(extract.pending(path=path)), 1)
+            self.assertEqual(len(extract.pending("regulation", path)), 1)
+            self.assertEqual(len(extract.pending("bait", path)), 0)
+
+    def test_missing_sdk_fails_loudly_not_silently(self):
+        try:
+            extract._client()
+        except extract.ExtractionUnavailable as e:
+            self.assertTrue(str(e))
+        except Exception as e:                                    # noqa: BLE001
+            self.fail(f"should raise ExtractionUnavailable, got {type(e).__name__}: {e}")
 
 
 class Privacy(unittest.TestCase):
