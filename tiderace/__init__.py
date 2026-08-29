@@ -16,4 +16,4 @@ program. If not, see <https://www.gnu.org/licenses/>.
 
 __version__ = "0.1.0"
 __license__ = "AGPL-3.0-or-later"
-SOURCE_URL = "https://github.com/glad-labs/tiderace"
+SOURCE_URL = "https://github.com/Glad-Labs/tiderace"

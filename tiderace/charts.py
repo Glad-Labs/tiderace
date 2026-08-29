@@ -24,7 +24,7 @@ import urllib.request
 # Identifies the project rather than a person: a sysadmin reading their logs
 # wants to know what is calling and where to complain, and the repository
 # answers both without publishing an email address.
-UA = "tiderace (+https://github.com/glad-labs/tiderace)"
+UA = "tiderace (+https://github.com/Glad-Labs/tiderace)"
 
 ENC = "https://encdirect.noaa.gov/arcgis/rest/services/encdirect"
 BAND = "enc_harbour"
