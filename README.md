@@ -250,6 +250,50 @@ them mid-season. `CHECKED_ON` and `STALE_AFTER_DAYS` make staleness visible
 rather than silent, and the CLI prints the source on every run. Confirm before
 you fish.
 
+### Commercial licence
+
+```bash
+python3 -m tiderace config --license commercial --license-holder "..."
+python3 -m tiderace regs                # both regimes side by side
+python3 -m tiderace --species fluke --license commercial
+```
+
+Commercial is **not a variant of recreational, it is a different regime**, and
+it is far more dangerous to hardcode:
+
+| species | recreational | commercial |
+|---|---|---|
+| striped bass | 28–31" slot, 1/day | **34" min**, closed Fri–Mon, quota closed |
+| fluke | 19", 6/day | **14"**, 200–300 lb/day |
+| scup | 11", 30/day | **9"**, 10,000 lb/week |
+| black sea bass | 16", 3/day | **11"**, 300 lb/day |
+| bluefish | no minimum | **18" min**, 6,000 lb/week |
+| tautog | 16", 3–5/day | 16", 10 fish/day, different sub-periods |
+
+Note the direction changes. Commercial minimums are *smaller* for fluke, scup
+and sea bass — and *larger* for striped bass and bluefish. Showing the wrong
+column is the entire risk of this feature, so `regs.differences()` reports
+exactly where the two disagree and the forecast prints it in commercial mode.
+
+**Why commercial gets treated differently in code:**
+
+- Recreational limits are set annually and hold. Commercial limits are
+  quota-managed and move mid-season on days of notice — the general-category
+  striped bass fishery closed 23 June 2026 *until further notice*, and the
+  summer flounder limit steps down on 16 September.
+- So **minimum sizes are encoded; possession limits and open/closed state are
+  advisory.** The staleness window is 14 days rather than 120, the advisory
+  never softens with age, and the RIDEM hotline `(401) 423-1920` prints on
+  every commercial run.
+- Mode is **never inferred**. It comes from config or an explicit `--license`
+  flag, and every forecast states which regime it used. An app that silently
+  applied commercial limits to a recreational trip would be handing you a
+  citation.
+
+Each logged trip records `license_mode` and `license_holder`, because RI
+commercial licences are issued to a named individual and a log that cannot say
+which licence a trip belonged to is no use as a record.
+
 ## Does it actually work?
 
 ```bash

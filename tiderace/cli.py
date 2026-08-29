@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timedelta
 
 from . import bait as baitmod
+from . import config as cfgmod
 from . import features, gso, regs, score, spots
 from . import log as catchlog
 from .sources import SourceError
@@ -80,6 +81,9 @@ def _add_forecast_args(ap):
     ap.add_argument("--threshold", type=float, default=45.0,
                     help="minimum score to count as a window")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--license", dest="license_mode",
+                    choices=("recreational", "commercial"),
+                    help="which rules apply (default: from config)")
 
 
 def run(argv=None) -> int:
@@ -115,6 +119,14 @@ def run(argv=None) -> int:
     bt.add_argument("--confidence", default="high", choices=("high", "medium", "low"))
     bt.add_argument("--notes")
 
+    cf = sub.add_parser("config", help="show or set local settings")
+    cf.add_argument("--license", dest="license_mode",
+                    choices=("recreational", "commercial"))
+    cf.add_argument("--license-holder")
+
+    rg = sub.add_parser("regs", help="compare recreational and commercial rules")
+    rg.add_argument("--species", choices=sorted(score.PROFILES))
+
     sub.add_parser("history", help="summarise the catch log")
     sub.add_parser("evaluate", help="does the model beat the free baseline?")
 
@@ -140,6 +152,10 @@ def run(argv=None) -> int:
         return _cmd_log(args)
     if args.cmd == "history":
         return _cmd_history()
+    if args.cmd == "config":
+        return _cmd_config(args)
+    if args.cmd == "regs":
+        return _cmd_regs(args)
     if args.cmd == "gso":
         return _cmd_gso(args)
     if args.cmd == "bait":
@@ -187,8 +203,54 @@ def _cmd_log(args) -> int:
     n = len(entry.conditions)
     print(f"logged: {args.count} {args.species} at {args.spot} "
           f"({when:%Y-%m-%d %H:%M}) with {n} conditions captured")
+    print(f"  under: {entry.license_mode} licence"
+          + (f" — {entry.license_holder}" if entry.license_holder else ""))
     if not n:
         print("  ! conditions snapshot failed -- entry saved without features")
+    return 0
+
+
+def _cmd_config(args) -> int:
+    changes = {}
+    if args.license_mode:
+        changes["license_mode"] = args.license_mode
+    if args.license_holder:
+        changes["license_holder"] = args.license_holder
+    cfg = cfgmod.save(changes) if changes else cfgmod.load()
+
+    print(f"\n  licence mode   {cfg['license_mode']}")
+    print(f"  licence holder {cfg['license_holder'] or '—'}")
+    if cfg["license_mode"] == "commercial":
+        print(f"\n  Commercial limits change in-season. Current numbers: "
+              f"{regs.COMMERCIAL_HOTLINE}")
+    print(f"\n  stored in {cfgmod.CONFIG_PATH}\n")
+    return 0
+
+
+def _cmd_regs(args) -> int:
+    targets = [args.species] if args.species else sorted(score.PROFILES)
+    today = datetime.now().date()
+    print(f"\n  Rhode Island · {today:%A %d %b %Y}")
+    print("  " + "─" * 74)
+    for sp in targets:
+        rec = regs.status(sp, today)
+        com = regs.status(sp, today, "commercial")
+        if not rec.get("known"):
+            continue
+        print(f"\n  {score.PROFILES[sp].name}")
+        print(f"    recreational  {'OPEN  ' if rec['open'] else 'CLOSED'}  "
+              f"{regs.summary_line(sp, today)}")
+        print(f"    commercial    {'OPEN  ' if com['open'] else 'CLOSED'}  "
+              f"{regs.summary_line(sp, today, 'commercial')}")
+        for d in regs.differences(sp, today):
+            print(f"      ! {d}")
+        if com.get("note"):
+            print(f"      {com['note']}")
+    print("\n  " + "─" * 74)
+    print(f"  Recreational transcribed {regs.CHECKED_ON}; "
+          f"commercial {regs.COMMERCIAL_CHECKED_ON}.")
+    print(f"  Commercial possession limits and closures change in-season —")
+    print(f"  confirm current numbers on {regs.COMMERCIAL_HOTLINE} before landing fish.\n")
     return 0
 
 
@@ -321,18 +383,23 @@ def _cmd_forecast(args) -> int:
         } for w in top], indent=2, default=str))
         return 0
 
-    reg = regs.status(args.species, start.date())
+    mode = args.license_mode or cfgmod.load()["license_mode"]
+    reg = regs.status(args.species, start.date(), mode)
     print()
     print(f"  {profile.name.upper()}  —  Narragansett Bay")
     if reg.get("known"):
-        flag = "OPEN" if reg["open"] else "SEASON CLOSED"
-        print(f"  {flag} · {regs.summary_line(args.species, start.date())}")
+        flag = "OPEN" if reg["open"] else "CLOSED"
+        tag = "COMMERCIAL" if mode == "commercial" else "recreational"
+        print(f"  [{tag}]  {flag} · {regs.summary_line(args.species, start.date(), mode)}")
+        for d in (regs.differences(args.species, start.date())
+                  if mode == "commercial" else []):
+            print(f"           differs from recreational — {d}")
     print(f"  {start:%a %d %b %H:%M} → {start + timedelta(hours=args.hours):%a %d %b %H:%M}"
           f"   ({len(targets)} spots)")
     print("  " + "─" * 74)
 
     if reg.get("known") and not reg["open"]:
-        print(f"\n  This species is {reg['season']}.")
+        print(f"\n  Not open under this licence: {reg['season']}.")
         print("  Windows below are for planning only — do not target a closed species.")
 
     if not top:
@@ -365,9 +432,15 @@ def _cmd_forecast(args) -> int:
     print(f"  {profile.notes}")
     if reg.get("known"):
         age = reg["days_since_checked"]
-        warn = "  ⚠ VERIFY — transcribed regs may be out of date" if reg["stale"] else ""
-        print(f"\n  Regs transcribed {reg['checked_on']} ({age}d ago).{warn}")
-        print(f"  Always confirm at {reg['source']}")
+        print(f"\n  Rules transcribed {reg['checked_on']} ({age}d ago).")
+        if reg.get("advisory"):
+            # Commercial limits move on days of notice, so this never softens.
+            print("  ⚠ COMMERCIAL limits and closures change in-season. RIDEM treats")
+            print("    keeping current as the licence holder's responsibility.")
+            print(f"    Confirm on {reg['hotline']} before landing fish.")
+        elif reg["stale"]:
+            print("  ⚠ VERIFY — transcribed regs may be out of date")
+        print(f"  {reg['source']}")
     if failures:
         print("\n  data gaps:")
         for f in failures:

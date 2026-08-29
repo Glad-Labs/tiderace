@@ -22,6 +22,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
+from . import config as cfgmod
 from . import features, spots
 
 LOG_PATH = os.environ.get(
@@ -60,6 +61,11 @@ class Entry:
     notes: str | None = None
     source: str = "manual"          # manual | voice | report
     decided_by: str = "angler"      # angler | app -- who picked the spot
+    # Which rules applied to this trip. Recorded rather than inferred: RI
+    # commercial licences are issued to a named individual, and a log that
+    # cannot say which licence a trip belonged to is no use as a record.
+    license_mode: str = "recreational"
+    license_holder: str | None = None
     confidence: str = "high"
     conditions: dict = field(default_factory=dict)
     logged_at: str = ""
@@ -89,6 +95,11 @@ def record(entry: Entry, path: str = LOG_PATH) -> Entry:
                                         entry.species)
         except Exception:
             entry.conditions = {}
+    cfg = cfgmod.load()
+    if entry.license_mode == "recreational" and cfg["license_mode"] != "recreational":
+        entry.license_mode = cfg["license_mode"]
+    if entry.license_holder is None:
+        entry.license_holder = cfg.get("license_holder")
     entry.logged_at = datetime.now().isoformat(timespec="seconds")
 
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)

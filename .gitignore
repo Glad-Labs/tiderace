@@ -17,3 +17,6 @@ data/my_spots.json
 # `python3 -m tiderace gso --rebuild`. Their data use policy asks for citation,
 # so redistributing copies here would be the wrong default.
 data/gso/
+
+# Local settings, including whose licence you fish under.
+data/config.json

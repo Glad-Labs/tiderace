@@ -48,6 +48,20 @@ select:hover,button:hover{border-color:var(--depth)}
 button.primary{background:var(--accent); border-color:var(--accent); color:#12060D; font-weight:600}
 button.primary:hover{filter:brightness(1.1)}
 label.chk{display:flex; align-items:center; gap:5px; font-size:12px; color:var(--ink-2); cursor:pointer}
+#mode{
+  font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.1em;
+  text-transform:uppercase; padding:.3em .55em; border-radius:3px; white-space:nowrap;
+}
+#mode.rec{color:var(--muted); border:1px solid var(--hair)}
+#mode.com{color:#D9A521; border:1px solid #D9A521; background:rgba(217,165,33,.1)}
+#regs{
+  font-family:var(--mono); font-size:11px; line-height:1.5; color:var(--ink-2);
+  background:var(--panel-2); border:1px solid var(--hair);
+  border-left:2px solid var(--depth); border-radius:0 4px 4px 0; padding:9px 11px;
+}
+#regs.closed{border-left-color:var(--crit)}
+#regs b{color:var(--ink)}
+#regs .warn{color:#D9A521; display:block; margin-top:6px}
 
 /* ---------- chart overlay menu ---------- */
 #layers{
@@ -149,6 +163,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
       <select id="species"></select>
       <label class="chk"><input type="checkbox" id="marks" checked> seamarks</label>
       <label class="chk"><input type="checkbox" id="labels" checked> labels</label>
+      <span id="mode" title="Which rules apply"></span>
       <button id="layersbtn" title="Chart overlays">charts ▾</button>
       <div id="layers"></div>
     </div>
@@ -160,6 +175,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
     <div id="loading">loading noaa data…</div>
   </div>
   <aside id="panel">
+    <div id="regsbox"></div>
     <div>
       <p class="ph">Ranked now</p>
       <div class="rank" id="rank"></div>
@@ -583,6 +599,26 @@ async function loadGrid(){
     .map(f => { const i = Math.round(f*(GRID.times.length-1));
       return `<span>${new Date(GRID.times[i]).toLocaleString([], {weekday:'short',hour:'2-digit'})}</span>`; })
     .join('');
+
+  const m = $('#mode');
+  m.className = GRID.license_mode === 'commercial' ? 'com' : 'rec';
+  m.textContent = GRID.license_mode === 'commercial' ? 'commercial' : 'recreational';
+
+  const r = GRID.regulations || {};
+  if (r.known){
+    const diffs = (GRID.regulations_differences || [])
+      .map(d => `<br>· ${d}`).join('');
+    $('#regsbox').innerHTML =
+      `<p class="ph">Rules</p>
+       <div id="regs" class="${r.open ? '' : 'closed'}">
+         <b>${r.open ? 'OPEN' : 'CLOSED'}</b> — ${GRID.regulations_line}
+         ${GRID.license_mode === 'commercial' && diffs
+            ? `<br><span style="color:var(--muted)">differs from recreational:</span>${diffs}` : ''}
+         ${r.advisory
+            ? `<span class="warn">Commercial limits change in-season —
+               confirm on ${r.hotline} before landing fish.</span>` : ''}
+       </div>`;
+  } else { $('#regsbox').innerHTML = ''; }
 
   if (SEL && !GRID.spots.some(s => s.key === SEL)) SEL = null;
   paint();

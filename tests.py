@@ -11,6 +11,8 @@ import unittest
 from datetime import date, datetime, timedelta
 
 from tiderace import astro, bait, evaluate, gso, regs, score, spots
+
+STALE_REC = regs.STALE_AFTER_DAYS
 from tiderace.features import _local_tz, _wind_against_tide
 from tiderace.sources import current_at
 
@@ -265,6 +267,60 @@ class GSO(unittest.TestCase):
         cold = score._season_term(p, 11, week=45, thermal={45: 1.0, 46: 1.0})
         warm = score._season_term(p, 11, week=45, thermal={45: 0.0, 46: 0.0})
         self.assertGreater(cold, warm)
+
+
+class Commercial(unittest.TestCase):
+    FRI = date(2026, 8, 28)      # a Friday
+
+    def test_commercial_differs_where_it_matters(self):
+        """Commercial minimums are smaller for some species and LARGER for
+        others. Showing the wrong column is the whole risk of this feature."""
+        self.assertEqual(regs.status("fluke", self.FRI, "commercial")["min_inches"], 14)
+        self.assertEqual(regs.status("fluke", self.FRI)["min_inches"], 19)
+        self.assertEqual(regs.status("striped_bass", self.FRI, "commercial")["min_inches"], 34)
+        self.assertEqual(regs.status("striped_bass", self.FRI)["slot"], (28, 31))
+
+    def test_quota_closure_beats_the_calendar(self):
+        st = regs.status("striped_bass", self.FRI, "commercial")
+        self.assertFalse(st["open"])
+        self.assertIn("quota", st["season"])
+
+    def test_closed_weekdays_are_honoured(self):
+        r = regs.COMMERCIAL["tautog"]
+        weekend = regs.CommercialRule("x", 16.0, (((1, 1), (12, 31)),),
+                                      closed_weekdays=(4, 5, 6, 0))
+        self.assertFalse(weekend.is_open(date(2026, 8, 28)))   # Friday
+        self.assertTrue(weekend.is_open(date(2026, 8, 26)))    # Wednesday
+        self.assertTrue(r.is_open(date(2026, 8, 28)))          # tautog: no closed days
+
+    def test_sub_periods(self):
+        r = regs.COMMERCIAL["tautog"]
+        self.assertTrue(r.is_open(date(2026, 4, 15)))
+        self.assertFalse(r.is_open(date(2026, 6, 15)))   # between sub-periods
+        self.assertTrue(r.is_open(date(2026, 8, 10)))
+        self.assertFalse(r.is_open(date(2026, 10, 1)))   # gap before 10/15
+        self.assertTrue(r.is_open(date(2026, 11, 1)))
+
+    def test_commercial_is_always_advisory(self):
+        """Recreational regs go stale in months; commercial in days."""
+        st = regs.status("scup", self.FRI, "commercial")
+        self.assertTrue(st["advisory"])
+        self.assertIn("401", st["hotline"])
+        self.assertLess(regs.COMMERCIAL_STALE_AFTER_DAYS, STALE_REC)
+
+    def test_differences_reports_both_axes(self):
+        diffs = regs.differences("striped_bass", self.FRI)
+        self.assertTrue(any("size" in d for d in diffs))
+        self.assertTrue(any("open" in d for d in diffs))
+
+    def test_mode_defaults_to_recreational(self):
+        self.assertEqual(regs.status("scup", self.FRI)["mode"], "recreational")
+        self.assertEqual(regs.status("scup", self.FRI, "commercial")["mode"], "commercial")
+
+    def test_every_species_has_both_regimes(self):
+        for sp in score.PROFILES:
+            self.assertIn(sp, regs.RULES, f"{sp} missing recreational rule")
+            self.assertIn(sp, regs.COMMERCIAL, f"{sp} missing commercial rule")
 
 
 class Privacy(unittest.TestCase):

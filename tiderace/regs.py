@@ -20,6 +20,30 @@ SOURCE = "https://www.eregulations.com/rhodeisland/fishing/saltwater/size-season
 CHECKED_ON = date(2026, 8, 28)
 STALE_AFTER_DAYS = 120
 
+# --------------------------------------------------------------- commercial
+#
+# Commercial is not a variant of recreational, it is a different regime, and it
+# is far more dangerous to hardcode.
+#
+# Recreational limits are set annually and hold for the season. Commercial
+# limits are quota-managed and move *mid-season, on days of notice*: the
+# general-category striped bass fishery closed on 23 June 2026 "until further
+# notice", and the summer flounder limit steps from 300 lb/day to 100 lb/day
+# on 16 September. RIDEM states plainly that keeping up with those changes is
+# the licence holder's responsibility, and publishes a phone line for the
+# current numbers.
+#
+# So the split below is deliberate: **minimum sizes are reasonably stable and
+# are encoded; possession limits and open/closed state are volatile and are
+# treated as advisory.** The staleness window is two weeks rather than four
+# months, and the hotline is printed every single time.
+
+COMMERCIAL_SOURCE = ("https://dem.ri.gov/natural-resources-bureau/marine-fisheries/"
+                     "marine-fisheries-minimum-sizes-possession-limits")
+COMMERCIAL_HOTLINE = "(401) 423-1920"
+COMMERCIAL_CHECKED_ON = date(2026, 8, 28)
+COMMERCIAL_STALE_AFTER_DAYS = 14
+
 
 @dataclass(frozen=True)
 class Rule:
@@ -77,7 +101,109 @@ RULES: dict[str, Rule] = {
 }
 
 
-def status(species: str, when: date | None = None) -> dict:
+@dataclass(frozen=True)
+class CommercialRule:
+    species: str
+    min_inches: float | None
+    periods: tuple[tuple[tuple[int, int], tuple[int, int]], ...]
+    limit: str = ""
+    closed_weekdays: tuple[int, ...] = ()       # 0 = Monday
+    quota_closed: bool = False                  # closed in-season until notice
+    note: str = ""
+
+    def is_open(self, when: date) -> bool:
+        if self.quota_closed:
+            return False
+        if when.weekday() in self.closed_weekdays:
+            return False
+        md = (when.month, when.day)
+        return any(a <= md <= b for a, b in self.periods)
+
+    def why_closed(self, when: date) -> str | None:
+        if self.quota_closed:
+            return "quota closed until further notice"
+        if when.weekday() in self.closed_weekdays:
+            names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            return (f"closed on {names[when.weekday()]} — this fishery is closed "
+                    + "/".join(names[d] for d in sorted(self.closed_weekdays)))
+        md = (when.month, when.day)
+        if not any(a <= md <= b for a, b in self.periods):
+            upcoming = [a for a, _ in self.periods if a > md]
+            if upcoming:
+                n = min(upcoming)
+                return f"between sub-periods — next opens {n[0]:02d}/{n[1]:02d}"
+            return "closed for the rest of the year"
+        return None
+
+
+COMMERCIAL: dict[str, CommercialRule] = {
+    "striped_bass": CommercialRule(
+        "striped_bass", 34.0, (((6, 2), (12, 31)),),
+        limit="general category — see hotline",
+        closed_weekdays=(4, 5, 6, 0),          # Fri, Sat, Sun, Mon
+        quota_closed=True,
+        note="General category closed 23 Jun 2026 until further notice. "
+             "Note the minimum is 34 in — LARGER than the recreational slot, "
+             "not smaller."),
+    "tautog": CommercialRule(
+        "tautog", 16.0,
+        (((4, 1), (5, 31)), ((8, 1), (9, 15)), ((10, 15), (12, 31))),
+        limit="10 fish/day",
+        note="Sub-periods differ from the recreational season."),
+    "fluke": CommercialRule(
+        "fluke", 14.0,
+        (((1, 1), (4, 30)), ((5, 1), (9, 15)), ((9, 16), (12, 31))),
+        limit="300 lb/day with Exemption Certificate, 200 lb/day without; "
+              "steps down 16 Sep",
+        note="Minimum is 14 in commercially against 19 in recreationally."),
+    "scup": CommercialRule(
+        "scup", 9.0, (((1, 1), (12, 31)),),
+        limit="10,000 lb/week general category; floating traps unlimited",
+        note="Sub-periods vary by category."),
+    "black_sea_bass": CommercialRule(
+        "black_sea_bass", 11.0, (((1, 1), (12, 31)),),
+        limit="300 lb/day",
+        note="Minimum is 11 in commercially against 16 in recreationally."),
+    "bluefish": CommercialRule(
+        "bluefish", 18.0,
+        (((1, 1), (4, 30)), ((5, 1), (11, 15)), ((11, 16), (12, 31))),
+        limit="6,000 lb/week",
+        note="Commercial carries an 18 in minimum where recreational has none."),
+}
+
+
+def commercial_status(species: str, when: date | None = None) -> dict:
+    when = when or date.today()
+    r = COMMERCIAL.get(species)
+    if not r:
+        return {"known": False}
+    age = (date.today() - COMMERCIAL_CHECKED_ON).days
+    closed_reason = r.why_closed(when)
+    return {
+        "known": True,
+        "mode": "commercial",
+        "open": closed_reason is None,
+        "season": closed_reason or "open",
+        "min_inches": r.min_inches,
+        "slot": None,
+        "bag": r.limit,
+        "note": r.note,
+        "quota_closed": r.quota_closed,
+        "source": COMMERCIAL_SOURCE,
+        "hotline": COMMERCIAL_HOTLINE,
+        "checked_on": COMMERCIAL_CHECKED_ON.isoformat(),
+        "stale": age > COMMERCIAL_STALE_AFTER_DAYS,
+        "days_since_checked": age,
+        # Unlike recreational, this is never presented as settled.
+        "advisory": True,
+    }
+
+
+def status(species: str, when: date | None = None,
+           mode: str = "recreational") -> dict:
+    if mode == "commercial":
+        return commercial_status(species, when)
+
     when = when or date.today()
     r = RULES.get(species)
     if not r:
@@ -85,6 +211,7 @@ def status(species: str, when: date | None = None) -> dict:
     age = (date.today() - CHECKED_ON).days
     return {
         "known": True,
+        "mode": "recreational",
         "open": r.is_open(when),
         "season": r.next_change(when),
         "min_inches": r.min_inches,
@@ -98,15 +225,36 @@ def status(species: str, when: date | None = None) -> dict:
     }
 
 
-def summary_line(species: str, when: date | None = None) -> str:
-    s = status(species, when)
+def summary_line(species: str, when: date | None = None,
+                 mode: str = "recreational") -> str:
+    s = status(species, when, mode)
     if not s["known"]:
         return ""
     bits = [s["season"]]
-    if s["slot"]:
+    if s.get("slot"):
         bits.append(f'slot {s["slot"][0]:.0f}–{s["slot"][1]:.0f}"')
-    elif s["min_inches"]:
+    elif s.get("min_inches"):
         bits.append(f'min {s["min_inches"]:.0f}"')
-    if s["bag"]:
+    if s.get("bag"):
         bits.append(s["bag"])
     return " · ".join(bits)
+
+
+def differences(species: str, when: date | None = None) -> list[str]:
+    """Where the two regimes disagree. Showing the wrong column is the whole
+    risk of adding commercial rules at all."""
+    rec, com = status(species, when), status(species, when, "commercial")
+    if not rec.get("known") or not com.get("known"):
+        return []
+    out = []
+    if rec.get("slot") and com.get("min_inches"):
+        out.append(f'size: rec slot {rec["slot"][0]:.0f}–{rec["slot"][1]:.0f}" '
+                   f'vs commercial min {com["min_inches"]:.0f}"')
+    elif rec.get("min_inches") != com.get("min_inches"):
+        r = f'{rec["min_inches"]:.0f}"' if rec.get("min_inches") else "none"
+        c = f'{com["min_inches"]:.0f}"' if com.get("min_inches") else "none"
+        out.append(f"size: rec {r} vs commercial {c}")
+    if rec.get("open") != com.get("open"):
+        out.append(f'open: rec {"yes" if rec["open"] else "no"} '
+                   f'vs commercial {"yes" if com["open"] else "no"}')
+    return out

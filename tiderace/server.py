@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import bait as baitmod
-from . import charts, features, regs, score, spots
+from . import charts, config as cfgmod, features, regs, score, spots
 from . import log as catchlog
 from .sources import SourceError
 
@@ -85,8 +85,12 @@ def build_grid(species: str, start: datetime, hours: int = 48,
     grid = {
         "species": species,
         "species_name": score.PROFILES[species].name,
-        "regulations": regs.status(species, start.date()),
-        "regulations_line": regs.summary_line(species, start.date()),
+        "license_mode": cfgmod.load()["license_mode"],
+        "regulations": regs.status(species, start.date(),
+                                   cfgmod.load()["license_mode"]),
+        "regulations_line": regs.summary_line(species, start.date(),
+                                              cfgmod.load()["license_mode"]),
+        "regulations_differences": regs.differences(species, start.date()),
         "notes": score.PROFILES[species].notes,
         "start": start.isoformat(),
         "step_minutes": step_minutes,
