@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 from . import bait as baitmod
 from . import config as cfgmod
-from . import features, gso, regs, score, spots, web
+from . import features, fetch, gso, regs, score, spots
 from . import log as catchlog
 from .sources import SourceError
 
@@ -125,7 +125,7 @@ def run(argv=None) -> int:
     cf.add_argument("--license-holder")
 
     sc = sub.add_parser("scrape", help="extract facts from RIDEM and fishing reports")
-    sc.add_argument("--source", choices=sorted(web.SOURCES), action="append",
+    sc.add_argument("--source", choices=sorted(fetch.SOURCES), action="append",
                     help="which source (repeatable; default: all)")
     sc.add_argument("--url", help="an arbitrary URL instead of a configured source")
     sc.add_argument("--apply-bait", action="store_true",
@@ -234,7 +234,7 @@ def _cmd_scrape(args) -> int:
         print()
         print(f"  {'source':<22}{'kind':<12}{'robots':<9}delay  url")
         print("  " + "─" * 88)
-        for r in web.check_sources():
+        for r in fetch.check_sources():
             print(f"  {r['key']:<22}{r['kind']:<12}"
                   f"{('allowed' if r['robots_allowed'] else 'BLOCKED'):<9}"
                   f"{r.get('crawl_delay_s', 0):>4.0f}s  {r['url']}")
@@ -245,8 +245,8 @@ def _cmd_scrape(args) -> int:
     if args.url:
         targets = [("custom", args.url, "report")]
     else:
-        for key in (args.source or sorted(web.SOURCES)):
-            src = web.SOURCES[key]
+        for key in (args.source or sorted(fetch.SOURCES)):
+            src = fetch.SOURCES[key]
             targets.append((key, src["url"], src["kind"]))
 
     print()
@@ -275,7 +275,7 @@ def _cmd_scrape(args) -> int:
                 print(f"    ! instruction-shaped text ignored: {inj[:90]}")
         except extract.ExtractionUnavailable as e:
             print(f"    ! {e}")
-        except web.FetchError as e:
+        except fetch.FetchError as e:
             print(f"    ! fetch failed: {e}")
     print()
     print("  Nothing above has changed the forecast. Regulations need approval:")

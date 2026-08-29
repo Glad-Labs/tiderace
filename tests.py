@@ -11,7 +11,7 @@ import os
 import unittest
 from datetime import date, datetime, timedelta
 
-from tiderace import astro, bait, evaluate, extract, gso, regs, score, spots, web
+from tiderace import astro, bait, evaluate, extract, fetch, gso, regs, score, spots
 
 STALE_REC = regs.STALE_AFTER_DAYS
 from tiderace.features import _local_tz, _wind_against_tide
@@ -334,24 +334,24 @@ class WebFetching(unittest.TestCase):
           <p>Bunker are thick off Conimicut.</p>
           <div>Bass to 30 inches on the ebb.</div>
           <footer>copyright</footer></body></html>"""
-        text = web.to_text(markup)
+        text = fetch.to_text(markup)
         self.assertIn("Bunker are thick off Conimicut.", text)
         self.assertIn("Bass to 30 inches", text)
         for junk in ("var a=1", "color:red", "menu menu", "copyright"):
             self.assertNotIn(junk, text)
 
     def test_title_extraction(self):
-        self.assertEqual(web.title_of("<html><title>Fish &amp; Chips</title>"),
+        self.assertEqual(fetch.title_of("<html><title>Fish &amp; Chips</title>"),
                          "Fish & Chips")
-        self.assertEqual(web.title_of("<html><body>no title</body></html>"), "")
+        self.assertEqual(fetch.title_of("<html><body>no title</body></html>"), "")
 
     def test_entities_and_whitespace_are_normalised(self):
-        text = web.to_text("<p>Bass   &amp;   blues</p>\n\n\n<p>on   the ebb</p>")
+        text = fetch.to_text("<p>Bass   &amp;   blues</p>\n\n\n<p>on   the ebb</p>")
         self.assertIn("Bass & blues", text)
         self.assertNotIn("   ", text)
 
     def test_every_source_declares_a_kind(self):
-        for key, src in web.SOURCES.items():
+        for key, src in fetch.SOURCES.items():
             self.assertIn(src["kind"], ("regulation", "report"), key)
             self.assertTrue(src["url"].startswith("https://"), key)
 

@@ -1,5 +1,9 @@
 """Polite fetching. Stdlib only.
 
+Named `fetch` rather than `web` because `tiderace/web/` holds the map UI's
+static assets, and a module sharing its name with a package directory resolves
+by precedence rules rather than by intent.
+
 Two sources with very different footing, and the difference drives the design:
 
   * **RIDEM** (dem.ri.gov) is a state agency. Its regulatory notices are public

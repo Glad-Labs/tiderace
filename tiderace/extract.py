@@ -35,7 +35,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 
 from . import bait as baitmod
-from . import web
+from . import fetch
 
 MODEL = "claude-opus-5"
 
@@ -219,7 +219,7 @@ def extract_regulations(url: str, force: bool = False) -> dict:
     Nothing here reaches the forecast. `regs.py` stays hand-checked; this only
     tells you what to go and check.
     """
-    doc = web.fetch(url, force=force)
+    doc = fetch.fetch(url, force=force)
     out = _ask(REG_SCHEMA,
                "Extract every stated change to fishing regulations: possession "
                "limits, minimum sizes, season openings and closings, and quota "
@@ -248,7 +248,7 @@ def extract_report(url: str, force: bool = False,
     costs you a slow morning. A wrong size limit costs you a fine, which is why
     regulations take the other path.
     """
-    doc = web.fetch(url, force=force)
+    doc = fetch.fetch(url, force=force)
     out = _ask(REPORT_SCHEMA,
                "Extract bait sightings and reported catches. For bait, judge "
                "abundance from the language used. If the text says bait or fish "
