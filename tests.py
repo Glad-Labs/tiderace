@@ -826,11 +826,38 @@ class Packaging(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(server.WEB_DIR, "index.html")))
 
     def test_data_paths_do_not_depend_on_cwd(self):
+        """Data paths must anchor to the installed package, not the current
+        directory and not the checkout's name.
+
+        This previously asserted the string "tiderace" appeared in the path,
+        which only passed because the working copy happened to be a directory
+        of that name. A fresh `git clone` into any other folder failed it --
+        caught by cloning the pushed repo and running the suite, which is the
+        only way that class of assumption shows up.
+        """
+        import tempfile
+        import tiderace as pkg
         from tiderace import bait as b, charts, gso
         from tiderace import log as catchlog
-        for path in (catchlog.LOG_PATH, b.BAIT_PATH, charts.CHART_DIR, gso.CACHE):
-            self.assertTrue(os.path.isabs(os.path.abspath(path)))
-            self.assertIn("tiderace", os.path.abspath(path))
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(pkg.__file__)))
+        paths = (catchlog.LOG_PATH, b.BAIT_PATH, charts.CHART_DIR, gso.CACHE)
+
+        for path in paths:
+            resolved = os.path.abspath(path)
+            self.assertTrue(os.path.isabs(resolved), path)
+            self.assertTrue(resolved.startswith(root + os.sep),
+                            f"{path} is not anchored to the package root {root}")
+
+        # And they must not move when the process does.
+        before = [os.path.abspath(p) for p in paths]
+        cwd = os.getcwd()
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                os.chdir(d)
+                self.assertEqual([os.path.abspath(p) for p in paths], before)
+        finally:
+            os.chdir(cwd)
 
 
 class MapLayout(unittest.TestCase):
