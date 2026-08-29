@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0B1518">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
 <title>Tiderace — Narragansett Bay</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -50,6 +53,13 @@ select:hover,button:hover{border-color:var(--depth)}
 button.primary{background:var(--accent); border-color:var(--accent); color:#12060D; font-weight:600}
 button.primary:hover{filter:brightness(1.1)}
 label.chk{display:flex; align-items:center; gap:5px; font-size:12px; color:var(--ink-2); cursor:pointer}
+#netstate{
+  font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.08em;
+  text-transform:uppercase; padding:.3em .55em; border-radius:3px; white-space:nowrap;
+}
+#netstate.off{color:var(--crit); border:1px solid var(--crit); background:rgba(224,112,95,.12)}
+#netstate.queued{color:var(--warn); border:1px solid var(--warn); background:rgba(217,165,33,.12)}
+#netstate.ok{display:none}
 #mode{
   font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.1em;
   text-transform:uppercase; padding:.3em .55em; border-radius:3px; white-space:nowrap;
@@ -180,6 +190,8 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
       <label class="chk"><input type="checkbox" id="labels" checked> labels</label>
       <span id="mode" title="Which rules apply"></span>
       <button id="layersbtn" title="Chart overlays">charts ▾</button>
+      <button id="offlinebtn" title="Download the forecast for the water">save ↓</button>
+      <span id="netstate"></span>
       <div id="layers"></div>
     </div>
     <div id="timebar">
@@ -395,19 +407,33 @@ function renderLogForm(sp){
   $('#logform').onsubmit = async e => {
     e.preventDefault();
     const f = new FormData(e.target);
-    const body = {spot: sp.key, species: GRID.species};
+    const body = {spot: sp.key, species: GRID.species,
+                  client_id: (crypto.randomUUID?.() ||
+                              String(Date.now()) + Math.random())};
     for (const [k,v] of f.entries()) if (v !== '') body[k] = v;
     const msg = $('#logmsg');
     msg.className=''; msg.textContent = 'saving…';
-    try{
-      const r = await fetch('/api/log', {method:'POST', headers:{'Content-Type':'application/json'},
-                                         body: JSON.stringify(body)});
-      const j = await r.json();
-      if (j.error) throw new Error(j.error);
+
+    // Write to the phone before trying the network. A trip you did not record
+    // is gone; a trip that has not synced yet is fine.
+    try { await queueAdd(body); }
+    catch (err) { msg.className='err'; msg.textContent = 'could not save: ' + err.message; return; }
+    e.target.reset();
+
+    const res = await flushQueue();
+    if (res.sent) {
       msg.className='ok';
-      msg.textContent = `saved · ${j.summary.trips} trips, ${j.summary.fish} fish, ${j.summary.blanks} blanks`;
-      e.target.reset();
-    }catch(err){ msg.className='err'; msg.textContent = 'failed: ' + err.message; }
+      const s = res.summary;
+      msg.textContent = s
+        ? `saved · ${s.trips} trips, ${s.fish} fish, ${s.blanks} blanks`
+        : 'saved';
+    } else {
+      msg.className='';
+      const n = await pendingCount();
+      msg.innerHTML = `<span style="color:var(--warn)">held on this phone` +
+        ` · ${n} waiting to sync</span>`;
+    }
+    refreshNetState();
   };
 }
 
@@ -595,6 +621,120 @@ document.addEventListener('click', e => {
     $('#layers').classList.remove('open');
 });
 
+// ------------------------------------------------------- offline + queueing
+//
+// The bay has no signal worth relying on, so a trip is written to the phone
+// first and sent second. A POST that fails is not an error the angler should
+// have to think about at 2am with wet hands -- it is just a row that has not
+// synced yet.
+
+const DB_NAME = 'tiderace', STORE = 'queue';
+
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB_NAME, 1);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains(STORE))
+        db.createObjectStore(STORE, {keyPath: 'client_id'});
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+
+async function tx(mode, fn) {
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const t = db.transaction(STORE, mode);
+    const out = fn(t.objectStore(STORE));
+    t.oncomplete = () => res(out?.result ?? out);
+    t.onerror = () => rej(t.error);
+  });
+}
+
+const queueAdd  = e  => tx('readwrite', s => s.put(e));
+const queueAll  = () => tx('readonly',  s => s.getAll());
+const queueDrop = id => tx('readwrite', s => s.delete(id));
+
+async function pendingCount() {
+  try { return (await queueAll()).length; } catch (_) { return 0; }
+}
+
+async function refreshNetState() {
+  const el = $('#netstate');
+  const n = await pendingCount();
+  if (!navigator.onLine) {
+    el.className = 'off';
+    el.textContent = n ? `offline · ${n} queued` : 'offline';
+  } else if (n) {
+    el.className = 'queued';
+    el.textContent = `${n} to sync`;
+  } else {
+    el.className = 'ok';
+    el.textContent = '';
+  }
+}
+
+/** Send everything queued, in one request. Anything the server rejects stays
+ *  put rather than being silently dropped. */
+async function flushQueue() {
+  if (!navigator.onLine) return {sent: 0};
+  let entries;
+  try { entries = await queueAll(); } catch (_) { return {sent: 0}; }
+  if (!entries.length) return {sent: 0};
+
+  let r;
+  try {
+    r = await fetch('/api/log', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({entries})
+    });
+  } catch (_) { return {sent: 0, offline: true}; }
+  if (!r.ok) return {sent: 0};
+
+  const j = await r.json();
+  for (const id of (j.saved || [])) if (id) await queueDrop(id);
+  await refreshNetState();
+  return {sent: (j.saved || []).length, failed: (j.failed || []).length,
+          summary: j.summary};
+}
+
+/** Pull everything needed to fish a tide without the server. */
+async function saveForOffline() {
+  const btn = $('#offlinebtn');
+  const was = btn.textContent;
+  btn.textContent = 'saving…'; btn.disabled = true;
+  try {
+    const meta = await (await fetch('/api/meta')).json();
+    const urls = ['/', '/api/meta', '/api/bait', '/api/charts'];
+    for (const sp of meta.species) urls.push(`/api/grid?species=${sp.key}&hours=48`);
+    for (const l of (await (await fetch('/api/charts')).json()).layers || [])
+      urls.push(l.url);
+
+    // Fetch through the page so the service worker's DATA cache fills, then
+    // ask it to confirm.
+    await Promise.allSettled(urls.map(u => fetch(u)));
+    const reg = await navigator.serviceWorker?.ready;
+    reg?.active?.postMessage({type: 'prefetch', urls});
+
+    localStorage.setItem('tiderace:saved', new Date().toISOString());
+    btn.textContent = 'saved ✓';
+    setTimeout(() => { btn.textContent = was; btn.disabled = false; }, 2500);
+  } catch (e) {
+    btn.textContent = 'failed';
+    setTimeout(() => { btn.textContent = was; btn.disabled = false; }, 2500);
+  }
+}
+
+$('#offlinebtn').onclick = saveForOffline;
+addEventListener('online',  () => { refreshNetState(); flushQueue(); });
+addEventListener('offline', refreshNetState);
+
+if ('serviceWorker' in navigator) {
+  addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(()=>{}));
+}
+
 // -------------------------------------------------------------------- boot
 async function loadSpecies(){
   const meta = await (await fetch('/api/meta')).json();
@@ -650,6 +790,8 @@ $('#species').onchange = loadGrid;
   try{
     await loadSpecies();
     await loadGrid();
+    refreshNetState();
+    flushQueue();
     if (!MAP_READY) await loadCharts();   // still populate the menu + counts
   }catch(err){
     $('#loading').innerHTML =

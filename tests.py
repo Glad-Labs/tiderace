@@ -982,6 +982,71 @@ class Solunar(unittest.TestCase):
         self.assertEqual(evaluate.solunar_baseline({}), 0.0)
 
 
+class Offline(unittest.TestCase):
+    """The PWA pieces, checked as far as a non-browser test can reach.
+
+    The behaviour that matters -- queue while offline, drain on reconnect --
+    was exercised in a real browser with the server stopped; these guard the
+    wiring it depends on.
+    """
+
+    WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tiderace", "web")
+
+    def test_pwa_assets_exist(self):
+        for f in ("manifest.webmanifest", "sw.js", "icon-192.png",
+                  "icon-512.png", "icon-maskable-512.png"):
+            self.assertTrue(os.path.isfile(os.path.join(self.WEB, f)), f)
+
+    def test_manifest_is_valid_and_installable(self):
+        import json as J
+        m = J.load(open(os.path.join(self.WEB, "manifest.webmanifest")))
+        self.assertEqual(m["display"], "standalone")
+        self.assertEqual(m["scope"], "/")
+        sizes = {i["sizes"] for i in m["icons"]}
+        self.assertIn("192x192", sizes)
+        self.assertIn("512x512", sizes)
+        self.assertIn("maskable", {i["purpose"] for i in m["icons"]})
+
+    def test_icons_are_real_pngs(self):
+        for f in ("icon-192.png", "icon-512.png", "icon-maskable-512.png"):
+            with open(os.path.join(self.WEB, f), "rb") as fh:
+                self.assertEqual(fh.read(8), b"\x89PNG\r\n\x1a\n", f)
+
+    def test_service_worker_does_not_cache_map_tiles(self):
+        """Covering the bay at usable zoom is hundreds of megabytes, and the
+        map is the one part you can lose and still fish."""
+        sw = open(os.path.join(self.WEB, "sw.js")).read()
+        self.assertIn("openstreetmap", sw)
+        self.assertIn("openseamap", sw)
+        self.assertIn("return", sw.split("openstreetmap")[1][:200])
+
+    def test_service_worker_is_network_first_for_data(self):
+        sw = open(os.path.join(self.WEB, "sw.js")).read()
+        self.assertIn("/api/", sw)
+        self.assertIn("X-Tiderace-Offline", sw)
+
+    def test_client_queues_before_sending(self):
+        """A trip you did not record is gone; one that has not synced is fine."""
+        html = open(os.path.join(self.WEB, "index.html")).read()
+        self.assertIn("queueAdd", html)
+        self.assertIn("indexedDB", html)
+        i_queue = html.index("await queueAdd(body)")
+        i_send = html.index("const res = await flushQueue()")
+        self.assertLess(i_queue, i_send, "must write locally before the network")
+
+    def test_server_routes_the_worker_at_root_scope(self):
+        """A service worker only controls paths at or below its own."""
+        srv = open(os.path.join(os.path.dirname(self.WEB), "server.py")).read()
+        self.assertIn('url.path == "/sw.js"', srv)
+        self.assertIn('url.path == "/manifest.webmanifest"', srv)
+        self.assertIn('url.path == "/api/health"', srv)
+
+    def test_batch_log_accepts_a_flushed_queue(self):
+        srv = open(os.path.join(os.path.dirname(self.WEB), "server.py")).read()
+        self.assertIn('data.get("entries")', srv)
+        self.assertIn("client_id", srv)
+
+
 class Privacy(unittest.TestCase):
     def test_weather_coordinates_are_coarsened(self):
         """Your marks must not reach a third party at 11 m precision."""

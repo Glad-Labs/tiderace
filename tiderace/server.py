@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import subprocess
+import sys
 import os
 import threading
 import traceback
@@ -130,6 +132,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if url.path in ("/", "/index.html"):
                 return self._static("index.html")
+            # A service worker may only control paths at or below its own, so
+            # this has to be served from the root even though it lives in web/.
+            if url.path == "/sw.js":
+                return self._static("sw.js")
+            if url.path == "/manifest.webmanifest":
+                return self._static("manifest.webmanifest")
+            if url.path == "/api/health":
+                return self._send_json({"ok": True})
             if url.path == "/api/meta":
                 return self._send_json({
                     "species": [{"key": k, "name": p.name, "notes": p.notes}
@@ -204,6 +214,22 @@ class Handler(BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length", 0))
             data = json.loads(self.rfile.read(n) or b"{}")
+
+            # A phone coming back into signal flushes everything it queued on
+            # the water in one request, so a long day does not become a long
+            # sequence of round trips on a bad connection.
+            if isinstance(data, dict) and isinstance(data.get("entries"), list):
+                saved, failed = [], []
+                for item in data["entries"]:
+                    try:
+                        saved.append(self._record(item))
+                    except Exception as exc:                      # noqa: BLE001
+                        failed.append({"client_id": item.get("client_id"),
+                                       "error": str(exc)})
+                return self._send_json({"ok": True, "saved": saved,
+                                        "failed": failed,
+                                        "summary": catchlog.summary()})
+
             entry = catchlog.Entry(
                 spot=data["spot"], species=data["species"],
                 count=int(data.get("count", 0)),
@@ -219,6 +245,21 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             return self._send_json({"error": str(exc)}, 400)
 
+    def _record(self, data: dict) -> str | None:
+        """Persist one queued trip. Returns the client id so the phone knows
+        which of its queued entries to drop."""
+        entry = catchlog.Entry(
+            spot=data["spot"], species=data["species"],
+            count=int(data.get("count", 0)),
+            started_at=data.get("started_at") or datetime.now().isoformat(
+                timespec="minutes"),
+            biggest_in=data.get("biggest_in"),
+            method=data.get("method"), bait_observed=data.get("bait_observed"),
+            notes=data.get("notes"), source=data.get("source", "manual"),
+            decided_by=data.get("decided_by", "angler"))
+        catchlog.record(entry)
+        return data.get("client_id")
+
     def _static(self, name: str):
         safe = os.path.normpath(name).lstrip(os.sep)
         path = os.path.join(WEB_DIR, safe)
@@ -230,13 +271,49 @@ class Handler(BaseHTTPRequestHandler):
             self._send(fh.read(), ctype)
 
 
+def tailscale_ip() -> tuple[str, str] | None:
+    """This machine's Tailscale address and DNS name, if the tailnet is up.
+
+    Binding here rather than 0.0.0.0 is the difference between "my phone can
+    reach it from the boat" and "everyone on the marina wifi can read my catch
+    log". A tailnet is authenticated and private; a LAN is neither.
+    """
+    try:
+        out = subprocess.run(["tailscale", "status", "--json"],
+                             capture_output=True, text=True, timeout=8)
+        if out.returncode != 0:
+            return None
+        me = json.loads(out.stdout).get("Self", {})
+        ips = [i for i in me.get("TailscaleIPs", []) if ":" not in i]
+        if not ips:
+            return None
+        return ips[0], (me.get("DNSName") or "").rstrip(".")
+    except Exception:                                             # noqa: BLE001
+        return None
+
+
 def serve(host: str = "127.0.0.1", port: int = 8765) -> int:
+    dns = ""
+    if host == "tailscale":
+        ts = tailscale_ip()
+        if not ts:
+            print("\n  No tailnet found. Is tailscale running?\n", file=sys.stderr)
+            return 1
+        host, dns = ts
+
     srv = ThreadingHTTPServer((host, port), Handler)
     print(f"\n  tiderace  →  http://{host}:{port}")
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        print("\n  ! This is bound beyond localhost, so anyone who can reach this")
-        print("  ! machine can read your catch log and your private marks.")
-        print("  ! There is no authentication. Use 127.0.0.1 unless you mean it.\n")
+
+    if host.startswith("100.") and dns:
+        print(f"  on your phone →  http://{dns}:{port}")
+        print("\n  Reachable from any device signed into your tailnet, and from")
+        print("  nowhere else. Note there is still no login: anyone on the tailnet")
+        print("  can read the catch log and your marks.\n")
+    elif host not in ("127.0.0.1", "localhost", "::1"):
+        print("\n  ! Bound beyond localhost with no authentication. Anyone who can")
+        print("  ! reach this machine — the whole wifi, if this is 0.0.0.0 — can read")
+        print("  ! your catch log and your private marks.")
+        print("  ! Prefer: tiderace serve --tailscale\n")
     print(f"  {len(spots.SPOTS)} spots · {len(score.PROFILES)} species · ctrl-c to stop\n")
     try:
         srv.serve_forever()

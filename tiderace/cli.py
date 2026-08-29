@@ -167,6 +167,8 @@ def run(argv=None) -> int:
     sv = sub.add_parser("serve", help="run the local map UI")
     sv.add_argument("--port", type=int, default=8765)
     sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--tailscale", action="store_true",
+                    help="bind to your tailnet so your phone can reach it")
 
     _add_forecast_args(ap)          # allow bare `tiderace --species ...`
     ap.add_argument("--list-spots", action="store_true", help=argparse.SUPPRESS)
@@ -205,7 +207,7 @@ def run(argv=None) -> int:
         return 0
     if args.cmd == "serve":
         from .server import serve
-        return serve(args.host, args.port)
+        return serve("tailscale" if args.tailscale else args.host, args.port)
 
     return _cmd_forecast(args)
 

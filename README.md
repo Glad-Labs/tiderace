@@ -40,6 +40,47 @@ tiderace evaluate                    # does it beat doing nothing?
 python3 tests.py                     # 89 tests, no network needed
 ```
 
+## On the water
+
+```bash
+tiderace serve --tailscale      # reachable from your phone, nowhere else
+```
+
+Binds to your tailnet rather than `0.0.0.0`, which is the difference between
+"my phone can reach it from the boat" and "everyone on the marina wifi can read
+my catch log". There is still no login — anyone on your tailnet can see
+everything.
+
+**For HTTPS** (needed before a phone will install it or run a service worker):
+
+```bash
+sudo tailscale serve --bg 8765     # then use the plain `tiderace serve` bind
+```
+
+That fronts the local server with a real certificate for your `.ts.net` name,
+so the app becomes a secure context. Undo with `tailscale serve reset`.
+
+### It works with no signal
+
+The bay has no cell coverage worth relying on, so the app is built to survive
+losing the server entirely:
+
+- **`save ↓` before you leave the dock** caches the 48-hour forecast for every
+  species, all six chart layers, and the app itself.
+- **A logged trip is written to the phone first and sent second.** If there is
+  no signal it says *held on this phone · 2 waiting to sync* and keeps them in
+  IndexedDB. They flush in a single batch the moment the server is reachable.
+  A trip you did not record is gone forever; one that has not synced yet is
+  fine.
+- **Map tiles are deliberately not cached.** Covering the bay at usable zoom is
+  hundreds of megabytes, and the map is the one part you can lose and still
+  fish — the ranked list, spot detail and log form are all data, and they all
+  work offline.
+
+Verified by stopping the server outright: the forecast still loaded from cache
+(19 spots, Whale Rock 83.0), a trip logged and queued, and the queue drained on
+its own when the server came back.
+
 ## The map
 
 `serve` runs a local web app: the bay with every spot coloured by score, a
