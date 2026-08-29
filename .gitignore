@@ -23,3 +23,8 @@ data/config.json
 
 # Extraction review queue — claims awaiting human approval, not facts.
 data/review_queue.jsonl
+
+# Editable-install metadata
+*.egg-info/
+build/
+dist/

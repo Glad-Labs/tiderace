@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tiderace"
+version = "0.1.0"
+description = "Physics-first fishing forecasts for Narragansett Bay"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "AGPL-3.0-or-later" }
+# Deliberately empty. The forecast, map, charts, logging and local extraction
+# all run on the standard library; `anthropic` is optional and only needed for
+# the paid extraction backend (see requirements-extract.txt).
+dependencies = []
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=1.0"]
+
+[project.scripts]
+tiderace = "tiderace.cli:run"
+
+[tool.setuptools]
+packages = ["tiderace"]
+
+[tool.setuptools.package-data]
+tiderace = ["web/*.html"]

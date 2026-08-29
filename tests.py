@@ -784,6 +784,55 @@ class AggregateProgram(unittest.TestCase):
         self.assertEqual([f["severity"] for f in r["findings"]], ["ok", "ok"])
 
 
+class Packaging(unittest.TestCase):
+    """The CLI has to run from somewhere other than the project directory.
+
+    `python3 -m tiderace` only works with the project as the current directory,
+    because that is the one place Python adds to sys.path. Every command in the
+    README was written that way and none of them worked from a home directory.
+    """
+
+    ROOT = os.path.dirname(os.path.abspath(__file__))
+
+    def test_wrapper_exists_and_is_executable(self):
+        w = os.path.join(self.ROOT, "tiderace-cli")
+        self.assertTrue(os.path.isfile(w), "launcher missing")
+        self.assertTrue(os.access(w, os.X_OK), "launcher is not executable")
+
+    def test_wrapper_runs_from_a_foreign_directory(self):
+        import subprocess, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            r = subprocess.run([os.path.join(self.ROOT, "tiderace-cli"), "spots"],
+                               cwd=d, capture_output=True, text=True, timeout=90)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("whale_rock", r.stdout)
+
+    def test_module_entry_point_is_callable(self):
+        """pyproject wires tiderace.cli:run as the console script."""
+        from tiderace.cli import run
+        self.assertTrue(callable(run))
+
+    def test_pyproject_declares_the_script_and_no_dependencies(self):
+        pp = os.path.join(self.ROOT, "pyproject.toml")
+        self.assertTrue(os.path.isfile(pp))
+        text = open(pp).read()
+        self.assertIn('tiderace = "tiderace.cli:run"', text)
+        self.assertIn("dependencies = []", text)
+        self.assertIn('requires-python = ">=3.9"', text)
+
+    def test_web_assets_are_packaged(self):
+        """serve is useless if index.html does not ship with the package."""
+        from tiderace import server
+        self.assertTrue(os.path.isfile(os.path.join(server.WEB_DIR, "index.html")))
+
+    def test_data_paths_do_not_depend_on_cwd(self):
+        from tiderace import bait as b, charts, gso
+        from tiderace import log as catchlog
+        for path in (catchlog.LOG_PATH, b.BAIT_PATH, charts.CHART_DIR, gso.CACHE):
+            self.assertTrue(os.path.isabs(os.path.abspath(path)))
+            self.assertIn("tiderace", os.path.abspath(path))
+
+
 class Privacy(unittest.TestCase):
     def test_weather_coordinates_are_coarsened(self):
         """Your marks must not reach a third party at 11 m precision."""

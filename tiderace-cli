@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Run tiderace from anywhere.
+#
+# `python3 -m tiderace` only works from inside the project directory, because
+# Python puts the current directory on sys.path and nowhere else. This resolves
+# its own location -- through symlinks, so it can live in ~/.local/bin -- and
+# puts the project on the path itself.
+set -euo pipefail
+
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ $src != /* ]] && src="$dir/$src"
+done
+root="$(cd -P "$(dirname "$src")" && pwd)"
+
+py="${TIDERACE_PYTHON:-python3}"
+if ! command -v "$py" >/dev/null 2>&1; then
+  echo "tiderace: no '$py' on PATH. Set TIDERACE_PYTHON to your interpreter." >&2
+  exit 127
+fi
+
+# 3.9 is the floor: zoneinfo (DST handling) landed there.
+"$py" - <<'PYCHECK' || exit 1
+import sys
+if sys.version_info < (3, 9):
+    sys.stderr.write(
+        f"tiderace needs Python 3.9+ (zoneinfo); this is {sys.version.split()[0]}\n")
+    raise SystemExit(1)
+PYCHECK
+
+exec env PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" "$py" -m tiderace "$@"

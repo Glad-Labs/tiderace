@@ -4,13 +4,31 @@ Physics-first fishing forecasts for Narragansett Bay. No API keys, no
 dependencies, no accounts — everything below runs on public NOAA and NWS
 endpoints using only the Python standard library.
 
+## Install
+
 ```bash
-python3 -m tiderace serve                          # map UI at localhost:8765
-python3 -m tiderace evaluate                       # does it beat doing nothing?
-python3 tests.py                                   # 16 tests, no network needed
-python3 -m tiderace --species striped_bass         # terminal forecast
-python3 -m tiderace --species fluke --spot dyer_island
-python3 -m tiderace spots
+ln -s "$PWD/tiderace-cli" ~/.local/bin/tiderace
+```
+
+That is the whole install — there is nothing to download, because the project
+has no dependencies. The wrapper resolves its own location (through symlinks),
+so `tiderace` works from any directory. If you prefer pip, `pip install -e .`
+puts the same command on your PATH.
+
+> **`python3 -m tiderace` only works from inside the project directory.**
+> Python puts the current directory on `sys.path` and nowhere else, so from
+> anywhere else it fails with `No module named tiderace`. Use the wrapper.
+
+```bash
+tiderace serve                       # map UI at localhost:8765
+tiderace --species striped_bass      # terminal forecast
+tiderace --species fluke --spot dyer_island
+tiderace spots                       # what is mapped
+tiderace regs                        # recreational vs commercial rules
+tiderace scrape --diff               # where RIDEM disagrees with the code
+tiderace evaluate                    # does it beat doing nothing?
+
+python3 tests.py                     # 89 tests, no network needed
 ```
 
 ## The map
@@ -37,7 +55,7 @@ Tiles are keyless too:
 ## Chart overlays — the structure that holds fish
 
 ```bash
-python3 -m tiderace charts        # one-time download, ~770 KB
+tiderace charts        # one-time download, ~770 KB
 ```
 
 Pulls NOAA Electronic Navigational Chart features for the bay from the
@@ -109,10 +127,10 @@ in places.
 That is what the catch log is for:
 
 ```bash
-python3 -m tiderace log --spot whale_rock --species striped_bass \
+tiderace log --spot whale_rock --species striped_bass \
     --count 0 --at 2026-08-27T05:30 --method bucktail --notes "flat calm, no bait"
 
-python3 -m tiderace history
+tiderace history
 ```
 
 Logging snapshots the **full feature vector** at that time and place — current
@@ -140,9 +158,9 @@ tiderace/
 ## Scraping facts
 
 ```bash
-python3 -m tiderace scrape --check              # robots status for every source
-python3 -m tiderace scrape --source ridem_amendments
-python3 -m tiderace review                      # what is waiting for approval
+tiderace scrape --check              # robots status for every source
+tiderace scrape --source ridem_amendments
+tiderace review                      # what is waiting for approval
 ```
 
 Runs on **local Ollama by default**, so this needs no Python dependency either —
@@ -150,9 +168,9 @@ the client is plain `urllib` against `localhost:11434`. The whole project stays
 installable with nothing but a Python interpreter.
 
 ```bash
-python3 -m tiderace config --llm ollama --llm-model qwen3.6:27b   # default
-python3 -m tiderace config --llm anthropic                        # pip install anthropic
-python3 -m tiderace scrape --check                                # what is reachable
+tiderace config --llm ollama --llm-model qwen3.6:27b   # default
+tiderace config --llm anthropic                        # pip install anthropic
+tiderace scrape --check                                # what is reachable
 ```
 
 ### Rules first, model second
@@ -171,7 +189,7 @@ its place.
 ### Reviewing deltas, not the whole page
 
 ```bash
-python3 -m tiderace scrape --diff
+tiderace scrape --diff
 ```
 
 Twenty-two notices is how staleness survives review, so `--diff` narrows the
@@ -273,7 +291,7 @@ Island", twelve miles offshore, at Rose Island.
 ## Seasonal timing, from 65 years of measurement
 
 ```bash
-python3 -m tiderace gso            # weekly climatology + thermal windows
+tiderace gso            # weekly climatology + thermal windows
 ```
 
 The species month tuples used to be guesses, and one of them was provably
@@ -325,8 +343,8 @@ of an equation; bait does not. So it is an **observation layer that decays in
 space and time**, not another physics term.
 
 ```bash
-python3 -m tiderace bait --spot conimicut --bait "peanut bunker" --abundance loaded
-python3 -m tiderace bait --spot whale_rock --bait bunker --abundance none   # also useful
+tiderace bait --spot conimicut --bait "peanut bunker" --abundance loaded
+tiderace bait --spot whale_rock --bait bunker --abundance none   # also useful
 ```
 
 Three things this gets right that a `bait: yes/no` flag would not:
@@ -386,9 +404,9 @@ you fish.
 ### Commercial licence
 
 ```bash
-python3 -m tiderace config --license commercial --license-holder "..."
-python3 -m tiderace regs                # both regimes side by side
-python3 -m tiderace --species fluke --license commercial
+tiderace config --license commercial --license-holder "..."
+tiderace regs                # both regimes side by side
+tiderace --species fluke --license commercial
 ```
 
 Commercial is **not a variant of recreational, it is a different regime**, and
@@ -430,7 +448,7 @@ which licence a trip belonged to is no use as a record.
 ### The Aggregate Program
 
 ```bash
-python3 -m tiderace config --aggregate summer_fall   # or winter, or none
+tiderace config --aggregate summer_fall   # or winter, or none
 ```
 
 A permit-required commercial programme that pools a daily limit into a longer
@@ -458,7 +476,7 @@ in the config assumes you are in the programme.
 ### Parallel fisheries
 
 ```bash
-python3 -m tiderace config --sub-fishery general_category   # or floating_fish_trap
+tiderace config --sub-fishery general_category   # or floating_fish_trap
 ```
 
 Scup runs two fisheries side by side with different limits. On 1 April 2026
@@ -490,7 +508,7 @@ category error rather than a disagreement. Aggregate notices now key separately.
 ## Does it actually work?
 
 ```bash
-python3 -m tiderace evaluate
+tiderace evaluate
 ```
 
 The bar is not "better than random" — it is **better than the free advice every
