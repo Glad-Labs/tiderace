@@ -119,6 +119,17 @@ def run(argv=None) -> int:
     rg = sub.add_parser("regs", help="compare recreational and commercial rules")
     rg.add_argument("--species", choices=sorted(score.PROFILES))
 
+    ofs = sub.add_parser("offshore",
+                         help="conditions offshore — facts, not a score")
+    ofs.add_argument("coord", nargs="?", default="41.1072,-71.4994",
+                     help="lat,lon (default: BIWF-3, the middle turbine)")
+    ofs.add_argument("--name", help="label for the report")
+    ofs.add_argument("--radius", type=float, default=25,
+                     help="nm to search occurrence records (default 25)")
+    ofs.add_argument("--box", type=float, default=0.25,
+                     help="degrees either side for the SST grid")
+    ofs.add_argument("--json", action="store_true")
+
     sub.add_parser("history", help="summarise the catch log")
     sub.add_parser("evaluate", help="does the model beat the free baseline?")
 
@@ -154,6 +165,8 @@ def run(argv=None) -> int:
         return _cmd_scrape(args)
     if args.cmd == "review":
         return _cmd_review(args)
+    if args.cmd == "offshore":
+        return _cmd_offshore(args)
     if args.cmd == "config":
         return _cmd_config(args)
     if args.cmd == "regs":
@@ -381,6 +394,105 @@ def _cmd_review(args) -> int:
     print("  source, then edit tiderace/regs.py by hand and bump CHECKED_ON.")
     print(f"  Queue: {extract.REVIEW_PATH}\n")
     return 0
+
+
+def _cmd_offshore(args) -> int:
+    """Report offshore conditions. Deliberately ranks nothing.
+
+    Seventeen miles out the bay's physics does not apply, and a score built on
+    hand-set weights would be worse than useless -- it would be confident. So
+    this lays out what is measurable and leaves the decision where it belongs.
+    """
+    from . import offshore as off
+
+    try:
+        lat, lon = (float(x) for x in args.coord.replace(" ", "").split(","))
+    except ValueError:
+        print(f"could not read a coordinate from {args.coord!r}", file=sys.stderr)
+        return 1
+
+    name = args.name or f"{lat:.4f}, {lon:.4f}"
+    tname, tdist = off.nearest_turbine(lat, lon)
+
+    print()
+    print(f"  {name}   —   offshore conditions")
+    print("  " + "─" * 74)
+    print(f"  nearest turbine  {tname} · {tdist} nm")
+
+    b = off.buoy()
+    if b:
+        bits = []
+        if b.get("water_c") is not None:
+            bits.append(f"water {b['water_c']:.1f}°C / {b['water_c']*9/5+32:.0f}°F")
+        if b.get("wave_m") is not None:
+            bits.append(f"seas {b['wave_m']:.1f} m @ {b.get('dom_period_s') or '?'} s")
+        if b.get("wind_kt"):
+            bits.append(f"wind {b['wind_kt']:.0f} kt")
+        print(f"  buoy {b['station']}      {' · '.join(bits)}   ({b['when']})")
+
+    try:
+        grid = off.sst_grid(lat, lon, args.box)
+    except off.OffshoreError as e:
+        print(f"\n  ! SST unavailable: {e}\n")
+        grid = None
+
+    if grid:
+        temps = sorted(p[2] for p in grid["points"])
+        c = grid["centre_c"]
+        print()
+        print(f"  SST ({grid['date']}, MUR 1 km)")
+        print(f"    here            {c:.2f}°C / {c*9/5+32:.1f}°F")
+        print(f"    across the box  {temps[0]:.2f} – {temps[-1]:.2f}°C"
+              f"   ({temps[-1]-temps[0]:.2f}° spread over {len(temps)} cells)")
+
+        brk = off.breaks(grid)
+        if brk:
+            print()
+            print("  steepest temperature breaks — where bait piles up")
+            for x in brk:
+                d = off.nm(lat, lon, x["lat"], x["lon"])
+                brg = _bearing(lat, lon, x["lat"], x["lon"])
+                print(f"    {x['grad_c_per_nm']:.3f} °C/nm   {d:5.1f} nm {brg:<3}"
+                      f"   {x['lat']:.3f},{x['lon']:.3f}   {x['sst_c']:.2f}°C")
+
+    ch = off.chlorophyll(lat, lon, args.box)
+    if ch:
+        print()
+        print(f"  chlorophyll ({ch['date']})  median {ch['median_mg_m3']} mg/m³"
+              f"   range {ch['low']}–{ch['high']}")
+        print("    higher is greener and more productive; the clean edge beside it")
+        print("    is usually the side you want")
+
+    print()
+    print(f"  recorded within {args.radius:.0f} nm  (OBIS, all years)")
+    occ = off.occurrences(lat, lon, args.radius)
+    if not occ:
+        print("    nothing on record here — try a wider --radius")
+    for n, d in sorted(occ.items(), key=lambda kv: -kv[1]["records"]):
+        months = d["by_month"]
+        tot = sum(months.values()) or 1
+        this = months.get(datetime.now().month, 0)
+        peak = ", ".join(f"{m:02d}" for m, _ in
+                         sorted(months.items(), key=lambda kv: -kv[1])[:3])
+        print(f"    {n:<14} {d['records']:>6} records   peak {peak}"
+              f"   this month {100*this//tot}% of them")
+
+    print()
+    print("  " + "─" * 74)
+    print("  Nothing above is ranked. Offshore the bay's physics does not apply,")
+    print("  and a score built on weights I invented would only be confident.")
+    print("  Occurrence records say what has been caught here and when — not")
+    print("  what is happening today.\n")
+    return 0
+
+
+def _bearing(lat1, lon1, lat2, lon2) -> str:
+    import math
+    dy = lat2 - lat1
+    dx = (lon2 - lon1) * math.cos(math.radians(lat1))
+    deg = (math.degrees(math.atan2(dx, dy)) + 360) % 360
+    return ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW",
+            "W","WNW","NW","NNW"][int((deg + 11.25) % 360 / 22.5)]
 
 
 def _cmd_config(args) -> int:
