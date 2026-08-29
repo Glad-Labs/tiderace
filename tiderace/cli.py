@@ -137,6 +137,8 @@ def run(argv=None) -> int:
     sc.add_argument("--force", action="store_true", help="bypass the page cache")
     sc.add_argument("--check", action="store_true",
                     help="show robots status and backend availability, then exit")
+    sc.add_argument("--diff", action="store_true",
+                    help="show only where RIDEM disagrees with regs.py")
     sc.add_argument("--use-model", action="store_true",
                     help="also ask the model about notices the rule parser missed")
 
@@ -257,6 +259,9 @@ def _cmd_scrape(args) -> int:
         print()
         return 0
 
+    if args.diff:
+        return _cmd_diff(args)
+
     targets = []
     if args.url:
         targets = [("custom", args.url, "report")]
@@ -303,6 +308,54 @@ def _cmd_scrape(args) -> int:
     print("  Nothing above has changed the forecast. Regulations need approval:")
     print("    python3 -m tiderace review\n")
     return 0
+
+
+def _cmd_diff(args) -> int:
+    """Narrow the whole notices page down to what disagrees with the code."""
+    from . import reconcile, ridem
+    mode = args.license_mode or cfgmod.load()["license_mode"]
+    url = fetch.SOURCES["ridem_amendments"]["url"]
+
+    try:
+        doc = fetch.fetch(url, force=args.force)
+    except fetch.FetchError as e:
+        print(f"\n  could not reach RIDEM: {e}\n", file=sys.stderr)
+        return 1
+
+    parsed = ridem.parse_page(doc["text"])
+    r = reconcile.compare(parsed["notices"], mode=mode)
+    c = r["counts"]
+
+    print()
+    print(f"  RIDEM vs regs.py  ·  {mode}  ·  as of {r['as_of']}")
+    print(f"  {len(parsed['notices'])} notices on the page, "
+          f"{parsed['unparsed'] and len(parsed['unparsed']) or 0} unparsed")
+    print("  " + "─" * 76)
+
+    actionable = [f for f in r["findings"] if f["severity"] != "ok"]
+    if not actionable:
+        print("\n  Nothing disagrees. regs.py matches every rule now in force.")
+    for f in actionable:
+        mark = "!" if f["severity"] == "mismatch" else "?"
+        print(f"\n  {mark} [{f['severity']}] {f['species']}")
+        print(f"      {f['detail']}")
+        print(f"      \"{f['notice']['quote'][:120]}\"")
+
+    if r["upcoming"]:
+        print("\n  " + "─" * 76)
+        print("  Scheduled changes not yet in force:")
+        for n in r["upcoming"]:
+            a = n["amount"] or {}
+            amt = f"{a.get('value','')} {a.get('unit','')} {n.get('period') or ''}".strip()
+            print(f"    {n['effective_date']}  {n['species_key']:<16} {amt}")
+
+    print("\n  " + "─" * 76)
+    print(f"  {c['mismatch']} mismatch · {c['ambiguous']} ambiguous · "
+          f"{c['unknown']} unmodelled · {c['ok']} agree")
+    print(f"  regs.py last checked {r['checked_on']}. Nothing here has been applied —")
+    print("  confirm against the page, then edit tiderace/regs.py and bump CHECKED_ON.")
+    print(f"  {url}\n")
+    return 0 if not actionable else 0
 
 
 def _cmd_review(args) -> int:

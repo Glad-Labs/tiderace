@@ -11,7 +11,8 @@ import os
 import unittest
 from datetime import date, datetime, timedelta
 
-from tiderace import astro, bait, evaluate, extract, fetch, gso, llm, regs, ridem, score, spots
+from tiderace import (astro, bait, evaluate, extract, fetch, gso, llm, reconcile,
+                      regs, ridem, score, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
 from tiderace.features import _local_tz, _wind_against_tide
@@ -498,6 +499,109 @@ class RidemParser(unittest.TestCase):
         self.assertIsNone(ridem.parse_notice("Fishing was good last week."))
         page = ridem.parse_page("Nothing here.\nOr here.")
         self.assertEqual(page["notices"], [])
+
+
+class Reconcile(unittest.TestCase):
+    TODAY = date(2026, 8, 28)
+
+    CLOSED_UFN = ("Beginning 12:00AM on Tuesday, June 23, 2026, the GENERAL CATAGORY "
+                  "commercial fishery for Striped Bass will close until further notice.")
+    CLOSED_REOPENS = ("Beginning 12:00AM on Saturday, May 30, 2026, the commercial "
+                      "Tautog fishery will close, until the next sub-period begins "
+                      "on August 1, 2026 at ten (10) fish per day.")
+    REOPEN_OR = ("Beginning 12:00AM on Monday, March 16, 2026, the commercial Scup "
+                 "General Category fishery will close until further notice, or until "
+                 "the fishery re-opens on May 1, 2026 at ten-thousand (10,000) pounds "
+                 "per week.")
+
+    def test_closure_with_reopen_date_is_not_still_closed(self):
+        """The bug this guards: reading a closure and ignoring its own reopen
+        clause reported tautog and scup as shut months after they legally
+        reopened — worse than silence, because it stops you fishing an open
+        season."""
+        n = ridem.parse_notice(self.CLOSED_REOPENS)
+        self.assertEqual(n["reopens_on"], "2026-08-01")
+        self.assertFalse(n["until_further_notice"])
+
+        n2 = ridem.parse_notice(self.REOPEN_OR)
+        self.assertEqual(n2["reopens_on"], "2026-05-01")
+        self.assertFalse(n2["until_further_notice"])
+
+    def test_indefinite_closure_has_no_reopen_date(self):
+        n = ridem.parse_notice(self.CLOSED_UFN)
+        self.assertIsNone(n["reopens_on"])
+        self.assertTrue(n["until_further_notice"])
+
+    def test_expired_closure_reads_as_agreement(self):
+        notices = [ridem.parse_notice(self.CLOSED_REOPENS)]
+        r = reconcile.compare(notices, self.TODAY)
+        sev = {f["severity"] for f in r["findings"]}
+        self.assertEqual(sev, {"ok"})
+        self.assertIn("reopened", r["findings"][0]["detail"])
+
+    def test_live_closure_agrees_where_the_code_also_closes(self):
+        """On 31 July the tautog closure is still in force — and regs.py has
+        commercial tautog shut too (the June–July gap between sub-periods).
+        Agreement is the correct finding, not a mismatch."""
+        r = reconcile.compare([ridem.parse_notice(self.CLOSED_REOPENS)],
+                              date(2026, 7, 31))
+        self.assertFalse(any(f["severity"] == "mismatch" for f in r["findings"]))
+
+    def test_live_closure_is_flagged_where_the_code_says_open(self):
+        """Commercial scup is open all year in regs.py, so a closure still in
+        force must surface as a mismatch."""
+        closed = ("Beginning 12:00AM on Monday, March 16, 2026, the commercial Scup "
+                  "General Category fishery will close until further notice.")
+        r = reconcile.compare([ridem.parse_notice(closed)], self.TODAY)
+        mismatches = [f for f in r["findings"] if f["severity"] == "mismatch"]
+        self.assertEqual(len(mismatches), 1)
+        self.assertIn("regs.py says open", mismatches[0]["detail"])
+
+    def test_later_notice_supersedes_earlier(self):
+        base = ("Beginning 12:00AM on {d}, 2026, the commercial possession limit "
+                "for Black Sea Bass will be {w} ({n}) pounds per day.")
+        notices = [ridem.parse_notice(base.format(d="July 19", w="three hundred", n="300")),
+                   ridem.parse_notice(base.format(d="March 29", w="seven hundred fifty", n="750"))]
+        state = reconcile.effective_state(notices, self.TODAY)
+        vals = [n["amount"]["value"] for n in state.values()]
+        self.assertEqual(vals, [300])
+
+    def test_future_notices_are_upcoming_not_effective(self):
+        future = ridem.parse_notice(
+            "Beginning 12:00AM on Sunday, August 30, 2026, the commercial possession "
+            "limit for Black Sea Bass will be four hundred (400) pounds per day.")
+        self.assertEqual(reconcile.effective_state([future], self.TODAY), {})
+        up = reconcile.upcoming([future], self.TODAY)
+        self.assertEqual(len(up), 1)
+        self.assertEqual(up[0]["amount"]["value"], 400)
+
+    def test_number_present_in_stored_prose_counts_as_agreement(self):
+        """regs.py stores limits as prose, so the test is deliberately weak:
+        does the stored text mention the number RIDEM publishes?"""
+        n = ridem.parse_notice(
+            "Beginning 12:00AM on Sunday, July 19, 2026, the commercial possession "
+            "limit for Black Sea Bass will be three hundred (300) pounds per day.")
+        r = reconcile.compare([n], self.TODAY)
+        self.assertEqual(r["findings"][0]["severity"], "ok")
+
+    def test_same_date_collisions_are_reported_not_resolved(self):
+        a = ("Beginning 12:00AM on Sunday, July 19, 2026, the commercial possession "
+             "limit for Summer Flounder for vessels with a Summer Flounder Exemption "
+             "Certificate will be three hundred (300) pounds per day.")
+        b = ("Beginning 12:00AM on Sunday, July 19, 2026, the commercial possession "
+             "limit for Summer Flounder will be three hundred (300) pounds per day.")
+        state = reconcile.effective_state([ridem.parse_notice(a), ridem.parse_notice(b)],
+                                         self.TODAY)
+        self.assertEqual(list(state.values())[0]["same_date_notices"], 2)
+
+    def test_possession_notice_is_not_mislabelled_a_closure(self):
+        """Bare 'close' appears inside reopen clauses; only the verb form counts."""
+        n = ridem.parse_notice(self.REOPEN_OR)
+        self.assertEqual(n["change_type"], "season_close")
+        n2 = ridem.parse_notice(
+            "Beginning 12:00AM on Wednesday, April 1, 2026, the commercial possession "
+            "limit for Scup General Category will be two thousand (2,000) pounds per day.")
+        self.assertEqual(n2["change_type"], "possession_limit")
 
 
 class Backends(unittest.TestCase):

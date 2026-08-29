@@ -168,6 +168,37 @@ template missed, and only with `--use-model`.
 Prose reports are the opposite — no template, so that is where the model earns
 its place.
 
+### Reviewing deltas, not the whole page
+
+```bash
+python3 -m tiderace scrape --diff
+```
+
+Twenty-two notices is how staleness survives review, so `--diff` narrows the
+page to what disagrees with `regs.py` — currently **two items and four
+scheduled changes**, out of twenty-two.
+
+Three things make that comparison less obvious than it sounds:
+
+- **Notices supersede each other.** Black sea bass ran 750 → 150 → 200 → 300 →
+  400 lb/day across the season. Only the latest notice on or before today
+  describes the rule in force; anything after it is a *scheduled* change, which
+  is listed separately.
+- **Closures carry their own expiry.** "will close, until the next sub-period
+  begins on August 1, 2026". Reading the closure and ignoring that clause
+  reported tautog and scup as shut months after they legally reopened — worse
+  than saying nothing, because it stops you fishing an open season. That bug
+  produced three of four findings on the first run and is now regression-tested.
+- **One species can carry several fisheries.** An Exemption Certificate vessel
+  and an Aggregate-program participant have different limits on the same day
+  for the same species. The parser cannot tell them apart, so collisions are
+  reported rather than silently resolved.
+
+`regs.py` stores limits as prose, so the comparison is deliberately weak and
+honest: does the stored text mention the number RIDEM is publishing? A miss
+means *look*, not that the code is definitely wrong. Nothing is ever applied
+automatically.
+
 ### Two things measured rather than assumed
 
 **Ollama's structured output constrains grammar, not meaning.** The JSON schema

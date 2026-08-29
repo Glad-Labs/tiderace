@@ -40,6 +40,16 @@ TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
         "seventy": 70, "eighty": 80, "ninety": 90}
 SCALES = {"hundred": 100, "thousand": 1000}
 
+# Closures routinely carry their own expiry: "will close, until the next
+# sub-period begins on August 1, 2026" or "will close until further notice, or
+# until the fishery re-opens on May 1, 2026". Reading only the closure and
+# ignoring the reopen date reports a fishery as shut months after it opened --
+# which is worse than saying nothing, because it stops you fishing a season
+# that is legally open.
+REOPEN = re.compile(
+    r"(?i)\buntil\b[^.]{0,80}?\b(?:begins?|re-?opens?|resumes?)\b[^.]{0,20}?\bon\s+"
+    r"(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2}),?\s+(?P<year>\d{4})")
+
 NOTICE = re.compile(
     r"(?i)beginning\s+[\d:]+\s*[ap]\.?m\.?\s+on\s+"
     r"(?:\w+day,?\s+)?"
@@ -139,9 +149,12 @@ def parse_notice(sentence: str) -> dict | None:
     low = body.lower()
     name, key = _species(body)
 
-    if "will close" in low or "closed" in low:
+    # Require the verb form. Bare "close" appears inside reopen clauses and
+    # in prose about closures, and matching it labelled possession-limit
+    # notices as closures.
+    if re.search(r"\bwill\s+close\b|\bshall\s+close\b|\bis\s+closed\b", low):
         change = "season_close"
-    elif "will open" in low or "reopen" in low:
+    elif re.search(r"\bwill\s+(?:re-?)?open\b", low):
         change = "season_open"
     elif "possession limit" in low:
         change = "possession_limit"
@@ -153,6 +166,17 @@ def parse_notice(sentence: str) -> dict | None:
     mode = ("commercial" if "commercial" in low
             else "recreational" if "recreational" in low else "unstated")
 
+    reopens = None
+    rm = REOPEN.search(body)
+    if rm:
+        rmonth = MONTHS.get(rm.group("month").lower())
+        if rmonth:
+            try:
+                reopens = date(int(rm.group("year")), rmonth,
+                               int(rm.group("day"))).isoformat()
+            except ValueError:
+                reopens = None
+
     amount = parse_amount(body)
     per = ("per day" if re.search(r"per (vessel per )?day", low)
            else "per week" if "per week" in low or "/wk" in low else None)
@@ -162,7 +186,10 @@ def parse_notice(sentence: str) -> dict | None:
         "species": name, "species_key": key,
         "license_mode": mode, "change_type": change,
         "amount": amount, "period": per,
-        "until_further_notice": "until further notice" in low,
+        "reopens_on": reopens,
+        # "until further notice" only means indefinite when no reopen date is
+        # given alongside it -- most notices say both.
+        "until_further_notice": "until further notice" in low and not reopens,
         "quote": sentence.strip()[:240],
         "parser": "rule",
     }
