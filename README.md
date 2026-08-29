@@ -4,6 +4,15 @@ Physics-first fishing forecasts for Narragansett Bay. No API keys, no
 dependencies, no accounts — everything below runs on public NOAA and NWS
 endpoints using only the Python standard library.
 
+> A **tide race** is fast current running over shallow or constricted ground.
+> It is what happens at Whale Rock on the ebb, off Beavertail, and through the
+> breachway — and it is the thing this project models that the tide-height apps
+> do not.
+>
+> Not to be confused with [FishCast®](https://www.c-map.com/fishcast/) — a Simrad / C-MAP
+> product built with Roffer's Ocean Fishing Forecasting Service and Fathom
+> Science, which sells a similar thing commercially.
+
 ## Install
 
 ```bash
