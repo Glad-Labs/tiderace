@@ -27,7 +27,7 @@ import random
 from datetime import datetime
 
 from . import log as catchlog
-from . import score
+from . import score, solunar
 
 MIN_TRIPS = 40
 
@@ -39,6 +39,23 @@ def baseline(feat: dict) -> float:
     light = {"golden": 1.0, "twilight": 0.85, "night": 0.7, "day": 0.25}.get(
         feat.get("light_phase", "day"), 0.5)
     return round(moving * 0.5 * 100 + light * 0.5 * 100, 1)
+
+
+def solunar_baseline(feat: dict) -> float:
+    """The rival theory, scored on its own terms.
+
+    A large part of this industry runs on solunar: fish feed hardest with the
+    moon overhead or underfoot. It is a real, specific, falsifiable claim and
+    it deserves to be tested rather than dismissed or absorbed.
+
+    Kept out of the model deliberately. Solunar peaks at lunar transit, lunar
+    transit drives the tide, and the tide drives the current -- so solunar and
+    `current_speed` agreeing is not two witnesses, it is one witness heard
+    twice. Folding it in would inflate confidence and destroy the only
+    question worth asking: does the moon beat the water?
+    """
+    v = feat.get("solunar")
+    return round((v if v is not None else 0.0) * 100, 1)
 
 
 def _spearman(xs: list[float], ys: list[float]) -> float | None:
@@ -86,7 +103,7 @@ def evaluate(entries: list[dict] | None = None) -> dict:
         return out
 
     counts = [float(e.get("count") or 0) for e in usable]
-    model, base, rand = [], [], []
+    model, base, sol, rand = [], [], [], []
     rng = random.Random(0)
     for e in usable:
         c = e["conditions"]
@@ -95,11 +112,14 @@ def evaluate(entries: list[dict] | None = None) -> dict:
             continue
         model.append(score.score(sp, c, exposed=bool(c.get("exposed")))["score"])
         base.append(baseline(c))
+        sol.append(solunar_baseline(c))
         rand.append(rng.random() * 100)
 
     out["blank_rate"] = round(sum(1 for c in counts if c == 0) / len(counts), 3)
     out["model_rho"] = _spearman(model, counts)
     out["baseline_rho"] = _spearman(base, counts)
+    out["solunar_rho"] = (_spearman(sol, counts)
+                          if any(v > 0 for v in sol) else None)
     out["random_rho"] = _spearman(rand, counts)
 
     # How much of the log came from the app's own recommendation?
@@ -141,6 +161,7 @@ def report(res: dict) -> str:
     L.append("  rank correlation with catch (higher is better)")
     for k, label in (("model_rho", "tiderace"),
                      ("baseline_rho", "moving water + low light"),
+                     ("solunar_rho", "solunar (moon periods)"),
                      ("random_rho", "random")):
         v = res.get(k)
         L.append(f"    {label:<28} {'n/a' if v is None else f'{v:+.3f}'}")

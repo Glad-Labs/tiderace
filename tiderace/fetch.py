@@ -36,7 +36,7 @@ from datetime import datetime
 from html.parser import HTMLParser
 
 UA = ("tiderace/0.1 (open-source personal fishing forecast; "
-      "+https://github.com/gladlabs/tiderace)")
+      "+https://github.com/glad-labs/tiderace)")
 
 CACHE_DIR = os.environ.get(
     "TIDERACE_WEB_CACHE",

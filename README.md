@@ -526,6 +526,34 @@ needs no app, no NOAA calls and no model, and it is implemented in
 `evaluate.baseline()` so the comparison is honest. If tiderace cannot beat it,
 tiderace is a decoration on a tide chart.
 
+### Three rivals, not one
+
+```
+rank correlation with catch (higher is better)
+  tiderace                    ?
+  moving water + low light    ?
+  solunar (moon periods)      ?
+  random                      ?
+```
+
+**Solunar theory** — fish feed hardest with the moon overhead or underfoot —
+is computed properly in `solunar.py` (abbreviated Meeus lunar position, good to
+about ten arc minutes) and scored as an *independent rival*. A large part of
+this industry runs on it, so it deserves testing rather than dismissal.
+
+**It is deliberately not a term in the model.** Solunar peaks at lunar transit;
+lunar transit drives the tide; the tide drives the current. Scoring it beside
+`current_speed` and `spring_strength` would count the moon three times and call
+the result corroboration.
+
+The trap is not hypothetical. On 28 August 2026 solunar's strongest window is
+the 00:47 lunar transit, and tiderace independently picks 23:00–01:30 on the
+ebb. They agree — but that is one witness heard twice, not two.
+
+Every factor is *recorded* on every forecast row and every logged trip whether
+or not it is scored, because a factor you did not record is one you can never
+test later. Scoring is the narrow part; collection is not.
+
 Two biases make naive evaluation flattering, and both are structural:
 
 - **Selection.** You only log trips you took, and you took them when conditions

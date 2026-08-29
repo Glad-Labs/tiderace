@@ -13,7 +13,7 @@ import unittest
 from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, evaluate, extract, fetch, gso, llm, reconcile,
-                      regs, ridem, score, spots)
+                      regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
 from tiderace.features import _local_tz, _wind_against_tide
@@ -869,6 +869,90 @@ class MapLayout(unittest.TestCase):
 
     def test_desktop_scrubber_reserves_the_side_panel(self):
         self.assertIn("right:calc(360px + 12px)", self.css)
+
+
+class Solunar(unittest.TestCase):
+    JAMESTOWN = (41.4963, -71.3712)
+
+    def _tz(self, d):
+        from tiderace.features import _local_tz
+        return _local_tz(d)
+
+    def test_full_moon_rises_at_sunset_and_sets_at_sunrise(self):
+        """The strongest available check without an ephemeris to compare
+        against: at full moon the sun and moon are opposed, so moonrise must
+        land near sunset and moonset near sunrise."""
+        d = datetime(2026, 8, 28)          # verified full moon
+        dd = d.replace(tzinfo=self._tz(d))
+        ev = solunar.events(dd, *self.JAMESTOWN)
+        sun = astro.sun_events(dd, *self.JAMESTOWN)
+        rise_gap = abs((ev["moonrise"] - sun["sunset"]).total_seconds()) / 60
+        set_gap = abs((ev["moonset"] - sun["sunrise"]).total_seconds()) / 60
+        self.assertLess(rise_gap, 45, "moonrise should track sunset at full moon")
+        self.assertLess(set_gap, 45, "moonset should track sunrise at full moon")
+
+    def test_new_moon_rises_and_sets_with_the_sun(self):
+        d = datetime(2026, 9, 11)          # verified new moon
+        dd = d.replace(tzinfo=self._tz(d))
+        ev = solunar.events(dd, *self.JAMESTOWN)
+        sun = astro.sun_events(dd, *self.JAMESTOWN)
+        self.assertLess(abs((ev["moonrise"] - sun["sunrise"]).total_seconds()) / 60, 45)
+        self.assertLess(abs((ev["moonset"] - sun["sunset"]).total_seconds()) / 60, 45)
+
+    def test_transit_and_underfoot_are_about_half_a_lunar_day_apart(self):
+        d = datetime(2026, 8, 28)
+        ev = solunar.events(d.replace(tzinfo=self._tz(d)), *self.JAMESTOWN)
+        gap = abs((ev["transit"] - ev["antitransit"]).total_seconds()) / 3600
+        self.assertTrue(11.5 < gap < 13.0, f"transit/underfoot gap was {gap:.1f}h")
+
+    def test_altitude_is_highest_at_transit(self):
+        d = datetime(2026, 8, 28)
+        tz = self._tz(d)
+        ev = solunar.events(d.replace(tzinfo=tz), *self.JAMESTOWN)
+        at = solunar.moon_altitude(ev["transit"], *self.JAMESTOWN)
+        for offset in (-3, -1, 1, 3):
+            other = solunar.moon_altitude(
+                ev["transit"] + timedelta(hours=offset), *self.JAMESTOWN)
+            self.assertGreater(at, other)
+
+    def test_major_periods_beat_minor_ones(self):
+        d = datetime(2026, 8, 28)
+        tz = self._tz(d)
+        ev = solunar.events(d.replace(tzinfo=tz), *self.JAMESTOWN)
+        major = solunar.score(ev["transit"], *self.JAMESTOWN, ev)
+        minor = solunar.score(ev["moonset"], *self.JAMESTOWN, ev)
+        self.assertEqual(major["kind"], "major")
+        self.assertEqual(minor["kind"], "minor")
+        self.assertGreater(major["score"], minor["score"])
+
+    def test_quiet_hours_score_zero(self):
+        d = datetime(2026, 8, 28)
+        tz = self._tz(d)
+        ev = solunar.events(d.replace(tzinfo=tz), *self.JAMESTOWN)
+        self.assertEqual(
+            solunar.score(d.replace(hour=4, tzinfo=tz), *self.JAMESTOWN, ev)["score"], 0.0)
+
+    def test_solunar_is_a_rival_not_a_score_term(self):
+        """It must not reach the scorer. Solunar peaks at lunar transit, which
+        drives the tide, which drives the current -- scoring it alongside
+        current speed counts the moon twice and calls it corroboration."""
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "tiderace", "score.py")).read()
+        self.assertNotIn("solunar", src)
+        self.assertIn("solunar", open(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "tiderace", "evaluate.py")).read())
+
+    def test_evaluate_reports_solunar_as_its_own_column(self):
+        rows = [{"species": "striped_bass", "count": 3,
+                 "conditions": {"current_speed": 1.2, "light_phase": "night",
+                                "month": 9, "water_temp_f": 62, "wind_kt": 8,
+                                "spring_strength": .6, "pressure_trend_3h": -.5,
+                                "exposed": False, "solunar": 0.8}}] * 5
+        r = evaluate.evaluate(rows)
+        self.assertIn("solunar_rho", r)
+        self.assertEqual(evaluate.solunar_baseline({"solunar": 0.8}), 80.0)
+        self.assertEqual(evaluate.solunar_baseline({}), 0.0)
 
 
 class Privacy(unittest.TestCase):
