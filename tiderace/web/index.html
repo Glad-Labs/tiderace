@@ -32,7 +32,9 @@ body{
   display:flex; gap:8px; align-items:center; flex-wrap:wrap;
   background:rgba(18,33,38,.94); border:1px solid var(--hair);
   border-radius:6px; padding:8px 10px; backdrop-filter:blur(8px);
-  max-width:calc(100% - 24px);
+  /* Leave the top-right corner free for the zoom, scale and attribution
+     controls, which now live there. */
+  max-width:calc(100% - 96px);
 }
 .brand{
   font-weight:700; letter-spacing:-.02em; font-size:15px; padding-right:10px;
@@ -140,6 +142,11 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   border:1px solid var(--hair); border-radius:5px; font-family:var(--mono); font-size:11px}
 .maplibregl-popup-tip{border-top-color:var(--panel)!important}
 .maplibregl-ctrl-attrib{font-size:10px!important}
+.maplibregl-ctrl-top-right{display:flex; flex-direction:column; align-items:flex-end}
+.maplibregl-ctrl-scale{
+  background:rgba(18,33,38,.92)!important; border-color:var(--hair)!important;
+  color:var(--ink-2)!important; font-family:var(--mono); font-size:10px;
+}
 #spark{width:100%; height:52px; display:block; margin-top:10px}
 #loading{
   position:absolute; inset:0; z-index:9; display:grid; place-items:center;
@@ -150,7 +157,15 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 @media (max-width:900px){
   #app{grid-template-columns:1fr; grid-template-rows:1fr 300px}
   #panel{border-left:none; border-top:1px solid var(--hair)}
-  #timebar{right:12px; bottom:314px}
+  /* The scrubber is absolutely positioned inside the map wrapper, not the
+     app grid, so it needs no offset for the panel here -- the panel is a
+     sibling below the map, already out of the way. Offsetting by the panel
+     height pushed it 314px up from the map's own bottom edge and parked it
+     in the middle of the chart. */
+  /* 44px, not 14px: the attribution sits in the bottom-right corner of the
+     map and occupies the last ~34px. Covering it would breach the ODbL terms
+     the basemap ships under. */
+  #timebar{right:12px; bottom:44px}
 }
 </style>
 </head>
@@ -230,7 +245,11 @@ const map = new maplibregl.Map({
   center:[-71.35, 41.53], zoom:10.2, minZoom:8, maxZoom:16, attributionControl:true
 });
 map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'top-right');
-map.addControl(new maplibregl.ScaleControl({unit:'nautical'}), 'bottom-right');
+// Scale moves up top; attribution stays in its usual bottom-right corner and
+// the scrubber is lifted to clear it. OpenStreetMap and OpenSeaMap are both
+// ODbL, so that credit staying visible is a licence condition rather than a
+// nicety -- which makes leaving MapLibre's own control alone the safer choice.
+map.addControl(new maplibregl.ScaleControl({unit:'nautical'}), 'top-right');
 
 $('#marks').onchange = e => {
   if (!MAP_READY) return;

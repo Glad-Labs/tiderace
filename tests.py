@@ -833,6 +833,44 @@ class Packaging(unittest.TestCase):
             self.assertIn("tiderace", os.path.abspath(path))
 
 
+class MapLayout(unittest.TestCase):
+    """Layout regressions found by looking at the actual rendered page.
+
+    These are string assertions on the stylesheet rather than real layout
+    tests -- they cannot prove the page looks right, only that the two fixes
+    below have not been quietly reverted.
+    """
+
+    HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "tiderace", "web", "index.html")
+
+    def setUp(self):
+        self.css = open(self.HTML).read()
+
+    def test_scrubber_is_not_offset_by_the_panel_height(self):
+        """The scrubber is positioned inside the map wrapper, not the app grid.
+        Offsetting it by the stacked panel's 300px height pushed it up from the
+        map's own bottom edge and parked it in the middle of the chart."""
+        self.assertNotIn("bottom:314px", self.css)
+
+    def test_scrubber_clears_the_attribution_when_stacked(self):
+        """Attribution lives bottom-right and occupies the last ~34px. The
+        basemap is ODbL, so covering that credit is a licence breach, not a
+        cosmetic issue."""
+        block = self.css.split("@media (max-width:900px)")[1]
+        self.assertIn("#timebar{right:12px; bottom:44px}", block)
+
+    def test_attribution_control_is_left_to_maplibre(self):
+        """An earlier fix disabled the built-in control and re-added it by
+        hand, which risks losing the credit entirely if the wiring is wrong."""
+        self.assertIn("attributionControl:true", self.css)
+        self.assertNotIn("attributionControl:false", self.css)
+        self.assertNotIn("new maplibregl.AttributionControl", self.css)
+
+    def test_desktop_scrubber_reserves_the_side_panel(self):
+        self.assertIn("right:calc(360px + 12px)", self.css)
+
+
 class Privacy(unittest.TestCase):
     def test_weather_coordinates_are_coarsened(self):
         """Your marks must not reach a third party at 11 m precision."""
