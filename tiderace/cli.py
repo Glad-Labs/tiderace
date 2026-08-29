@@ -123,6 +123,8 @@ def run(argv=None) -> int:
     cf.add_argument("--license", dest="license_mode",
                     choices=("recreational", "commercial"))
     cf.add_argument("--license-holder")
+    cf.add_argument("--sub-fishery", dest="sub_fishery",
+                    choices=("general_category", "floating_fish_trap"))
     cf.add_argument("--aggregate", dest="aggregate_program",
                     choices=("none", "winter", "summer_fall"),
                     help="Aggregate Program enrolment (permit required)")
@@ -326,11 +328,14 @@ def _cmd_diff(args) -> int:
         return 1
 
     parsed = ridem.parse_page(doc["text"])
-    r = reconcile.compare(parsed["notices"], mode=mode)
+    r = reconcile.compare(parsed["notices"], mode=mode,
+                          only_fishery=cfgmod.load().get("sub_fishery"))
     c = r["counts"]
 
     print()
-    print(f"  RIDEM vs regs.py  ·  {mode}  ·  as of {r['as_of']}")
+    print(f"  RIDEM vs regs.py  ·  {mode}  ·  "
+          f"{cfgmod.load().get('sub_fishery', '').replace('_', ' ')}  ·  "
+          f"as of {r['as_of']}")
     print(f"  {len(parsed['notices'])} notices on the page, "
           f"{parsed['unparsed'] and len(parsed['unparsed']) or 0} unparsed")
     print("  " + "─" * 76)
@@ -398,13 +403,15 @@ def _cmd_config(args) -> int:
         changes["license_mode"] = args.license_mode
     if args.license_holder:
         changes["license_holder"] = args.license_holder
-    for attr in ("llm_backend", "llm_model", "ollama_host", "aggregate_program"):
+    for attr in ("llm_backend", "llm_model", "ollama_host", "aggregate_program",
+                 "sub_fishery"):
         if getattr(args, attr, None):
             changes[attr] = getattr(args, attr)
     cfg = cfgmod.save(changes) if changes else cfgmod.load()
 
     print(f"\n  licence mode   {cfg['license_mode']}")
     print(f"  licence holder {cfg['license_holder'] or '—'}")
+    print(f"  sub-fishery    {cfg['sub_fishery']}")
     print(f"  aggregate      {cfg['aggregate_program']}")
     if cfg["license_mode"] == "commercial":
         if cfg["aggregate_program"] != "none":

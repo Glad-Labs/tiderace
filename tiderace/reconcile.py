@@ -39,7 +39,32 @@ def _key(n: dict) -> tuple:
     # separately -- comparing a 6,000 lb bi-weekly aggregate limit against the
     # general 300 lb/day one is not a disagreement, it is a category error.
     return (n.get("species_key"), n["license_mode"], n["change_type"],
-            n.get("period"), n.get("aggregate_program"))
+            n.get("period"), n.get("aggregate_program"), n.get("sub_fishery"))
+
+
+def _promote(n: dict, on_date: str) -> dict | None:
+    """Turn a spent notice into the rule its own text says replaced it."""
+    sc = n.get("successor")
+    if not sc:
+        return None                       # the fishery simply ended
+    if sc.get("closes"):
+        return None
+    promoted = dict(n)
+    promoted.update({
+        "effective_date": on_date,
+        "amount": sc.get("amount"),
+        # An unlimited successor has no period to speak of; inheriting the
+        # parent's split one fishery into two identical-looking rows.
+        "period": None if sc.get("unlimited")
+                  else (sc.get("period") or n.get("period")),
+        "change_type": "possession_limit",
+        "superseded_on": None,
+        "successor": None,
+        "unlimited": sc.get("unlimited", False),
+        "derived_from": n["effective_date"],
+        "quote": n["quote"],
+    })
+    return promoted
 
 
 def effective_state(notices: list[dict], on: date | None = None) -> dict:
@@ -56,6 +81,19 @@ def effective_state(notices: list[dict], on: date | None = None) -> dict:
             continue
         if eff > on:
             continue
+        # A notice that names its own successor date is spent once that date
+        # passes -- for possession limits exactly as much as for closures.
+        sup = n.get("superseded_on")
+        if sup and sup <= on.isoformat():
+            # The amendments page lists *changes*, not current state, so for
+            # several fisheries the rule actually in force is only written
+            # inside a spent notice's tail: "...or until the next sub period
+            # begins on May 1, 2026 at ten thousand (10,000) pounds per week".
+            # Promoting that successor is the difference between being able to
+            # check scup at all and having nothing to compare.
+            n = _promote(n, sup)
+            if n is None:
+                continue
         k = _key(n)
         prev = state.get(k)
         if prev is None or n["effective_date"] > prev["effective_date"]:
@@ -89,14 +127,21 @@ def _numbers(text: str) -> set[int]:
 
 
 def compare(notices: list[dict], on: date | None = None,
-            mode: str = "commercial") -> dict:
-    """Findings, most actionable first."""
+            mode: str = "commercial", only_fishery: str | None = None) -> dict:
+    """Findings, most actionable first.
+
+    `only_fishery` filters to the sub-fishery you actually operate in.
+    """
     on = on or date.today()
     state = effective_state(notices, on)
     findings = []
 
     for k, n in sorted(state.items(), key=lambda kv: str(kv[0])):
-        species, notice_mode, change, period, program = k
+        species, notice_mode, change, period, program, sub = k
+        # Skip fisheries you are not in. A Floating Fish Trap limit is not a
+        # disagreement with a General Category one.
+        if sub and only_fishery and sub != only_fishery:
+            continue
         if notice_mode not in (mode, "unstated"):
             continue
         rule = regs.COMMERCIAL.get(species) if mode == "commercial" \
@@ -164,6 +209,15 @@ def compare(notices: list[dict], on: date | None = None,
                                f"since {n['effective_date']}; regs.py says "
                                f"{'open' if code_open else 'closed'}"),
                     "notice": n})
+            continue
+
+        if n.get("unlimited"):
+            findings.append({
+                "severity": "ok" if "unlimited" in (stored or "").lower()
+                            else "mismatch",
+                "species": species,
+                "detail": f"RIDEM: unlimited  ·  regs.py: {stored or '(nothing)'}",
+                "notice": n})
             continue
 
         if value is None:

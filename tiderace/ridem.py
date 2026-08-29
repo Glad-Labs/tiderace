@@ -40,15 +40,29 @@ TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
         "seventy": 70, "eighty": 80, "ninety": 90}
 SCALES = {"hundred": 100, "thousand": 1000}
 
-# Closures routinely carry their own expiry: "will close, until the next
+# Notices routinely carry their own expiry -- and not only closures. A
+# possession limit does it too: "will be two thousand (2,000) pounds per day
+# ... or until the next sub period begins on May 1, 2026 at ten thousand
+# (10,000) pounds per week". Treating that as still in force in August reports
+# an April rule as current. Closures were handled first; limits were not, which
+# is why an expired scup notice looked like a disagreement with correct code. "will close, until the next
 # sub-period begins on August 1, 2026" or "will close until further notice, or
 # until the fishery re-opens on May 1, 2026". Reading only the closure and
 # ignoring the reopen date reports a fishery as shut months after it opened --
 # which is worse than saying nothing, because it stops you fishing a season
 # that is legally open.
-REOPEN = re.compile(
-    r"(?i)\buntil\b[^.]{0,80}?\b(?:begins?|re-?opens?|resumes?)\b[^.]{0,20}?\bon\s+"
-    r"(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2}),?\s+(?P<year>\d{4})")
+# A notice can be ended by something opening *or* closing: "until the next sub
+# period begins on May 1" and "or until the program closes on April 30" are the
+# same fact expressed from opposite ends.
+SUPERSEDE = re.compile(
+    r"(?i)\buntil\b[^.]{0,80}?\b(?:begins?|re-?opens?|resumes?|closes?|ends?|expires?)"
+    r"\b[^.]{0,20}?\bon\s+"
+    r"(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2}),?\s+(?P<year>\d{4})"
+    # Most notices state the rule that takes over, which is the only place the
+    # currently-in-force limit appears at all -- the amendments page lists
+    # changes, not current state.
+    r"(?P<tail>[^.]{0,120})?")
+REOPEN = SUPERSEDE
 
 NOTICE = re.compile(
     r"(?i)beginning\s+[\d:]+\s*[ap]\.?m\.?\s+on\s+"
@@ -166,8 +180,19 @@ def parse_notice(sentence: str) -> dict | None:
     mode = ("commercial" if "commercial" in low
             else "recreational" if "recreational" in low else "unstated")
 
+    # Sub-fisheries share a species and publish different limits. Scup runs a
+    # General Category and a Floating Fish Trap fishery, and on 1 April 2026
+    # both were set to 2,000 lb/day -- identical numbers, different fisheries,
+    # indistinguishable unless the name is carried through.
+    sub = None
+    if "floating fish trap" in low or "floating trap" in low:
+        sub = "floating_fish_trap"
+    elif "general category" in low:
+        sub = "general_category"
+
     reopens = None
-    rm = REOPEN.search(body)
+    successor = None
+    rm = SUPERSEDE.search(body)
     if rm:
         rmonth = MONTHS.get(rm.group("month").lower())
         if rmonth:
@@ -176,6 +201,22 @@ def parse_notice(sentence: str) -> dict | None:
                                int(rm.group("day"))).isoformat()
             except ValueError:
                 reopens = None
+        tail = rm.group("tail") or ""
+        if reopens:
+            amt = parse_amount(tail)
+            low_tail = tail.lower()
+            successor = {
+                "effective_date": reopens,
+                "amount": amt,
+                "period": ("per bi-week" if "bi-week" in low_tail
+                           else "per day" if "per day" in low_tail
+                           else "per week" if "per week" in low_tail else None),
+                "unlimited": "unlimited" in low_tail,
+                "closes": bool(re.search(r"(?i)\bcloses?\b", tail)) or
+                          bool(re.search(r"(?i)program closes", body)),
+            }
+            if not amt and not successor["unlimited"]:
+                successor = None
 
     amount = parse_amount(body)
     per = ("per bi-week" if "bi-week" in low or "biweek" in low
@@ -195,7 +236,13 @@ def parse_notice(sentence: str) -> dict | None:
         "license_mode": mode, "change_type": change,
         "amount": amount, "period": per,
         "aggregate_program": prog,
+        "sub_fishery": sub,
+        # Named `superseded_on` rather than `reopens_on` because it expires
+        # possession limits as well as closures.
+        "superseded_on": reopens,
         "reopens_on": reopens,
+        "successor": successor,
+        "state_vessels_only": "state vessels only" in low,
         # "until further notice" only means indefinite when no reopen date is
         # given alongside it -- most notices say both.
         "until_further_notice": "until further notice" in low and not reopens,

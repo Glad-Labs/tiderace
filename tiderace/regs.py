@@ -160,7 +160,10 @@ COMMERCIAL: dict[str, CommercialRule] = {
     "scup": CommercialRule(
         "scup", 9.0, (((1, 1), (12, 31)),),
         limit="10,000 lb/week general category; floating traps unlimited",
-        note="Sub-periods vary by category."),
+        note="Two parallel fisheries. General Category runs 50,000 lb/day from "
+             "1 Jan, closed 16 Mar, 2,000 lb/day (state vessels) from 1 Apr, "
+             "then 10,000 lb/week from 1 May. Floating Fish Trap tracks the "
+             "same dates but is unlimited from 1 May."),
     "black_sea_bass": CommercialRule(
         "black_sea_bass", 11.0, (((1, 1), (12, 31)),),
         limit="300 lb/day",

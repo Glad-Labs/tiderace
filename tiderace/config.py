@@ -22,6 +22,10 @@ DEFAULTS = {
     # Aggregate Program enrolment. Permit-required and annual, so it is opt-in:
     # an unenrolled vessel fishing to these limits would be over its own.
     "aggregate_program": "none",      # none | winter | summer_fall
+    # Several species run parallel fisheries with different limits. Scup has a
+    # General Category and a Floating Fish Trap fishery; a trap limit is not a
+    # disagreement with a general one, it is a different licence.
+    "sub_fishery": "general_category",   # general_category | floating_fish_trap
     # Extraction backend. Ollama is the default because it is free, local, and
     # needs no Python dependency at all -- the client is plain urllib.
     "llm_backend": "ollama",          # ollama | anthropic | none
@@ -45,6 +49,8 @@ def load(path: str | None = None) -> dict:
         cfg["llm_backend"] = "ollama"
     if cfg["aggregate_program"] not in ("none", "winter", "summer_fall"):
         cfg["aggregate_program"] = "none"
+    if cfg["sub_fishery"] not in ("general_category", "floating_fish_trap"):
+        cfg["sub_fishery"] = "general_category"
     return cfg
 
 

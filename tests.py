@@ -533,12 +533,17 @@ class Reconcile(unittest.TestCase):
         self.assertIsNone(n["reopens_on"])
         self.assertTrue(n["until_further_notice"])
 
-    def test_expired_closure_reads_as_agreement(self):
+    def test_expired_closure_resolves_to_the_rule_that_replaced_it(self):
+        """Stronger than merely noticing the reopen: the notice states what
+        took over -- "at ten (10) fish per day" -- so that is what should end
+        up in force, not a bare 'reopened'."""
         notices = [ridem.parse_notice(self.CLOSED_REOPENS)]
         r = reconcile.compare(notices, self.TODAY)
-        sev = {f["severity"] for f in r["findings"]}
-        self.assertEqual(sev, {"ok"})
-        self.assertIn("reopened", r["findings"][0]["detail"])
+        self.assertEqual({f["severity"] for f in r["findings"]}, {"ok"})
+        live = list(reconcile.effective_state(notices, self.TODAY).values())[0]
+        self.assertEqual(live["amount"]["value"], 10)
+        self.assertEqual(live["amount"]["unit"], "fish")
+        self.assertEqual(live["derived_from"], "2026-05-30")
 
     def test_live_closure_agrees_where_the_code_also_closes(self):
         """On 31 July the tautog closure is still in force — and regs.py has
@@ -603,6 +608,75 @@ class Reconcile(unittest.TestCase):
             "Beginning 12:00AM on Wednesday, April 1, 2026, the commercial possession "
             "limit for Scup General Category will be two thousand (2,000) pounds per day.")
         self.assertEqual(n2["change_type"], "possession_limit")
+
+
+class SubFisheries(unittest.TestCase):
+    AUG = date(2026, 8, 28)
+
+    GC = ("Beginning 12:00AM on Wednesday, April 1, 2026, the commercial possession "
+          "limit for Scup General Category will be two thousand (2,000) pounds per "
+          "day for State Vessels Only until further notice, or until the next sub "
+          "period begins on May 1, 2026 at ten thousand (10,000) pounds per week.")
+    FFT = ("Beginning 12:00AM on Wednesday, April 1, 2026, the commercial possession "
+           "limit for Scup Floating Fish Trap will be two thousand (2,000) pounds per "
+           "day for State Vessels Only until further notice, or until the next sub "
+           "period begins on May 1, 2026 at an unlimited possession limit.")
+
+    def test_parallel_fisheries_are_told_apart(self):
+        """On 1 April both scup fisheries were set to 2,000 lb/day — identical
+        numbers, different licences, indistinguishable without the name."""
+        self.assertEqual(ridem.parse_notice(self.GC)["sub_fishery"], "general_category")
+        self.assertEqual(ridem.parse_notice(self.FFT)["sub_fishery"], "floating_fish_trap")
+
+    def test_possession_limits_expire_too(self):
+        """The bug: superseded_on was parsed for possession limits but only
+        *used* for closures, so an April rule was reported as in force in
+        August — against code that was already correct."""
+        n = ridem.parse_notice(self.GC)
+        self.assertEqual(n["superseded_on"], "2026-05-01")
+        state = reconcile.effective_state([n], self.AUG)
+        live = list(state.values())
+        self.assertEqual(len(live), 1)
+        self.assertNotEqual(live[0]["amount"]["value"], 2000)
+
+    def test_successor_is_promoted_into_force(self):
+        """The amendments page lists changes, not current state. For scup the
+        rule in force exists only inside a spent notice's tail."""
+        live = list(reconcile.effective_state([ridem.parse_notice(self.GC)],
+                                              self.AUG).values())[0]
+        self.assertEqual(live["amount"]["value"], 10000)
+        self.assertEqual(live["period"], "per week")
+        self.assertEqual(live["derived_from"], "2026-04-01")
+
+    def test_unlimited_successor_carries_no_period(self):
+        live = list(reconcile.effective_state([ridem.parse_notice(self.FFT)],
+                                              self.AUG).values())[0]
+        self.assertTrue(live["unlimited"])
+        self.assertIsNone(live["period"])
+
+    def test_a_closing_programme_leaves_nothing_in_force(self):
+        """'or until the program closes on April 30' ends the rule outright —
+        'closes' had to join the supersede verbs alongside 'begins'."""
+        n = ridem.parse_notice(
+            "Beginning 12:00AM on Sunday, March 15, 2026, the commercial possession "
+            "limit for Summer Flounder for participants in the Winter Aggregate "
+            "Program will be six-thousand (6,000) pounds per bi-week until further "
+            "notice (permitted vessels only), or until the program closes on "
+            "April 30, 2026.")
+        self.assertEqual(n["superseded_on"], "2026-04-30")
+        self.assertEqual(reconcile.effective_state([n], self.AUG), {})
+        self.assertEqual(len(reconcile.effective_state([n], date(2026, 4, 1))), 1)
+
+    def test_filtering_to_your_own_fishery(self):
+        notices = [ridem.parse_notice(self.GC), ridem.parse_notice(self.FFT)]
+        both = reconcile.compare(notices, self.AUG)
+        gc = reconcile.compare(notices, self.AUG, only_fishery="general_category")
+        self.assertEqual(len(both["findings"]), 2)
+        self.assertEqual(len(gc["findings"]), 1)
+        self.assertEqual(gc["findings"][0]["severity"], "ok")
+
+    def test_state_vessels_only_is_recorded(self):
+        self.assertTrue(ridem.parse_notice(self.GC)["state_vessels_only"])
 
 
 class Backends(unittest.TestCase):
