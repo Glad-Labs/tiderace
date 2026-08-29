@@ -13,6 +13,9 @@ data/charts/
 # Your own marks. Never committed, never transmitted, never exported.
 data/my_spots.json
 
+# NOAA station catalog. Regenerate with `tiderace stations --refresh`.
+data/stations.json
+
 # GSO spreadsheets and the climatology derived from them. Regenerate with
 # `python3 -m tiderace gso --rebuild`. Their data use policy asks for citation,
 # so redistributing copies here would be the wrong default.

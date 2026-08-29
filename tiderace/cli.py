@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timedelta
 
@@ -11,58 +12,10 @@ from . import bait as baitmod
 from . import config as cfgmod
 from . import features, fetch, gso, regs, score, spots
 from . import log as catchlog
+from .point import windows as _windows
 from .sources import SourceError
 
 BAR = "█"
-
-
-def _windows(rows: list[dict], results: list[dict], threshold: float,
-             max_hours: float = 3.0) -> list[dict]:
-    """Find local score peaks and return a tight window around each.
-
-    An earlier version merged every consecutive above-threshold sample, which
-    produced "19:00-06:30" -- technically true and completely useless. A
-    window you can act on is the shoulder of a peak, not the whole night, so
-    each peak is trimmed to where the score is still within 12% of it and
-    capped at `max_hours`.
-    """
-    scores = [r["score"] for r in results]
-    n = len(scores)
-    if n < 3:
-        return []
-
-    step = (rows[1]["time"] - rows[0]["time"]).total_seconds() / 60
-    half_span = int((max_hours * 60 / step) / 2)
-
-    peaks = []
-    for i in range(1, n - 1):
-        if scores[i] < threshold:
-            continue
-        lo = max(0, i - half_span)
-        hi = min(n, i + half_span + 1)
-        if scores[i] >= max(scores[lo:hi]) - 1e-9:
-            peaks.append(i)
-
-    # Collapse peaks that sit on the same hump.
-    merged = []
-    for i in peaks:
-        if merged and (i - merged[-1]) * step <= max_hours * 60:
-            if scores[i] > scores[merged[-1]]:
-                merged[-1] = i
-        else:
-            merged.append(i)
-
-    out = []
-    for i in merged:
-        floor = scores[i] * 0.88
-        a = b = i
-        while a > 0 and scores[a - 1] >= floor and (i - a) * step < max_hours * 30:
-            a -= 1
-        while b < n - 1 and scores[b + 1] >= floor and (b - i) * step < max_hours * 30:
-            b += 1
-        out.append({"start": rows[a]["time"], "end": rows[b]["time"],
-                    "best": results[i], "best_row": rows[i], "rows": b - a + 1})
-    return out
 
 
 def _bar(v: float, width: int = 20) -> str:
@@ -97,8 +50,21 @@ def run(argv=None) -> int:
 
     sub.add_parser("spots", help="list known spots")
 
+    at = sub.add_parser("at", help="conditions and windows for one coordinate")
+    at.add_argument("coord", help="41.4408,-71.4228 · '41 26.448 N 71 25.368 W'")
+    at.add_argument("--name", help="label for the report (never saved)")
+    at.add_argument("--save", metavar="KEY",
+                    help="also add this coordinate to your private marks")
+    _add_forecast_args(at)
+
+    st = sub.add_parser("stations", help="NOAA station catalog and resolution")
+    st.add_argument("--refresh", action="store_true", help="re-fetch from NOAA")
+    st.add_argument("--at", metavar="COORD",
+                    help="show how a coordinate resolves, and what was rejected")
+
     lg = sub.add_parser("log", help="record a trip, snapshotting conditions")
-    lg.add_argument("--spot", required=True)
+    lg.add_argument("--spot", help="spot key, or a name if you pass --coord")
+    lg.add_argument("--coord", help="log against a coordinate instead of a spot key")
     lg.add_argument("--species", required=True, choices=sorted(score.PROFILES))
     lg.add_argument("--count", type=int, required=True,
                     help="fish landed; 0 is a valid and useful entry")
@@ -176,6 +142,10 @@ def run(argv=None) -> int:
 
     if args.cmd == "spots":
         return _cmd_spots()
+    if args.cmd == "at":
+        return _cmd_at(args)
+    if args.cmd == "stations":
+        return _cmd_stations(args)
     if args.cmd == "log":
         return _cmd_log(args)
     if args.cmd == "history":
@@ -225,15 +195,29 @@ def _cmd_spots() -> int:
 
 def _cmd_log(args) -> int:
     when = datetime.fromisoformat(args.at) if args.at else datetime.now()
+    lat = lon = None
+    if args.coord:
+        try:
+            lat, lon = spots.parse_coord(args.coord)
+        except ValueError as exc:
+            print(f"  {exc}", file=sys.stderr)
+            return 2
+    elif not args.spot:
+        print("  need --spot or --coord", file=sys.stderr)
+        return 2
+
     entry = catchlog.Entry(
-        spot=args.spot, species=args.species, count=args.count,
+        spot=args.spot or f"at:{lat:.5f},{lon:.5f}",
+        species=args.species, count=args.count,
         started_at=when.isoformat(timespec="minutes"),
         biggest_in=args.biggest_in, method=args.method,
         bait_observed=args.bait, notes=args.notes, source=args.source,
+        lat=lat, lon=lon,
     )
     catchlog.record(entry)
     n = len(entry.conditions)
-    print(f"logged: {args.count} {args.species} at {args.spot} "
+    where = args.spot or f"{lat:.4f},{lon:.4f}"
+    print(f"logged: {args.count} {args.species} at {where} "
           f"({when:%Y-%m-%d %H:%M}) with {n} conditions captured")
     print(f"  under: {entry.license_mode} licence"
           + (f" — {entry.license_holder}" if entry.license_holder else ""))
@@ -661,6 +645,180 @@ def _cmd_forecast(args) -> int:
             print(f"    ! {f}")
     print()
     return 0
+
+
+def _cmd_stations(args) -> int:
+    from . import stations
+    if args.refresh:
+        print("\n  fetching NOAA station catalog…")
+        cat = stations.refresh()
+        print(f"  {len(cat['current'])} current-prediction stations, "
+              f"{len(cat['tide'])} water-level stations")
+        print(f"  cached at {stations.CATALOG_PATH}\n")
+        if not args.at:
+            return 0
+
+    if not args.at:
+        cat = stations.catalog()
+        print(f"\n  {len(cat['current'])} current-prediction stations, "
+              f"{len(cat['tide'])} water-level stations")
+        print(f"  fetched {cat.get('fetched_at', 'unknown')}")
+        print("\n  tiderace stations --at 41.4408,-71.4228   to resolve a point\n")
+        return 0
+
+    lat, lon = spots.parse_coord(args.at)
+    res = stations.resolve(lat, lon)
+    print(f"\n  {lat:.5f}, {lon:.5f}   confidence: {res['confidence']}")
+    print("  " + "─" * 74)
+    c, t, tp = res["current"], res["tide"], res.get("temp")
+    print(f"  current   {c['id']:<9} {c['name'][:40]:<42}{c['distance_nm']:>5} nm")
+    print(f"  tide      {t['id']:<9} {t['name'][:40]:<42}{t['distance_nm']:>5} nm")
+    if tp:
+        print(f"  temp      {tp['id']:<9} {tp['name'][:40]:<42}{tp['distance_nm']:>5} nm")
+
+    if res["current_rejected"]:
+        print("\n  rejected — path crosses land:")
+        for r in res["current_rejected"]:
+            print(f"    {r['id']:<9} {r['name'][:40]:<42}{r['distance_nm']:>5} nm"
+                  f"  ({r['land_span_nm']} nm of land)")
+    if res["current_alternates"]:
+        print("\n  other clear water:")
+        for r in res["current_alternates"]:
+            print(f"    {r['id']:<9} {r['name'][:40]:<42}{r['distance_nm']:>5} nm")
+    for w in res["warnings"]:
+        print(f"\n  ! {w}")
+    print()
+    return 0
+
+
+def _cmd_at(args) -> int:
+    """Everything the forecast knows about one coordinate.
+
+    The report leads with which station the current came from and how far away
+    it is, because that is the number most likely to be wrong and the one a
+    generic app would never show you.
+    """
+    from . import charts, point, stations
+
+    try:
+        lat, lon = spots.parse_coord(args.coord)
+    except ValueError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 2
+
+    start = (datetime.fromisoformat(args.start) if args.start else None)
+    try:
+        rep = point.report(lat, lon, species=args.species, start=start,
+                           hours=args.hours, threshold=args.threshold,
+                           top=args.top, name=args.name)
+    except (ValueError, stations.StationError) as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+    except SourceError as exc:
+        print(f"  no data for {lat},{lon}: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps({k: v for k, v in rep.items()
+                          if k not in ("rows", "results")},
+                         indent=2, default=str))
+        return 0
+
+    st, place, now = rep["stations"], rep["place"], rep["now"]
+    print()
+    print(f"  {rep['name']}   —   {rep['species_name']}")
+    print("  " + "─" * 74)
+
+    c, t, tp = st["current"], st["tide"], st["temp"]
+    print(f"  current from  {c['name'][:44]:<46}{c['distance_nm']:>5} nm")
+    print(f"  tide from     {t['name'][:44]:<46}{t['distance_nm']:>5} nm")
+    if tp and tp["id"] != t["id"]:
+        print(f"  water temp    {tp['name'][:44]:<46}{tp['distance_nm']:>5} nm")
+    print(f"  binding confidence: {st['confidence']}")
+    for w in st["warnings"]:
+        print(f"    ! {w}")
+
+    bits = []
+    d, b = place["depth"], place["bottom"]
+    if d and d.get("min_ft") is not None:
+        bits.append(f"charted {d['min_ft']:.0f}–{d['max_ft']:.0f} ft")
+    if b:
+        bits.append(f"bottom {b['bottom']} ({b['distance_nm']} nm)")
+    bits += [f"{n} {layer}" for layer, n in place["structure"].items()]
+    if bits:
+        print(f"\n  the place:  {' · '.join(bits)}")
+    else:
+        from . import charts as _ch
+        print("\n  the place:  nothing charted within 500 yds"
+              + ("" if _ch.available() else " — run: tiderace charts"))
+
+    cur = f"{now['current_speed']:.2f} kt {now['current_dir'] or ''}".strip()
+    wind = (f"{now['wind_kt']:.0f} kt {now['wind_dir']}"
+            if now["wind_kt"] is not None else "n/a")
+    temp = f"{now['water_temp_f']:.1f}°F" if now["water_temp_f"] else "n/a"
+    when = datetime.fromisoformat(now["time"])
+    print(f"\n  right now   {now['score']:>5.1f}  {_bar(now['score'])}")
+    print(f"    {when:%a %d %b %H:%M}   current {cur:<16} water {temp:<9} wind {wind}")
+    print(f"    {now['light_phase']:<9} moon {now['moon_phase'].lower()}"
+          f" ({now['moon_illum']*100:.0f}%)   {now['next_tide'] or ''}")
+    print(f"    → {now['explain']}")
+
+    horizon = datetime.fromisoformat(rep["start"]) + timedelta(hours=rep["hours"])
+    print(f"\n  windows to {horizon:%a %d %b %H:%M}")
+    if not rep["windows"]:
+        print(f"    nothing clears {args.threshold:.0f}.")
+    for w in rep["windows"]:
+        a, z = datetime.fromisoformat(w["start"]), datetime.fromisoformat(w["end"])
+        span = f"{a:%a %H:%M} (narrow)" if a == z else f"{a:%a %H:%M}–{z:%H:%M}"
+        print(f"\n    {w['score']:>5.1f}  {_bar(w['score'])}  {span}")
+        print(f"           {w['current_speed']:.2f} kt {w['current_dir'] or ''}"
+              f"   {w['light_phase']}   → {w['explain']}")
+
+    # The spot-quality term is a default here, and saying so matters: on a
+    # curated spot that modifier carries local knowledge, and on a coordinate
+    # nobody has fished it carries nothing.
+    print("\n  " + "─" * 74)
+    if rep["prior_is_default"]:
+        print(f"  No history at this mark — scored with the default spot prior "
+              f"({rep['prior']:.2f}) and no")
+        print("  preferred tide stage. Log trips here and both become yours.")
+
+    if args.save:
+        spot, _ = spots.at_coord(lat, lon, name=args.name)
+        path = _save_mark(args.save, spot, st)
+        print(f"\n  saved as {args.save!r} in {path}")
+        print("  (gitignored, never transmitted)")
+    print()
+    return 0
+
+
+def _save_mark(key: str, spot, res: dict) -> str:
+    """Append a resolved coordinate to the private marks file."""
+    path = spots.PRIVATE_PATH
+    existing = []
+    if os.path.exists(path):
+        try:
+            with open(path) as fh:
+                raw = json.load(fh)
+            existing = raw if isinstance(raw, list) else raw.get("spots", [])
+        except (OSError, json.JSONDecodeError):
+            existing = []
+    existing = [e for e in existing if e.get("key") != key]
+    existing.append({
+        "key": key, "name": spot.name if spot.name != f"{spot.lat:.4f}, {spot.lon:.4f}"
+                            else key.replace("_", " ").title(),
+        "lat": spot.lat, "lon": spot.lon,
+        "current_station": spot.current_station,
+        "tide_station": spot.tide_station,
+        "temp_station": spot.temp_station,
+        "kind": "mark",
+        "notes": spot.notes,
+        "species": list(spot.species),
+    })
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w") as fh:
+        json.dump(existing, fh, indent=2)
+    return path
 
 
 if __name__ == "__main__":

@@ -34,6 +34,8 @@ LOG_PATH = os.environ.get(
 # or something the physics layer can fill in for you.
 EXTRACTION_SCHEMA = {
     "spot": "spot key from `tiderace spots`, or a free-text place name",
+    "lat": "decimal latitude, if the report gives one (optional)",
+    "lon": "decimal longitude, negative in Rhode Island (optional)",
     "species": "one of: striped_bass, bluefish, fluke, black_sea_bass, scup, tautog",
     "started_at": "ISO local datetime the session began",
     "ended_at": "ISO local datetime the session ended (optional)",
@@ -59,6 +61,12 @@ class Entry:
     method: str | None = None
     bait_observed: str | None = None
     notes: str | None = None
+    # Where, exactly. A spot key is a label and labels drift -- "the reef" is
+    # four different rocks over a season. The coordinate is what a future
+    # fitted model can actually group on, so it is recorded on every entry,
+    # filled in from the spot when the trip was logged against a known one.
+    lat: float | None = None
+    lon: float | None = None
     source: str = "manual"          # manual | voice | report
     decided_by: str = "angler"      # angler | app -- who picked the spot
     # Which rules applied to this trip. Recorded rather than inferred: RI
@@ -71,13 +79,19 @@ class Entry:
     logged_at: str = ""
 
 
-def snapshot(spot_key: str, when: datetime, species: str | None = None) -> dict:
+def snapshot(spot_key: str | None, when: datetime, species: str | None = None,
+             lat: float | None = None, lon: float | None = None) -> dict:
     """Freeze the physical conditions at a spot and time.
 
     Called at log time so the training example is complete even if NOAA later
-    revises or retires the station.
+    revises or retires the station. A coordinate is resolved to its stations
+    the same way `tiderace at` does, so a trip logged at a mark carries the
+    same feature vector as one logged at a named spot.
     """
-    spot = spots.get(spot_key)
+    if lat is not None and lon is not None:
+        spot, _ = spots.at_coord(lat, lon)
+    else:
+        spot = spots.get(spot_key)
     rows = features.build(spot, when.replace(minute=0, second=0, microsecond=0),
                           hours=2, step_minutes=30, species=species)
     if not rows:
@@ -88,11 +102,20 @@ def snapshot(spot_key: str, when: datetime, species: str | None = None) -> dict:
 
 
 def record(entry: Entry, path: str = LOG_PATH) -> Entry:
+    # A trip logged against a known spot still gets its coordinate written
+    # down. Spot keys can be renamed or retired; 41.4408,-71.4228 cannot.
+    if entry.lat is None or entry.lon is None:
+        try:
+            known = spots.get(entry.spot)
+            entry.lat, entry.lon = known.lat, known.lon
+        except KeyError:
+            pass
+
     if not entry.conditions:
         try:
             entry.conditions = snapshot(entry.spot,
                                         datetime.fromisoformat(entry.started_at),
-                                        entry.species)
+                                        entry.species, entry.lat, entry.lon)
         except Exception:
             entry.conditions = {}
     cfg = cfgmod.load()

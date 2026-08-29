@@ -42,23 +42,29 @@ python3 tests.py                     # 89 tests, no network needed
 
 ## On the water
 
-```bash
-tiderace serve --tailscale      # reachable from your phone, nowhere else
-```
-
-Binds to your tailnet rather than `0.0.0.0`, which is the difference between
-"my phone can reach it from the boat" and "everyone on the marina wifi can read
-my catch log". There is still no login — anyone on your tailnet can see
-everything.
-
-**For HTTPS** (needed before a phone will install it or run a service worker):
+Once, to put HTTPS in front of it:
 
 ```bash
-sudo tailscale serve --bg 8765     # then use the plain `tiderace serve` bind
+sudo tailscale serve --bg 8765
 ```
 
-That fronts the local server with a real certificate for your `.ts.net` name,
-so the app becomes a secure context. Undo with `tailscale serve reset`.
+Then every time:
+
+```bash
+tiderace serve                  # binds localhost; tailscale proxies to it
+```
+
+Open `https://<your-machine>.ts.net` on the phone. Reachable from your tailnet
+and nowhere else, over a real Let's Encrypt certificate — which a phone
+requires before it will install the app or run a service worker.
+
+**The server binds localhost here on purpose.** Tailscale proxies to
+`127.0.0.1:8765`, so nothing needs to listen on an external interface at all.
+`tiderace serve --tailscale` exists for the no-HTTPS case; do not use it
+together with `tailscale serve`, because then the proxy has nothing to reach.
+
+Undo the proxy with `tailscale serve reset`. There is still **no login** —
+anyone on your tailnet can read the catch log and your marks.
 
 ### It works with no signal
 
@@ -105,7 +111,7 @@ Tiles are keyless too:
 ## Chart overlays — the structure that holds fish
 
 ```bash
-tiderace charts        # one-time download, ~770 KB
+tiderace charts        # one-time download, ~16 MB
 ```
 
 Pulls NOAA Electronic Navigational Chart features for the bay from the
@@ -120,6 +126,13 @@ instantly and works offline.
 | seabed type | 958 | tautog want boulder, fluke want sand |
 | water turbulence | 5 | charted rips and overfalls |
 | weed / kelp | 23 | bait cover |
+| land areas | 374 | *not an overlay* — the coastline, used to reject a current station on the far side of an island |
+| depth areas | 2,325 | *not an overlay* — charted depth range under any coordinate |
+
+The last two are geometry the resolver reasons over rather than something you
+switch on, which is why they do not appear in the layers menu. They are also
+most of the download: polygons carry far more vertices than points, so the
+cache went from ~770 KB to ~16 MB when they were added.
 
 Two things worth knowing if you extend this:
 
@@ -167,6 +180,85 @@ is ripping past Whale Rock. Current does. There are 38 current-prediction
 stations inside the bay and the generic national fishing apps use none of
 them — they key everything off a single tide-height curve.
 
+## Any coordinate is a spot
+
+The nineteen curated spots are landmarks. The marks that matter are the ones
+you found, and they are not on anybody's list. So any point on the water gets
+the same report:
+
+```bash
+tiderace at 41.4408,-71.4228
+tiderace at "41 26.448 N, 71 25.368 W" --species tautog
+tiderace at 41.4520,-71.4050 --save my_ledge     # keep it, privately
+```
+
+Decimal, degrees-minutes and full DMS all parse. Tapping anywhere on the map
+does the same thing.
+
+The report leads with **which station the current came from and how far away it
+is**, because at an arbitrary point that binding is the part most likely to be
+wrong, and there is no hand-checked table behind it:
+
+```
+  41.4408, -71.4228   —   Striped Bass
+  ──────────────────────────────────────────────────────────────────────────
+  current from  Beavertail Point, 0.8 mile northwest of        1.17 nm
+  tide from     Newport                                        5.78 nm
+  binding confidence: good
+
+  the place:  charted 49–66 ft
+
+  right now    68.0  ██████████████······
+    Sat 29 Aug 01:30   current 1.14 kt ebb   water 72.1°F   wind 9 kt N
+    night     moon full (98%)   low in 1h05m
+    → helped by current speed, light level, wind; boosted for heat pushing
+      the bite to dark
+```
+
+### Nearest is not the same as right
+
+Binding a coordinate to a current station looks like a nearest-neighbour
+lookup and is not, because **tidal current is constrained by geography and
+straight-line distance is not**. Measured on real coordinates:
+
+| coordinate | nearest station | what is wrong with it |
+|---|---|---|
+| Sakonnet shore of Aquidneck | Dyer Island–Carrs Point | mid-bay, with a whole island in between |
+| East side of Prudence Island | "Dyer Island, **west of**" | wrong side of the island |
+| Middle of Conanicut Island | Rose Island | confidently answers for a point on land |
+
+Worse, it fails *silently*: the forecast still looks perfectly reasonable. So
+every candidate current station is tested against the charted coastline
+(NOAA ENC land polygons) and rejected if too much land lies between. Tide
+height gets no such test — it propagates around a headland and varies smoothly,
+so for height the nearest gauge really is the right answer.
+
+Two details that took measurement to find:
+
+- **Shore marks are charted as land.** Beavertail and Castle Hill are headlands
+  you fish *from*, so a naive test rejected every station for both. A mark on
+  land is stepped off to the water beside it first.
+- **The test is a distance, not a boolean.** A path that clips a headland for
+  eighty metres — or only appears to, because NOAA rounded a station to two
+  decimal places — is still the same water. Half a mile of Aquidneck Island is
+  not.
+
+Nothing is guessed silently. `tiderace stations --at <coord>` shows the whole
+decision, including what was rejected and why:
+
+```
+  41.56000, -71.23000   confidence: poor
+  current   ACT2071   Black Point, SW of, Sakonnet River         3.23 nm
+  rejected — path crosses land:
+    ACT2146   Dyer Island-Carrs Point (between)          3.13 nm  (2.372 nm of land)
+  ! nearest usable current station is 3.23 nm away; the current here is an
+    extrapolation, not a prediction
+```
+
+The resolver is regression-tested against all nineteen hand-verified bindings.
+It also found three of them bound to a station further away than the one named
+after them (Mackerel Cove, Wickford, Greenwich Bay), which have been re-pointed.
+
 ## What is honest about the model
 
 The species profiles in `tiderace/score.py` and the `quality` / `best_stage`
@@ -180,8 +272,14 @@ That is what the catch log is for:
 tiderace log --spot whale_rock --species striped_bass \
     --count 0 --at 2026-08-27T05:30 --method bucktail --notes "flat calm, no bait"
 
+tiderace log --coord 41.4520,-71.4050 --species striped_bass --count 2
+
 tiderace history
 ```
+
+Every entry carries a **coordinate**, filled in from the spot when you logged
+against a named one. Spot keys get renamed and retired; `41.4408,-71.4228` does
+not, and a log that only says `whale_rock` cannot be grouped spatially later.
 
 Logging snapshots the **full feature vector** at that time and place — current
 speed, stage, water temp, light phase, pressure trend, moon — not just the
@@ -199,10 +297,12 @@ tiderace/
   astro.py      sun elevation, moon phase, spring/neap  (pure stdlib)
   sources.py    NOAA CO-OPS + NWS clients, disk-cached
   spots.py      19 bay spots, each bound to verified stations
+  stations.py   binds any coordinate to its stations, refusing the wrong ones
+  point.py      the full report for one coordinate
   features.py   joins sources into an hourly feature vector
   score.py      per-species response curves and the scorer
   log.py        catch log + condition snapshotting
-  cli.py        forecast / spots / log / history
+  cli.py        forecast / at / stations / spots / log / history
 ```
 
 ## Scraping facts

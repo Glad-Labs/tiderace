@@ -837,11 +837,12 @@ class Packaging(unittest.TestCase):
         """
         import tempfile
         import tiderace as pkg
-        from tiderace import bait as b, charts, gso
+        from tiderace import bait as b, charts, gso, stations
         from tiderace import log as catchlog
 
         root = os.path.dirname(os.path.dirname(os.path.abspath(pkg.__file__)))
-        paths = (catchlog.LOG_PATH, b.BAIT_PATH, charts.CHART_DIR, gso.CACHE)
+        paths = (catchlog.LOG_PATH, b.BAIT_PATH, charts.CHART_DIR, gso.CACHE,
+                 stations.CATALOG_PATH, spots.PRIVATE_PATH)
 
         for path in paths:
             resolved = os.path.abspath(path)
@@ -1088,6 +1089,226 @@ class Evaluation(unittest.TestCase):
         r = evaluate.evaluate(self._rows(5, "signal"))
         self.assertFalse(r["ready"])
         self.assertIn("need about", r["verdict"])
+
+
+class Coordinates(unittest.TestCase):
+    """Parsing the formats that are actually on a phone and a chartplotter."""
+
+    def test_equivalent_forms_agree(self):
+        want = (41.4408, -71.4228)
+        for text in ("41.4408,-71.4228", "41.4408 -71.4228",
+                     "41.4408, -71.4228", "41 26.448 N, 71 25.368 W"):
+            lat, lon = spots.parse_coord(text)
+            self.assertAlmostEqual(lat, want[0], places=4, msg=text)
+            self.assertAlmostEqual(lon, want[1], places=4, msg=text)
+
+    def test_dms_with_hemispheres(self):
+        lat, lon = spots.parse_coord("""41°26'26.9"N 71°25'22.1"W""")
+        self.assertAlmostEqual(lat, 41.4408, places=3)
+        self.assertAlmostEqual(lon, -71.4228, places=3)
+
+    def test_west_is_negative_however_it_was_written(self):
+        """A positive longitude in Rhode Island is a typo every time, and
+        silently fishing the Yellow Sea is the worse failure."""
+        self.assertLess(spots.parse_coord("41 26.448 N, 71 25.368 W")[1], 0)
+
+    def test_garbage_is_refused(self):
+        for bad in ("", "whale rock", "41.4408", "999,999"):
+            with self.assertRaises(ValueError, msg=bad):
+                spots.parse_coord(bad)
+
+
+class LandGeometry(unittest.TestCase):
+    """The land test is the whole reason coordinate binding is trustworthy,
+    so it is checked on real chart data when the layer is cached."""
+
+    def setUp(self):
+        from tiderace import charts
+        self.charts = charts
+        if not charts.land_index():
+            self.skipTest("land layer not cached — run: tiderace charts")
+
+    def test_an_island_between_two_points_is_measured(self):
+        """Aquidneck Island sits between the Sakonnet and the mid-bay. This is
+        the case that made the whole test necessary."""
+        span = self.charts.land_span_nm(41.5600, -71.2300, 41.5750, -71.2967)
+        self.assertGreater(span, 1.0)
+        self.assertTrue(self.charts.crosses_land(41.5600, -71.2300, 41.5750, -71.2967))
+
+    def test_open_water_path_is_clear(self):
+        self.assertFalse(self.charts.crosses_land(41.4408, -71.4228, 41.4256, -71.3611)
+                         is True)
+
+    def test_shore_marks_are_not_disqualified_by_their_own_shoreline(self):
+        """Beavertail and Castle Hill are charted as land -- they are headlands
+        you fish from. A naive edge test rejected every station for both."""
+        for lat, lon in ((41.4494, -71.3997), (41.4622, -71.3628)):
+            water = self.charts.nearest_water(lat, lon)
+            self.assertIsNotNone(water, f"{lat},{lon}")
+            self.assertLess(water["distance_nm"], 0.5)
+            self.assertFalse(self.charts.on_land(water["lat"], water["lon"]))
+
+    def test_open_water_needs_no_snapping(self):
+        self.assertIsNone(self.charts.nearest_water(41.4408, -71.4228))
+
+    def test_no_land_data_is_not_the_same_as_no_land(self):
+        """None and False must never be conflated: one is 'nothing in the way',
+        the other is 'I did not look'."""
+        saved = self.charts._LAND_INDEX
+        try:
+            self.charts._LAND_INDEX = []
+            self.assertIsNone(self.charts.crosses_land(41.56, -71.23, 41.57, -71.30))
+            self.assertIsNone(self.charts.land_span_nm(41.56, -71.23, 41.57, -71.30))
+            self.assertIsNone(self.charts.on_land(41.56, -71.23))
+        finally:
+            self.charts._LAND_INDEX = saved
+
+    def test_depth_keys_are_not_mangled(self):
+        """'depth_min_m'.replace('_m', '_ft') yields 'depth_ftin_ft', because
+        str.replace also hits the '_m' inside '_min'."""
+        gj = self.charts.load("depth_area")
+        if not gj:
+            self.skipTest("depth layer not cached")
+        props = [f["properties"] for f in gj["features"][:200]]
+        self.assertTrue(any("depth_min_ft" in p for p in props))
+        self.assertFalse(any(k.startswith("depth_ftin") for p in props for k in p))
+
+    def test_analysis_layers_are_not_offered_as_overlays(self):
+        self.assertNotIn("land", self.charts.available())
+        self.assertIn("land", self.charts.available(include_analysis=True))
+
+
+class StationResolution(unittest.TestCase):
+    def setUp(self):
+        from tiderace import charts, stations
+        self.stations, self.charts = stations, charts
+        if not os.path.exists(stations.CATALOG_PATH):
+            self.skipTest("no station catalog — run: tiderace stations --refresh")
+        if not charts.land_index():
+            self.skipTest("land layer not cached — run: tiderace charts")
+
+    def test_reproduces_the_hand_verified_bindings(self):
+        """Nineteen spots were bound to their current stations by hand and
+        checked live against CO-OPS. The resolver has to agree with all of
+        them, or it is not trustworthy anywhere else."""
+        wrong = []
+        for sp in spots.SPOTS:
+            got = self.stations.resolve(sp.lat, sp.lon)["current"]["id"]
+            if got != sp.current_station:
+                wrong.append(f"{sp.key}: hand={sp.current_station} got={got}")
+        self.assertEqual(wrong, [], "; ".join(wrong))
+
+    def test_the_sakonnet_is_not_bound_across_aquidneck(self):
+        """Nearest-by-distance picks a mid-bay station 0.1 nm closer, with a
+        whole island in between. This is the failure the land test exists for,
+        and it is silent: the forecast still looks perfectly reasonable."""
+        res = self.stations.resolve(41.5600, -71.2300)
+        self.assertTrue(res["current"]["name"].endswith("Sakonnet River"),
+                        res["current"]["name"])
+        self.assertTrue(any("Dyer" in r["name"] for r in res["current_rejected"]))
+
+    def test_distance_alone_would_have_got_it_wrong(self):
+        """Guards the premise. If the nearest station ever becomes the right
+        answer here, the land test is no longer earning its complexity."""
+        cands = self.stations.current_candidates(41.5600, -71.2300, limit=3)
+        self.assertTrue(cands[0]["crosses_land"])
+
+    def test_a_mark_on_land_is_reported_not_hidden(self):
+        res = self.stations.resolve(41.5150, -71.3800)
+        self.assertTrue(res["on_land"])
+        self.assertTrue(any("charted land" in w for w in res["warnings"]))
+
+    def test_confidence_degrades_with_distance(self):
+        near = self.stations.resolve(41.5100, -71.4050)
+        far = self.stations.resolve(41.5600, -71.2300)
+        self.assertEqual(near["confidence"], "good")
+        self.assertEqual(far["confidence"], "poor")
+
+    def test_every_choice_is_explained(self):
+        res = self.stations.resolve(41.5600, -71.2300)
+        self.assertTrue(res["warnings"])
+        for r in res["current_rejected"]:
+            self.assertIsNotNone(r["land_span_nm"])
+
+
+class AdHocSpots(unittest.TestCase):
+    def setUp(self):
+        from tiderace import stations
+        if not os.path.exists(stations.CATALOG_PATH):
+            self.skipTest("no station catalog")
+
+    def test_a_typed_coordinate_never_joins_the_public_list(self):
+        """A coordinate you typed is a mark. Marks do not go in SPOTS, and
+        public_only() is the only set anything shareable is built from."""
+        before = len(spots.SPOTS)
+        spot, _ = spots.at_coord(41.4520, -71.4050)
+        self.assertEqual(len(spots.SPOTS), before)
+        self.assertNotIn(spot.key, spots.BY_KEY)
+        self.assertTrue(spot.private)
+        self.assertNotIn(spot.key, [s.key for s in spots.public_only()])
+
+    def test_no_local_knowledge_is_invented(self):
+        spot, _ = spots.at_coord(41.4520, -71.4050)
+        self.assertEqual(spot.quality, {})
+        self.assertIsNone(spot.best_stage)
+        self.assertEqual(spot.prior("striped_bass"), 0.6)
+
+    def test_thermometer_falls_back_to_the_tide_station(self):
+        sp = spots.get("whale_rock")
+        self.assertEqual(sp.thermometer, sp.tide_station)
+
+
+class Windows(unittest.TestCase):
+    """`windows` used to skip the first and last sample."""
+
+    @staticmethod
+    def _rows(n):
+        base = datetime(2026, 8, 29, 1, 0)
+        return [{"time": base + timedelta(minutes=30 * i)} for i in range(n)]
+
+    def test_a_peak_at_the_start_is_still_a_window(self):
+        """The most actionable window there is -- 'it is good right now and
+        fading' -- always lands on sample zero. Excluding the endpoints
+        reported a 68 at the top of the hour as no window at all, while
+        happily reporting a 55 six hours out."""
+        from tiderace.point import windows
+        scores = [68.4, 68.0, 64.5, 58.2, 52.0, 48.4, 47.0, 46.9, 40.0, 38.0]
+        rows = self._rows(len(scores))
+        got = windows(rows, [{"score": v} for v in scores], threshold=45.0)
+        self.assertTrue(got)
+        self.assertEqual(got[0]["best"]["score"], 68.4)
+
+    def test_nothing_below_threshold_is_reported(self):
+        from tiderace.point import windows
+        scores = [10.0] * 8
+        got = windows(self._rows(8), [{"score": v} for v in scores], threshold=45.0)
+        self.assertEqual(got, [])
+
+
+class CatchLogCoordinates(unittest.TestCase):
+    def test_entries_carry_coordinates(self):
+        from tiderace import log as catchlog
+        e = catchlog.Entry(spot="whale_rock", species="striped_bass",
+                           started_at="2026-08-29T05:00", count=1)
+        self.assertIsNone(e.lat)
+        self.assertIn("lat", catchlog.EXTRACTION_SCHEMA)
+
+    def test_a_known_spot_backfills_its_coordinate(self):
+        """Spot keys can be renamed or retired; 41.4408,-71.4228 cannot. A log
+        that only says 'whale_rock' cannot be grouped spatially later."""
+        import json
+        import tempfile
+        from tiderace import log as catchlog
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "log.jsonl")
+            e = catchlog.Entry(spot="whale_rock", species="striped_bass",
+                               started_at="2026-08-29T05:00", count=0,
+                               conditions={"current_speed": 1.0})
+            catchlog.record(e, path)
+            row = json.loads(open(path).read().strip())
+            sp = spots.get("whale_rock")
+            self.assertAlmostEqual(row["lat"], sp.lat)
+            self.assertAlmostEqual(row["lon"], sp.lon)
 
 
 if __name__ == "__main__":

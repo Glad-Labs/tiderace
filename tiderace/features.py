@@ -60,7 +60,7 @@ def build(spot: Spot, start: datetime, hours: int = 48,
 
     cur_events = sources.current_events(spot.current_station, pad_start, pad_end)
     tides = sources.tide_extremes(spot.tide_station, pad_start, pad_end)
-    temp_series = sources.water_temp(spot.tide_station, start - timedelta(days=2), end)
+    temp_series = sources.water_temp(spot.thermometer, start - timedelta(days=2), end)
     wx, press = _weather(spot, start, end)
 
     # Bait sightings are read once, not per row -- the file is small but the
@@ -86,7 +86,7 @@ def build(spot: Spot, start: datetime, hours: int = 48,
 
     fallback_temp = temp_series[-1]["temp_f"] if temp_series else None
     if fallback_temp is None:
-        fallback_temp = sources.latest_water_temp(spot.tide_station)
+        fallback_temp = sources.latest_water_temp(spot.thermometer)
 
     rows = []
     steps = int(hours * 60 / step_minutes)

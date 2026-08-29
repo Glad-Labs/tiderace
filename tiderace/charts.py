@@ -17,6 +17,7 @@ confusing zero if you do not know to look for it.
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.parse
 import urllib.request
@@ -43,7 +44,16 @@ LAYERS: dict[str, tuple[int, str]] = {
     "turbulence":   (35, "Water turbulence — rips and overfalls"),
     "kelp":         (74, "Weed and kelp beds"),
     "seabed":       (71, "Seabed type — sand, mud, rock, boulders"),
+    # Analysis layers. Not overlays -- these are geometry the resolver reasons
+    # over, which is why they are excluded from `available()` below.
+    "land":         (233, "Land areas — the coastline as polygons"),
+    "depth_area":   (227, "Charted depth ranges"),
 }
+
+# Layers fetched for computation rather than display. Land polygons as a map
+# overlay would just be a second, worse basemap; what they are actually for is
+# answering "is there an island between this mark and that current station?".
+ANALYSIS = {"land", "depth_area"}
 
 # S-57 WATLEV: water level effect.
 WATLEV = {
@@ -111,6 +121,15 @@ def _clean(f: dict) -> dict:
         out["depth_m"] = round(float(v), 1)
         out["depth_ft"] = round(float(v) * 3.28084, 1)
 
+    # DRVAL1/DRVAL2 are the shallow and deep limits of a charted depth area,
+    # in metres. They are the only reason to keep a depth polygon at all.
+    for src, m_key, ft_key in (("DRVAL1", "depth_min_m", "depth_min_ft"),
+                               ("DRVAL2", "depth_max_m", "depth_max_ft")):
+        v2 = p.get(src)
+        if isinstance(v2, (int, float)):
+            out[m_key] = round(float(v2), 1)
+            out[ft_key] = round(float(v2) * 3.28084, 1)
+
     w = p.get("WATLEV")
     try:
         out["water_level"] = WATLEV.get(int(w))
@@ -152,9 +171,10 @@ def load(name: str) -> dict | None:
         return json.load(fh)
 
 
-def available() -> list[str]:
-    return [n for n in LAYERS if os.path.exists(
-        os.path.join(CHART_DIR, f"{n}.geojson"))]
+def available(include_analysis: bool = False) -> list[str]:
+    return [n for n in LAYERS
+            if (include_analysis or n not in ANALYSIS)
+            and os.path.exists(os.path.join(CHART_DIR, f"{n}.geojson"))]
 
 
 def bottom_at(lat: float, lon: float, max_nm: float = 0.35) -> dict | None:
@@ -184,3 +204,232 @@ def bottom_at(lat: float, lon: float, max_nm: float = 0.35) -> dict | None:
     return {"bottom": best["properties"]["bottom"],
             "quality": best["properties"].get("bottom_quality"),
             "distance_nm": round(best_d, 2)}
+
+
+# --------------------------------------------------------------- land geometry
+#
+# The reason this exists: tidal current is constrained by geography in a way
+# that straight-line distance is not. Nearest-by-distance will happily bind a
+# mark on the Sakonnet to a station in the middle of the bay, with Aquidneck
+# Island in between -- a different body of water, running at a different phase.
+# Testing whether the path crosses land is a cheap, chart-derived stand-in for
+# "is this the same water?", and it is the difference between a current number
+# that means something and one that is confidently wrong.
+
+_LAND_INDEX: list | None = None
+
+
+def _polygons(geom: dict) -> list:
+    """Every polygon in a geometry, as [exterior_ring, *holes] lists."""
+    t = geom.get("type")
+    if t == "Polygon":
+        return [geom["coordinates"]]
+    if t == "MultiPolygon":
+        return list(geom["coordinates"])
+    return []
+
+
+def _bbox(ring: list) -> tuple[float, float, float, float]:
+    xs = [c[0] for c in ring]
+    ys = [c[1] for c in ring]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def land_index() -> list:
+    """Bounding-box index over the land polygons, built once.
+
+    A path test touches every candidate station, so the inner loop runs a few
+    hundred times per lookup. Rejecting a polygon on its bounding box first
+    turns that from noticeable into free.
+    """
+    global _LAND_INDEX
+    if _LAND_INDEX is not None:
+        return _LAND_INDEX
+    gj = load("land")
+    idx: list = []
+    if gj:
+        for f in gj.get("features", []):
+            for poly in _polygons(f.get("geometry") or {}):
+                if not poly or len(poly[0]) < 3:
+                    continue
+                idx.append((_bbox(poly[0]), poly))
+    _LAND_INDEX = idx
+    return idx
+
+
+def _in_ring(x: float, y: float, ring: list) -> bool:
+    """Ray casting. Ring is a list of [lon, lat]."""
+    inside = False
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i][0], ring[i][1]
+        xj, yj = ring[j][0], ring[j][1]
+        if (yi > y) != (yj > y):
+            if x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+                inside = not inside
+        j = i
+    return inside
+
+
+def _in_polygon(x: float, y: float, poly: list) -> bool:
+    if not _in_ring(x, y, poly[0]):
+        return False
+    return not any(_in_ring(x, y, hole) for hole in poly[1:])
+
+
+def _segments_cross(ax, ay, bx, by, cx, cy, dx, dy) -> bool:
+    def side(px, py, qx, qy, rx, ry):
+        v = (qy - py) * (rx - qx) - (qx - px) * (ry - qy)
+        return 0 if abs(v) < 1e-14 else (1 if v > 0 else 2)
+    o1 = side(ax, ay, bx, by, cx, cy)
+    o2 = side(ax, ay, bx, by, dx, dy)
+    o3 = side(cx, cy, dx, dy, ax, ay)
+    o4 = side(cx, cy, dx, dy, bx, by)
+    return o1 != o2 and o3 != o4
+
+
+def on_land(lat: float, lon: float) -> bool | None:
+    """Is this point on charted land? None when the layer is not cached."""
+    idx = land_index()
+    if not idx:
+        return None
+    for (x0, y0, x1, y1), poly in idx:
+        if x0 <= lon <= x1 and y0 <= lat <= y1 and _in_polygon(lon, lat, poly):
+            return True
+    return False
+
+
+# Shore marks sit *on* the coastline, and so do some current stations. A plain
+# does-the-segment-touch-a-polygon test therefore rejects the correct station
+# for almost every shore spot -- Beavertail and Castle Hill are both charted as
+# land, because they are headlands you fish *from*.
+#
+# So the question is not "does this path touch land" but "how much land". A
+# path that clips a headland for eighty metres, or that only appears to because
+# NOAA rounded a station to two decimal places, is still the same water. A path
+# with half a mile of Aquidneck Island in it is not.
+END_BUFFER_NM = 0.08          # ~150 m trimmed off each end
+LAND_TOLERANCE_NM = 0.15      # ~280 m of land before the path is disqualified
+SAMPLE_NM = 0.05              # ~90 m between samples along the path
+
+
+def land_span_nm(lat1: float, lon1: float, lat2: float, lon2: float,
+                 buffer_nm: float = END_BUFFER_NM) -> float | None:
+    """How much of the path between two points lies over charted land, in nm.
+
+    None means the land layer is not cached, which is emphatically not the
+    same answer as 0.0. A caller that treats the two alike is back to guessing.
+    """
+    if not land_index():
+        return None
+
+    span_lat = lat2 - lat1
+    span_lon = (lon2 - lon1) * math.cos(math.radians((lat1 + lat2) / 2))
+    length_nm = math.hypot(span_lat, span_lon) * 60.0
+    if length_nm <= 2 * buffer_nm:
+        return 0.0            # nothing between them to cross
+
+    f = buffer_nm / length_nm
+    a_lat, a_lon = lat1 + span_lat * f, lon1 + (lon2 - lon1) * f
+    b_lat, b_lon = lat2 - span_lat * f, lon2 - (lon2 - lon1) * f
+
+    inner_nm = length_nm - 2 * buffer_nm
+    steps = max(2, int(inner_nm / SAMPLE_NM))
+    hits = 0
+    for i in range(steps + 1):
+        t = i / steps
+        if on_land(a_lat + (b_lat - a_lat) * t, a_lon + (b_lon - a_lon) * t):
+            hits += 1
+    return round(inner_nm * hits / (steps + 1), 3)
+
+
+def crosses_land(lat1: float, lon1: float, lat2: float, lon2: float,
+                 tolerance_nm: float = LAND_TOLERANCE_NM) -> bool | None:
+    """Is there enough land between two points to call them different water?"""
+    span = land_span_nm(lat1, lon1, lat2, lon2)
+    if span is None:
+        return None
+    return span > tolerance_nm
+
+
+# Rings and bearings for the outward search below. Sixteen bearings is enough
+# to find the water off any headland without turning this into a real solver.
+_WATER_RINGS = (0.03, 0.06, 0.12, 0.2, 0.3, 0.45, 0.65)
+
+
+def nearest_water(lat: float, lon: float) -> dict | None:
+    """Walk a mark that sits on charted land out to the water beside it.
+
+    Shore spots are the normal case, not the exception: you fish Beavertail
+    from Beavertail, and the coordinate you write down is the rock you stood
+    on. Every current station is offshore of it, so measuring land crossings
+    from the rock itself disqualifies all of them. Measuring from the water a
+    hundred metres away asks the question that was actually meant.
+    """
+    if on_land(lat, lon) is not True:
+        return None
+    for r in _WATER_RINGS:
+        best = None
+        for i in range(16):
+            brg = math.radians(i * 22.5)
+            dlat = r * math.cos(brg) / 60.0
+            dlon = r * math.sin(brg) / (60.0 * math.cos(math.radians(lat)))
+            cand_lat, cand_lon = lat + dlat, lon + dlon
+            if on_land(cand_lat, cand_lon) is False:
+                best = {"lat": round(cand_lat, 5), "lon": round(cand_lon, 5),
+                        "distance_nm": round(r, 3),
+                        "bearing_deg": int(i * 22.5)}
+                break
+        if best:
+            return best
+    return None
+
+
+_DEPTH_INDEX: list | None = None
+
+
+def depth_index() -> list:
+    """Bounding-box index over charted depth areas, built once.
+
+    The depth layer is an order of magnitude larger than the others, so
+    re-reading it per lookup would put a tenth of a second on every request
+    the map makes.
+    """
+    global _DEPTH_INDEX
+    if _DEPTH_INDEX is not None:
+        return _DEPTH_INDEX
+    gj = load("depth_area")
+    idx: list = []
+    if gj:
+        for f in gj.get("features", []):
+            props = f.get("properties") or {}
+            if "depth_min_m" not in props and "depth_max_m" not in props:
+                continue
+            for poly in _polygons(f.get("geometry") or {}):
+                if len(poly[0]) < 3:
+                    continue
+                idx.append((_bbox(poly[0]), poly, props))
+    _DEPTH_INDEX = idx
+    return idx
+
+
+def depth_at(lat: float, lon: float) -> dict | None:
+    """Charted depth range containing a point.
+
+    Depth areas nest, so the smallest polygon containing the point is the
+    tightest range on offer.
+    """
+    best, best_area = None, None
+    for (x0, y0, x1, y1), poly, props in depth_index():
+        if not (x0 <= lon <= x1 and y0 <= lat <= y1):
+            continue
+        if not _in_polygon(lon, lat, poly):
+            continue
+        area = (x1 - x0) * (y1 - y0)
+        if best_area is None or area < best_area:
+            best, best_area = props, area
+    if best is None:
+        return None
+    return {"min_ft": best.get("depth_min_ft"), "max_ft": best.get("depth_max_ft"),
+            "min_m": best.get("depth_min_m"), "max_m": best.get("depth_max_m")}

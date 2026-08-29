@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import bait as baitmod
-from . import charts, config as cfgmod, features, regs, score, spots
+from . import charts, config as cfgmod, features, point, regs, score, spots
 from . import log as catchlog
 from .sources import SourceError
 
@@ -106,6 +106,34 @@ def build_grid(species: str, start: datetime, hours: int = 48,
     return grid
 
 
+_point_lock = threading.Lock()
+_point_cache: dict[tuple, dict] = {}
+POINT_CACHE_MAX = 64
+
+
+def point_report(lat: float, lon: float, species: str, hours: int) -> dict:
+    """Cached coordinate report.
+
+    Tapping around a chart is the natural way to use this, and every tap is a
+    fresh set of NOAA calls without a cache. Keyed on the coordinate rounded to
+    ~11 m, which is far finer than any of the underlying data.
+    """
+    start = datetime.now().replace(minute=0, second=0, microsecond=0)
+    key = (round(lat, 4), round(lon, 4), species, hours, start.isoformat())
+    with _point_lock:
+        if key in _point_cache:
+            return _point_cache[key]
+
+    rep = point.report(lat, lon, species=species, start=start, hours=hours)
+    rep = {k: v for k, v in rep.items() if k not in ("rows", "results")}
+
+    with _point_lock:
+        if len(_point_cache) >= POINT_CACHE_MAX:
+            _point_cache.clear()
+        _point_cache[key] = rep
+    return rep
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -157,6 +185,22 @@ class Handler(BaseHTTPRequestHandler):
                 hours = min(int(q.get("hours", ["48"])[0]), 96)
                 start = datetime.now().replace(minute=0, second=0, microsecond=0)
                 return self._send_json(build_grid(species, start, hours))
+            if url.path == "/api/at":
+                try:
+                    lat = float(q.get("lat", [""])[0])
+                    lon = float(q.get("lon", [""])[0])
+                except ValueError:
+                    return self._send_json({"error": "lat and lon required"}, 400)
+                species = q.get("species", ["striped_bass"])[0]
+                if species not in score.PROFILES:
+                    return self._send_json({"error": f"unknown species {species}"}, 400)
+                hours = min(int(q.get("hours", ["48"])[0]), 96)
+                try:
+                    return self._send_json(point_report(lat, lon, species, hours))
+                except SourceError as exc:
+                    return self._send_json({"error": str(exc)}, 502)
+                except ValueError as exc:
+                    return self._send_json({"error": str(exc)}, 400)
             if url.path == "/api/charts":
                 return self._send_json({
                     "layers": [{"name": n, "label": charts.LAYERS[n][1],
@@ -230,34 +274,38 @@ class Handler(BaseHTTPRequestHandler):
                                         "failed": failed,
                                         "summary": catchlog.summary()})
 
-            entry = catchlog.Entry(
-                spot=data["spot"], species=data["species"],
-                count=int(data.get("count", 0)),
-                started_at=data.get("started_at") or datetime.now().isoformat(
-                    timespec="minutes"),
-                biggest_in=data.get("biggest_in"),
-                method=data.get("method"), bait_observed=data.get("bait_observed"),
-                notes=data.get("notes"), source=data.get("source", "manual"),
-            )
-            catchlog.record(entry)
+            catchlog.record(self._entry(data))
             return self._send_json({"ok": True, "summary": catchlog.summary()})
         except Exception as exc:                                  # noqa: BLE001
             traceback.print_exc()
             return self._send_json({"error": str(exc)}, 400)
 
-    def _record(self, data: dict) -> str | None:
-        """Persist one queued trip. Returns the client id so the phone knows
-        which of its queued entries to drop."""
-        entry = catchlog.Entry(
-            spot=data["spot"], species=data["species"],
+    @staticmethod
+    def _entry(data: dict) -> catchlog.Entry:
+        """One posted trip, however it was chosen: a named spot, a coordinate,
+        or a tap on the chart."""
+        lat, lon = data.get("lat"), data.get("lon")
+        spot = data.get("spot")
+        if not spot and lat is not None and lon is not None:
+            spot = f"at:{float(lat):.5f},{float(lon):.5f}"
+        if not spot:
+            raise ValueError("entry needs a spot or a coordinate")
+        return catchlog.Entry(
+            spot=spot, species=data["species"],
             count=int(data.get("count", 0)),
             started_at=data.get("started_at") or datetime.now().isoformat(
                 timespec="minutes"),
             biggest_in=data.get("biggest_in"),
             method=data.get("method"), bait_observed=data.get("bait_observed"),
             notes=data.get("notes"), source=data.get("source", "manual"),
+            lat=float(lat) if lat is not None else None,
+            lon=float(lon) if lon is not None else None,
             decided_by=data.get("decided_by", "angler"))
-        catchlog.record(entry)
+
+    def _record(self, data: dict) -> str | None:
+        """Persist one queued trip. Returns the client id so the phone knows
+        which of its queued entries to drop."""
+        catchlog.record(self._entry(data))
         return data.get("client_id")
 
     def _static(self, name: str):

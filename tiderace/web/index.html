@@ -139,6 +139,19 @@ input[type=range]{width:100%; accent-color:var(--accent); cursor:pointer}
 .rank .m{font-family:var(--mono); font-size:10px; color:var(--muted)}
 .empty{color:var(--muted); font-size:12.5px; line-height:1.55}
 .note{font-size:11.5px; color:var(--muted); line-height:1.5}
+/* The dropped mark reads as a crosshair rather than another spot dot: it is a
+   question you asked, not a place anyone has recommended. */
+.markpin{width:22px; height:22px; border-radius:50%; border:2px solid var(--accent);
+  box-shadow:0 0 0 1px rgba(11,21,24,.9), 0 0 12px rgba(240,79,160,.55);
+  background:rgba(240,79,160,.16); cursor:pointer}
+.conf{font-family:var(--mono); font-size:10px; text-transform:uppercase;
+  letter-spacing:.08em; padding:1px 6px; border-radius:3px; border:1px solid var(--hair)}
+.conf.good{color:#5FE3C0; border-color:#2F6E60}
+.conf.fair{color:#D9A521; border-color:#6E5A21}
+.conf.poor{color:#E0705F; border-color:#7A3A32}
+.markwarn{color:#D9A521; font-size:11px; line-height:1.5; margin-top:8px}
+.markwin{display:flex; justify-content:space-between; gap:8px; font-family:var(--mono);
+  font-size:11px; padding:4px 0; border-top:1px solid var(--hair)}
 form{display:flex; flex-direction:column; gap:7px}
 input[type=text],input[type=number],input[type=datetime-local]{
   font-family:var(--mono); font-size:12px; background:var(--ground); color:var(--ink);
@@ -207,6 +220,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
       <p class="ph">Ranked now</p>
       <div class="rank" id="rank"></div>
     </div>
+    <div id="markbox"></div>
     <div id="detail"></div>
     <div id="logbox"></div>
     <p class="note" style="margin-top:auto;padding-top:12px;border-top:1px solid var(--hair)">
@@ -222,6 +236,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 <script>
 const $ = s => document.querySelector(s);
 let GRID = null, TI = 0, SEL = null, MARKERS = {};
+let MARK = null, MARK_PIN = null;
 
 // Score -> colour. Deliberately not a rainbow: a single hue ramping from the
 // water tone to the accent, so rank reads as intensity rather than category.
@@ -358,7 +373,8 @@ function sparkline(scores){
 function renderDetail(){
   if (!SEL){ $('#detail').innerHTML =
     `<p class="ph">Spot</p><p class="empty">Pick a spot on the map or in the list to see its
-     conditions, its 48-hour curve, and to log a trip there.</p>`; $('#logbox').innerHTML=''; return; }
+     conditions, its 48-hour curve, and to log a trip there.<br><br>
+     Tap anywhere on the water for a report at that exact coordinate.</p>`; $('#logbox').innerHTML=''; return; }
   const sp = GRID.spots.find(s => s.key === SEL);
   if (!sp) return;
   const s = sp.scores[TI], d = sp.detail[TI] || {};
@@ -785,7 +801,154 @@ async function loadGrid(){
 }
 
 $('#time').oninput = e => { TI = +e.target.value; paint(); };
-$('#species').onchange = loadGrid;
+$('#species').onchange = () => {
+  loadGrid();
+  if (MARK) reportAt(MARK.lat, MARK.lon);   // else the card lies about species
+};
+// ------------------------------------------------------- tap anywhere on the water
+//
+// The nineteen curated spots are landmarks. The marks that actually matter are
+// the ones you found, and they are not on anybody's list -- so any point on the
+// chart answers the same questions, resolved to its own current station.
+//
+// The station binding leads the card on purpose. At a curated spot that binding
+// was checked by hand; here it was inferred, it is the part most likely to be
+// wrong, and a number with an unstated provenance is worse than no number.
+
+function fmtCoord(lat, lon){
+  const dm = (v, pos, neg) => {
+    const h = v >= 0 ? pos : neg, a = Math.abs(v);
+    const d = Math.floor(a), m = (a - d) * 60;
+    return `${d}°${m.toFixed(3)}'${h}`;
+  };
+  return `${dm(lat,'N','S')} ${dm(lon,'E','W')}`;
+}
+
+function markPin(lat, lon){
+  if (MARK_PIN) MARK_PIN.remove();
+  const el = document.createElement('div');
+  el.className = 'markpin';
+  el.title = 'tap the map again to move this mark';
+  MARK_PIN = new maplibregl.Marker({element:el, anchor:'center'})
+    .setLngLat([lon, lat]).addTo(map);
+}
+
+async function reportAt(lat, lon){
+  markPin(lat, lon);
+  $('#markbox').innerHTML =
+    `<p class="ph">Mark</p><div class="card"><div class="sub">reading noaa…</div></div>`;
+  try{
+    const q = new URLSearchParams({lat: lat.toFixed(5), lon: lon.toFixed(5),
+                                   species: $('#species').value, hours: 48});
+    const res = await fetch('/api/at?' + q);
+    const d = await res.json();
+    if (d.error) throw new Error(d.error);
+    MARK = d;
+    renderMark();
+  }catch(err){
+    $('#markbox').innerHTML =
+      `<p class="ph">Mark</p><div class="card"><div class="sub" style="color:#E0705F">
+       ${err.message}</div></div>`;
+  }
+}
+
+function renderMark(){
+  const d = MARK;
+  if (!d){ $('#markbox').innerHTML = ''; return; }
+  const st = d.stations, pl = d.place, now = d.now;
+  const cur = st.current, tide = st.tide, temp = st.temp;
+
+  const place = [];
+  if (pl.depth && pl.depth.min_ft != null)
+    place.push(`${Math.round(pl.depth.min_ft)}–${Math.round(pl.depth.max_ft)} ft`);
+  if (pl.bottom) place.push(pl.bottom.bottom);
+  for (const [k, n] of Object.entries(pl.structure || {})) place.push(`${n} ${k}`);
+
+  $('#markbox').innerHTML = `
+    <p class="ph">Mark</p>
+    <div class="card">
+      <h3 style="font-family:var(--mono);font-size:12px">${fmtCoord(d.lat, d.lon)}</h3>
+      <div class="sub">${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}</div>
+      <div class="big" style="color:${colour(now.score)};margin-top:10px">
+        ${now.score.toFixed(1)}</div>
+      <div class="sub">right now · ${d.species_name}</div>
+
+      <dl class="kv" style="margin-top:10px">
+        <dt>current</dt><dd>${(now.current_speed??0).toFixed(2)} kt ${now.current_dir||''}</dd>
+        <dt>water</dt><dd>${now.water_temp_f!=null?now.water_temp_f.toFixed(1)+' °F':'—'}</dd>
+        <dt>wind</dt><dd>${now.wind_kt!=null?now.wind_kt.toFixed(0)+' kt '+(now.wind_dir||''):'—'}</dd>
+        <dt>light</dt><dd>${now.light_phase||'—'}</dd>
+        <dt>tide</dt><dd>${now.next_tide||'—'}</dd>
+        ${place.length?`<dt>place</dt><dd>${place.join(' · ')}</dd>`:''}
+      </dl>
+      <div class="why">${now.explain||''}</div>
+    </div>
+
+    <div class="card" style="margin-top:8px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span class="ph" style="margin:0">Stations</span>
+        <span class="conf ${st.confidence}">${st.confidence}</span>
+      </div>
+      <dl class="kv">
+        <dt>current</dt><dd>${cur.name} <span style="color:var(--muted)">·
+          ${cur.distance_nm} nm</span></dd>
+        <dt>tide</dt><dd>${tide.name} <span style="color:var(--muted)">·
+          ${tide.distance_nm} nm</span></dd>
+        ${temp && temp.id !== tide.id ? `<dt>temp</dt><dd>${temp.name}
+          <span style="color:var(--muted)">· ${temp.distance_nm} nm</span></dd>` : ''}
+      </dl>
+      ${(st.rejected||[]).length ? `<div class="note" style="margin-top:8px">
+        skipped ${st.rejected.length} closer station${st.rejected.length>1?'s':''}
+        across land: ${st.rejected.slice(0,2).map(r=>r.name).join('; ')}</div>` : ''}
+      ${(st.warnings||[]).map(w=>`<div class="markwarn">! ${w}</div>`).join('')}
+    </div>
+
+    ${d.windows.length ? `<div class="card" style="margin-top:8px">
+      <span class="ph" style="margin:0">Windows</span>
+      ${d.windows.map(w => {
+        const a = new Date(w.start), b = new Date(w.end);
+        const opt = {weekday:'short', hour:'2-digit', minute:'2-digit'};
+        const span = +a === +b ? a.toLocaleString([], opt)
+          : a.toLocaleString([], opt) + '–' + b.toLocaleTimeString([],
+              {hour:'2-digit', minute:'2-digit'});
+        return `<div class="markwin"><span>${span}</span>
+          <span style="color:${colour(w.score)}">${w.score.toFixed(1)}</span></div>`;
+      }).join('')}
+    </div>` : ''}
+
+    ${d.prior_is_default ? `<p class="note" style="margin-top:8px">
+      No history here, so this is scored with the default spot prior
+      (${d.prior.toFixed(2)}) and no preferred tide stage — unlike a curated
+      spot, none of this score is local knowledge.</p>` : ''}
+
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <button id="markcopy" style="flex:1">copy coords</button>
+      <button id="markclear" style="flex:1">clear</button>
+    </div>`;
+
+  $('#markcopy').onclick = () => {
+    navigator.clipboard?.writeText(`${d.lat.toFixed(5)},${d.lon.toFixed(5)}`);
+    $('#markcopy').textContent = 'copied';
+    setTimeout(() => { const b = $('#markcopy'); if (b) b.textContent = 'copy coords'; }, 1400);
+  };
+  $('#markclear').onclick = () => {
+    MARK = null;
+    if (MARK_PIN){ MARK_PIN.remove(); MARK_PIN = null; }
+    $('#markbox').innerHTML = '';
+  };
+}
+
+// Chart features and bait sightings have their own click handlers and their own
+// popups; a tap that landed on one of those was not a request for a report.
+map.on('click', e => {
+  if (!MAP_READY) return;
+  const layers = ((map.getStyle() || {}).layers || [])
+    .map(l => l.id)
+    .filter(id => (id.startsWith('c-') || id === 'bait') && map.getLayer(id));
+  if (layers.length && map.queryRenderedFeatures(e.point, {layers}).length) return;
+  reportAt(e.lngLat.lat, e.lngLat.lng);
+});
+
 (async function boot(){
   try{
     await loadSpecies();

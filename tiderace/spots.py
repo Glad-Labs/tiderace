@@ -33,7 +33,15 @@ class Spot:
     quality: dict[str, float] = field(default_factory=dict)   # species -> 0..1 prior
     best_stage: str | None = None          # "ebb" | "flood" | None
     wx_point: tuple[float, float] | None = None  # land point for NWS grid
+    # Water temperature rides on the water-level stations, but not all of them
+    # carry a thermometer. Defaults to the tide station, which is right for
+    # everything in the bay and wrong up the Providence River.
+    temp_station: str | None = None
     private: bool = False                  # your mark, not a public landmark
+
+    @property
+    def thermometer(self) -> str:
+        return self.temp_station or self.tide_station
 
     def prior(self, species: str) -> float:
         return self.quality.get(species, 0.6)
@@ -67,7 +75,8 @@ SPOTS: list[Spot] = [
          ("striped_bass", "tautog", "scup"),
          {"striped_bass": 0.82, "tautog": 0.92, "scup": 0.80},
          "ebb", (41.4761, -71.3617)),
-    Spot("mackerel_cove", "Mackerel Cove", 41.4750, -71.3800, "ACT2201", NEWPORT,
+    # was ACT2201 (Beavertail): there is a station in the cove itself.
+    Spot("mackerel_cove", "Mackerel Cove", 41.4750, -71.3800, "ACT2111", NEWPORT,
          "cove", "Sheltered Jamestown cove. Bait stacks up on a SW blow.",
          ("striped_bass", "bluefish", "scup"),
          {"striped_bass": 0.62, "bluefish": 0.70, "scup": 0.75},
@@ -107,12 +116,14 @@ SPOTS: list[Spot] = [
          ("striped_bass", "fluke", "scup"),
          {"striped_bass": 0.66, "fluke": 0.74, "scup": 0.78},
          "flood", (41.5834, -71.3957)),
-    Spot("wickford", "Wickford Harbor", 41.5667, -71.4333, "nb0301", CONIMICUT,
+    # was nb0301 (Quonset Point): Wickford Harbor has its own station.
+    Spot("wickford", "Wickford Harbor", 41.5667, -71.4333, "ACT2226", CONIMICUT,
          "harbor", "Shallow, warms fast. Spring and fall schoolies.",
          ("striped_bass", "scup", "fluke"),
          {"striped_bass": 0.58, "scup": 0.76, "fluke": 0.60},
          "flood", (41.5667, -71.4333)),
-    Spot("greenwich_bay", "Greenwich Bay Entrance", 41.6667, -71.3933, "ACT2241", CONIMICUT,
+    # was ACT2241: ACT2231 is the entrance itself.
+    Spot("greenwich_bay", "Greenwich Bay Entrance", 41.6667, -71.3933, "ACT2231", CONIMICUT,
          "bay", "Shallow warm bay. Early season, then it shuts off in the heat.",
          ("striped_bass", "scup"),
          {"striped_bass": 0.50, "scup": 0.72},
@@ -182,6 +193,7 @@ def load_private(path: str | None = None) -> list[Spot]:
                 quality=r.get("quality", {}),
                 best_stage=r.get("best_stage"),
                 wx_point=tuple(r["wx_point"]) if r.get("wx_point") else None,
+                temp_station=r.get("temp_station"),
                 private=True,
             ))
         except (KeyError, TypeError, ValueError):
@@ -208,3 +220,92 @@ def public_only() -> list[Spot]:
     """Everything except your own marks. The only set anything shareable
     should ever be built from."""
     return [s for s in SPOTS if not s.private]
+
+
+# ----------------------------------------------------------- ad-hoc coordinates
+#
+# A coordinate you type is a spot like any other -- the scorer, the feature
+# builder and the window finder all take a Spot and none of them care where it
+# came from. The only thing standing between "19 curated places" and "anywhere
+# on the water" was binding the stations, which `stations.resolve` now does.
+
+def parse_coord(text: str) -> tuple[float, float]:
+    """Accept the forms people actually have on their phone and chartplotter.
+
+        41.4408,-71.4228        41.4408 -71.4228
+        41 26.448 N, 71 25.368 W
+        41°26'26.9"N 71°25'22.1"W
+
+    Longitude in Rhode Island is negative. A positive one is a typo every
+    time, and silently fishing the Yellow Sea is a worse failure than an error.
+    """
+    import re
+    t = text.strip().replace("°", " ").replace("'", " ").replace('"', " ")
+    t = t.replace("’", " ").replace("′", " ").replace("″", " ")
+
+    hemis = re.findall(r"[NSEWnsew]", t)
+    nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", t)]
+    if len(nums) < 2:
+        raise ValueError(f"could not read a coordinate from {text!r}")
+
+    def dms(parts: list[float]) -> float:
+        v = abs(parts[0]) + (parts[1] if len(parts) > 1 else 0) / 60.0 \
+            + (parts[2] if len(parts) > 2 else 0) / 3600.0
+        return -v if parts[0] < 0 else v
+
+    if len(nums) in (4, 6):                     # two groups of dm or dms
+        half = len(nums) // 2
+        lat, lon = dms(nums[:half]), dms(nums[half:])
+    elif len(nums) == 2:
+        lat, lon = nums
+    else:
+        raise ValueError(f"ambiguous coordinate {text!r}")
+
+    if len(hemis) >= 2:
+        if hemis[0].upper() == "S":
+            lat = -abs(lat)
+        if hemis[1].upper() == "W":
+            lon = -abs(lon)
+
+    if not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        raise ValueError(f"{lat},{lon} is not a coordinate")
+    return round(lat, 6), round(lon, 6)
+
+
+def at_coord(lat: float, lon: float, name: str | None = None,
+             resolution: dict | None = None):
+    """Build a one-off Spot for a coordinate, with its stations resolved.
+
+    Returns (spot, resolution) so the caller can print the caveats. Marked
+    private and deliberately *not* registered in SPOTS or BY_KEY: a coordinate
+    you typed is a mark, and marks do not join the public list.
+
+    No prior and no preferred tide stage, because there is no local knowledge
+    for a point nobody has fished yet. `Spot.prior` returns 0.6 by default,
+    which is the honest answer.
+    """
+    from . import stations
+    res = resolution or stations.resolve(lat, lon)
+    cur = res.get("current") or {}
+    tide = res.get("tide") or {}
+    temp = res.get("temp") or {}
+    if not cur or not tide:
+        raise ValueError(f"no NOAA stations near {lat},{lon}")
+
+    spot = Spot(
+        key=f"at:{lat:.5f},{lon:.5f}",
+        name=name or f"{lat:.4f}, {lon:.4f}",
+        lat=lat, lon=lon,
+        current_station=cur["id"],
+        tide_station=tide["id"],
+        temp_station=temp.get("id"),
+        kind="mark",
+        notes=f"current from {cur['name']} ({cur['distance_nm']} nm)",
+        species=tuple(sorted(__import__("tiderace.score", fromlist=["PROFILES"])
+                             .PROFILES)),
+        quality={},
+        best_stage=None,
+        wx_point=None,
+        private=True,
+    )
+    return spot, res
