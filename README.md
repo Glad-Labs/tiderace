@@ -145,8 +145,58 @@ python3 -m tiderace scrape --source ridem_amendments
 python3 -m tiderace review                      # what is waiting for approval
 ```
 
-Needs `pip install -r requirements-extract.txt` (the Anthropic SDK). Everything
-else in this project runs on the standard library alone.
+Runs on **local Ollama by default**, so this needs no Python dependency either —
+the client is plain `urllib` against `localhost:11434`. The whole project stays
+installable with nothing but a Python interpreter.
+
+```bash
+python3 -m tiderace config --llm ollama --llm-model qwen3.6:27b   # default
+python3 -m tiderace config --llm anthropic                        # pip install anthropic
+python3 -m tiderace scrape --check                                # what is reachable
+```
+
+### Rules first, model second
+
+RIDEM writes its quota notices to a template *and spells every quantity twice* —
+"four hundred (400) pounds per day". So `tiderace/ridem.py` parses that source
+with a regex and no model at all, and requires the word-form and the digits to
+agree. That is a checksum no language model can offer, on exactly the data where
+being wrong is a citation. Current coverage: **22 of 22 notices parsed, 20
+cross-checked, all agreeing.** The model is only asked about sentences the
+template missed, and only with `--use-model`.
+
+Prose reports are the opposite — no template, so that is where the model earns
+its place.
+
+### Two things measured rather than assumed
+
+**Ollama's structured output constrains grammar, not meaning.** The JSON schema
+passed in `format` is compiled to a grammar, so output always parses and enums
+are always respected — but `description` fields never reach the model. Guidance
+written there is silently ignored:
+
+| bait-abundance task | scale in schema | scale in prompt |
+|---|---|---|
+| qwen2.5:7b | 1/4 | **4/4** |
+| qwen3.6:27b | 1/4 | **4/4** |
+
+Both sizes went from useless to perfect on the same schema. So all semantic
+guidance lives in the prompt here, which also works on Anthropic (it *does*
+read descriptions).
+
+**Model size still matters for one distinction.** Telling forage in the water
+apart from bait an angler is fishing with. "A good scup bite on squid"
+describes tackle; logging it as a squid sighting would tell the forecast there
+is forage in an area when there is none:
+
+| | forage vs. tackle |
+|---|---|
+| qwen2.5:7b | 2/3 |
+| qwen3.6:27b | **3/3** |
+
+Hence the 27B default — 17.8 GB at Q4, ~7s per call, and a weekly scrape takes
+seconds. Drop to a 7B with `--llm-model` if the GPU is busy: the abundance
+scale survives the downgrade, the tackle distinction does not.
 
 This is the layer the project was originally imagined as, and it is
 deliberately the **smallest**. Claude never forecasts, never ranks and never

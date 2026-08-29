@@ -1,4 +1,5 @@
-# Optional. The forecast, map, charts and logging all run on the standard
-# library alone -- this is only needed for `tiderace scrape`, which uses Claude
-# to turn prose into structured rows.
+# OPTIONAL — only for `--llm anthropic`.
+#
+# The default extraction backend is local Ollama, whose client is plain urllib,
+# so tiderace has no Python dependencies at all out of the box.
 anthropic>=1.0

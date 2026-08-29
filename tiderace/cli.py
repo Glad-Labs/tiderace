@@ -123,6 +123,10 @@ def run(argv=None) -> int:
     cf.add_argument("--license", dest="license_mode",
                     choices=("recreational", "commercial"))
     cf.add_argument("--license-holder")
+    cf.add_argument("--llm", dest="llm_backend",
+                    choices=("ollama", "anthropic", "none"))
+    cf.add_argument("--llm-model")
+    cf.add_argument("--ollama-host")
 
     sc = sub.add_parser("scrape", help="extract facts from RIDEM and fishing reports")
     sc.add_argument("--source", choices=sorted(fetch.SOURCES), action="append",
@@ -132,7 +136,9 @@ def run(argv=None) -> int:
                     help="write high-confidence bait sightings straight to the bait log")
     sc.add_argument("--force", action="store_true", help="bypass the page cache")
     sc.add_argument("--check", action="store_true",
-                    help="show robots status for every source and exit")
+                    help="show robots status and backend availability, then exit")
+    sc.add_argument("--use-model", action="store_true",
+                    help="also ask the model about notices the rule parser missed")
 
     rv = sub.add_parser("review", help="review extracted facts awaiting approval")
     rv.add_argument("--kind", choices=("regulation", "bait", "catch_report"))
@@ -231,6 +237,16 @@ def _cmd_scrape(args) -> int:
     from . import extract
 
     if args.check:
+        from . import llm
+        p = llm.probe()
+        print()
+        print(f"  backend: {p['configured']} ({p['model']})"
+              f"   ollama {'up' if p['ollama'] else 'DOWN'}"
+              f"   anthropic sdk {'yes' if p['anthropic_sdk'] else 'no'}")
+        if p.get("ollama_models"):
+            small = [m for m in p["ollama_models"] if m["gb"] < 12][:6]
+            print("  local models under 12 GB: "
+                  + ", ".join(f"{m['name']} ({m['gb']}GB)" for m in small))
         print()
         print(f"  {'source':<22}{'kind':<12}{'robots':<9}delay  url")
         print("  " + "─" * 88)
@@ -254,12 +270,18 @@ def _cmd_scrape(args) -> int:
         print(f"  {key}  ({kind})")
         try:
             if kind == "regulation":
-                out = extract.extract_regulations(url, force=args.force)
+                out = extract.extract_regulations(url, force=args.force,
+                                                  use_model=args.use_model)
                 n = len(out.get("changes", []))
-                print(f"    {n} rule change(s) found · {out['queued']} queued for review")
+                print(f"    {out['rule_parsed']} parsed by rule, "
+                      f"{out['rule_unparsed']} unparsed · {out['queued']} queued "
+                      f"({out['backend']})")
                 for c in out.get("changes", [])[:6]:
-                    print(f"      [{c['confidence']:<6}] {c['license_mode']:<12} "
-                          f"{c['species']}: {c['value'][:60]}")
+                    x = "✓" if c.get("cross_checked") else " "
+                    print(f"      {x} [{c['confidence']:<6}] {c['effective_date']} "
+                          f"{c['license_mode']:<12} {c['species']}: {c['value'][:46]}")
+                for w in out.get("warnings", [])[:3]:
+                    print(f"      ! {w[:100]}")
             else:
                 out = extract.extract_report(url, force=args.force,
                                              apply_bait=args.apply_bait)
@@ -320,6 +342,9 @@ def _cmd_config(args) -> int:
         changes["license_mode"] = args.license_mode
     if args.license_holder:
         changes["license_holder"] = args.license_holder
+    for attr in ("llm_backend", "llm_model", "ollama_host"):
+        if getattr(args, attr, None):
+            changes[attr] = getattr(args, attr)
     cfg = cfgmod.save(changes) if changes else cfgmod.load()
 
     print(f"\n  licence mode   {cfg['license_mode']}")
@@ -327,6 +352,14 @@ def _cmd_config(args) -> int:
     if cfg["license_mode"] == "commercial":
         print(f"\n  Commercial limits change in-season. Current numbers: "
               f"{regs.COMMERCIAL_HOTLINE}")
+
+    from . import llm
+    p = llm.probe(cfg)
+    print(f"\n  extraction     {cfg['llm_backend']}"
+          f"  ({cfg.get('llm_model') or 'default'})")
+    if cfg["llm_backend"] == "ollama":
+        print(f"  ollama         {'reachable' if p['ollama'] else 'NOT REACHABLE'}"
+              f"{'' if p.get('model_present', True) else '  — model not pulled'}")
     print(f"\n  stored in {cfgmod.CONFIG_PATH}\n")
     return 0
 

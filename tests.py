@@ -11,7 +11,7 @@ import os
 import unittest
 from datetime import date, datetime, timedelta
 
-from tiderace import astro, bait, evaluate, extract, fetch, gso, regs, score, spots
+from tiderace import astro, bait, evaluate, extract, fetch, gso, llm, regs, ridem, score, spots
 
 STALE_REC = regs.STALE_AFTER_DAYS
 from tiderace.features import _local_tz, _wind_against_tide
@@ -398,13 +398,17 @@ class Extraction(unittest.TestCase):
         self.assertIn("do not comply", p)
 
     def test_bait_vocabulary_matches_the_bait_model(self):
-        """The extractor must not emit bait types the scorer has never heard of."""
-        described = extract.REPORT_SCHEMA["properties"]["bait"]["items"]["properties"]
-        vocab = described["bait"]["description"]
+        """The extractor must not emit bait types the scorer has never heard of.
+
+        The vocabulary lives in the prompt, not a schema description, because
+        Ollama compiles the schema to a grammar and never shows the model its
+        descriptions."""
         for known in ("bunker", "sand eels", "squid", "crabs"):
-            self.assertIn(known, vocab)
-        allowed = set(described["abundance"]["enum"])
-        self.assertEqual(allowed, set(bait.ABUNDANCE))
+            self.assertIn(known, extract.SYSTEM)
+        described = extract.REPORT_SCHEMA["properties"]["bait"]["items"]["properties"]
+        self.assertEqual(set(described["abundance"]["enum"]), set(bait.ABUNDANCE))
+        for level in bait.ABUNDANCE:
+            self.assertIn(f"{level} =", extract.SYSTEM)
 
     def test_review_queue_roundtrip(self):
         import tempfile
@@ -419,13 +423,115 @@ class Extraction(unittest.TestCase):
             self.assertEqual(len(extract.pending("regulation", path)), 1)
             self.assertEqual(len(extract.pending("bait", path)), 0)
 
-    def test_missing_sdk_fails_loudly_not_silently(self):
+    def test_missing_backend_fails_loudly_not_silently(self):
+        """A missing SDK or an unreachable Ollama must raise, never return
+        an empty extraction that looks like 'nothing was reported'."""
         try:
-            extract._client()
-        except extract.ExtractionUnavailable as e:
+            llm.Anthropic().complete("s", "u", {"type": "object"})
+        except llm.BackendUnavailable as e:
             self.assertTrue(str(e))
         except Exception as e:                                    # noqa: BLE001
-            self.fail(f"should raise ExtractionUnavailable, got {type(e).__name__}: {e}")
+            self.fail(f"expected BackendUnavailable, got {type(e).__name__}: {e}")
+
+        dead = llm.Ollama(host="http://127.0.0.1:1")
+        with self.assertRaises(llm.BackendUnavailable):
+            dead.complete("s", "u", {"type": "object"})
+        self.assertFalse(dead.available())
+
+
+class RidemParser(unittest.TestCase):
+    """Deterministic, so it is fully testable without a model or a network."""
+
+    NOTICE = ("Beginning 12:00AM on Sunday, August 30, 2026, the commercial "
+              "possession limit for Black Sea Bass will be four hundred (400) "
+              "pounds per day until further notice.")
+
+    def test_parses_the_template(self):
+        r = ridem.parse_notice(self.NOTICE)
+        self.assertEqual(r["effective_date"], "2026-08-30")
+        self.assertEqual(r["species_key"], "black_sea_bass")
+        self.assertEqual(r["license_mode"], "commercial")
+        self.assertEqual(r["change_type"], "possession_limit")
+        self.assertEqual(r["amount"]["value"], 400)
+        self.assertEqual(r["amount"]["unit"], "pounds")
+        self.assertEqual(r["period"], "per day")
+        self.assertTrue(r["until_further_notice"])
+
+    def test_number_words_cross_check_the_digits(self):
+        """RIDEM writes every quantity twice. Requiring the two to agree is a
+        checksum no language model can offer."""
+        r = ridem.parse_notice(self.NOTICE)
+        self.assertTrue(r["amount"]["cross_checked"])
+        self.assertTrue(r["amount"]["agrees"])
+        self.assertEqual(r["amount"]["spelled"], 400)
+
+    def test_mismatch_is_reported_never_resolved(self):
+        bad = self.NOTICE.replace("(400)", "(300)")
+        r = ridem.parse_notice(bad)
+        self.assertFalse(r["amount"]["agrees"])
+        page = ridem.parse_page(bad)
+        self.assertTrue(any("check the source" in w for w in page["warnings"]))
+
+    def test_word_number_parsing(self):
+        for text, want in [("four hundred", 400), ("ten thousand", 10000),
+                           ("twenty-five", 25), ("three", 3),
+                           ("two thousand eight hundred", 2800)]:
+            self.assertEqual(ridem.words_to_number(text), want, text)
+        self.assertIsNone(ridem.words_to_number("Black Sea Bass will be"))
+
+    def test_spelled_group_cannot_swallow_the_clause(self):
+        """Regression: a generic letter run captured the whole sentence, which
+        then failed to parse as a number and silently disabled every
+        cross-check on the page."""
+        a = ridem.parse_amount("limit for Black Sea Bass will be four hundred (400) pounds")
+        self.assertEqual(a["spelled"], 400)
+        self.assertTrue(a["agrees"])
+
+    def test_closure_detected(self):
+        r = ridem.parse_notice(
+            "Beginning 12:00AM on Tuesday, June 23, 2026, the commercial fishery "
+            "for Striped Bass will close until further notice.")
+        self.assertEqual(r["change_type"], "season_close")
+        self.assertEqual(r["species_key"], "striped_bass")
+
+    def test_non_notices_are_ignored(self):
+        self.assertIsNone(ridem.parse_notice("Fishing was good last week."))
+        page = ridem.parse_page("Nothing here.\nOr here.")
+        self.assertEqual(page["notices"], [])
+
+
+class Backends(unittest.TestCase):
+    def test_ollama_needs_no_python_dependency(self):
+        """The whole point of defaulting to ollama: the client is urllib."""
+        import inspect
+        src = inspect.getsource(llm.Ollama)
+        self.assertIn("urllib", src)
+        self.assertNotIn("import anthropic", src)
+
+    def test_unknown_backend_falls_back_safely(self):
+        self.assertIsInstance(llm.get_backend({"llm_backend": "ollama"}), llm.Ollama)
+        self.assertIsInstance(llm.get_backend({"llm_backend": "anthropic"}),
+                              llm.Anthropic)
+        with self.assertRaises(llm.BackendUnavailable):
+            llm.get_backend({"llm_backend": "none"})
+
+    def test_guidance_lives_in_the_prompt_not_the_schema(self):
+        """Ollama compiles the schema to a grammar and never shows the model
+        its description fields — measured 1/4 vs 4/4 on the same task."""
+        self.assertIn("loaded = thick", extract.SYSTEM)
+        self.assertIn("bunker", extract.SYSTEM)
+        props = extract.REPORT_SCHEMA["properties"]["bait"]["items"]["properties"]
+        self.assertNotIn("description", props["bait"])
+        self.assertNotIn("description", props["place"])
+
+    def test_prompt_separates_forage_from_tackle(self):
+        p = extract.SYSTEM.lower()
+        self.assertIn("caught on", p)
+        self.assertIn("tackle, not forage", p)
+
+    def test_injection_field_is_scoped_to_real_directives(self):
+        p = extract.SYSTEM.lower()
+        self.assertIn("ordinary fishing prose is never an injection", p)
 
 
 class Privacy(unittest.TestCase):

@@ -19,6 +19,11 @@ DEFAULTS = {
     # assumed: RI commercial licences are issued to a named individual, so the
     # log should say which one a trip belongs to.
     "license_holder": None,
+    # Extraction backend. Ollama is the default because it is free, local, and
+    # needs no Python dependency at all -- the client is plain urllib.
+    "llm_backend": "ollama",          # ollama | anthropic | none
+    "llm_model": None,                # None -> qwen3.6:27b for ollama
+    "ollama_host": None,              # None -> http://localhost:11434
 }
 
 
@@ -33,6 +38,8 @@ def load(path: str | None = None) -> dict:
             pass
     if cfg["license_mode"] not in ("recreational", "commercial"):
         cfg["license_mode"] = "recreational"
+    if cfg["llm_backend"] not in ("ollama", "anthropic", "none"):
+        cfg["llm_backend"] = "ollama"
     return cfg
 
 
