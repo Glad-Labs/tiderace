@@ -111,7 +111,7 @@ Tiles are keyless too:
 ## Chart overlays — the structure that holds fish
 
 ```bash
-tiderace charts        # one-time download, ~16 MB
+tiderace charts        # one-time download, ~6 MB
 ```
 
 Pulls NOAA Electronic Navigational Chart features for the bay from the
@@ -126,13 +126,33 @@ instantly and works offline.
 | seabed type | 958 | tautog want boulder, fluke want sand |
 | water turbulence | 5 | charted rips and overfalls |
 | weed / kelp | 23 | bait cover |
+| depth areas | 1,544 | bathymetric shading, and the charted depth under any coordinate |
 | land areas | 374 | *not an overlay* — the coastline, used to reject a current station on the far side of an island |
-| depth areas | 2,325 | *not an overlay* — charted depth range under any coordinate |
 
-The last two are geometry the resolver reasons over rather than something you
-switch on, which is why they do not appear in the layers menu. They are also
-most of the download: polygons carry far more vertices than points, so the
-cache went from ~770 KB to ~16 MB when they were added.
+Land is geometry the resolver reasons over rather than something you switch on,
+which is why it does not appear in the layers menu.
+
+### Depth
+
+The bay is shaded by charted depth, which is what turns a drop-off from
+something you can look up into something you can see. Tapping a coordinate also
+reports the depth band under it.
+
+Depth is a **sequential** encoding, so it is one hue with monotone lightness —
+the map's own cyan, stepped bright-shallow to dark-deep, which is both the
+nautical convention and the useful one here (the shallow edges are where the
+fishing is). The eight steps were solved rather than picked and then validated:
+monotone lightness, every adjacent gap ≥ 0.06 OKLCH L, hue spread 4°, and both
+ends clearing 2:1 against the surface so neither "dries" nor "deep" collapses
+into the basemap. Checked against both surfaces this layer has — the dark panel
+and the desaturated OSM raster it borders — and it passes on both.
+
+Polygons are the only chart layer heavy enough to matter on the wire: the raw
+ENC depth areas are 2,325 features and ~306,000 vertices, most of them
+describing wiggles finer than a pixel. They are simplified to ~13 m and
+sliver-filtered on write, and the server gzips, so what a phone actually
+downloads is **300 KB** rather than 11.6 MB. Charted depth *under a coordinate*
+is unchanged by that — there is a test pinning the bands at three known spots.
 
 Two things worth knowing if you extend this:
 

@@ -53,7 +53,7 @@ LAYERS: dict[str, tuple[int, str]] = {
 # Layers fetched for computation rather than display. Land polygons as a map
 # overlay would just be a second, worse basemap; what they are actually for is
 # answering "is there an island between this mark and that current station?".
-ANALYSIS = {"land", "depth_area"}
+ANALYSIS = {"land"}
 
 # S-57 WATLEV: water level effect.
 WATLEV = {
@@ -96,8 +96,96 @@ def fetch(name: str, bbox=BAY_BBOX) -> dict:
         if offset > 50_000:                       # runaway guard
             break
 
-    return {"type": "FeatureCollection",
-            "features": [_clean(f) for f in feats if f.get("geometry")]}
+    gj = {"type": "FeatureCollection",
+          "features": [_clean(f) for f in feats if f.get("geometry")]}
+    return _thin(gj, SIMPLIFY_DEG.get(name), MIN_AREA_DEG2.get(name))
+
+
+# Depth areas are the only layer heavy enough to matter on the wire: 2,325
+# polygons carry ~306,000 vertices, most of them describing wiggles far below
+# what any zoom level renders. Simplified on write, not on read, so the phone
+# pays nothing for it. Land is deliberately left alone -- it never goes to the
+# browser, and the crossing test should reason over the real coastline.
+SIMPLIFY_DEG = {"depth_area": 1.2e-4}   # ~13 m
+COORD_PLACES = 5                        # ~1.1 m
+
+# Sub-hectare slivers of depth area are shoreline noise: invisible at any zoom
+# this map offers, and a large share of the vertex count. Dropping them is what
+# takes the layer from "the browser never finishes parsing it" to instant.
+MIN_AREA_DEG2 = {"depth_area": 2e-7}    # ~1,800 m²
+
+
+def _perp_distance(p, a, b) -> float:
+    """Point-to-segment distance in degree space, longitude scaled to match."""
+    k = math.cos(math.radians(a[1]))
+    px, py = (p[0] - a[0]) * k, p[1] - a[1]
+    bx, by = (b[0] - a[0]) * k, b[1] - a[1]
+    span = bx * bx + by * by
+    if span == 0:
+        return math.hypot(px, py)
+    t = max(0.0, min(1.0, (px * bx + py * by) / span))
+    return math.hypot(px - t * bx, py - t * by)
+
+
+def _simplify_ring(ring: list, tol: float) -> list:
+    """Douglas-Peucker, iterative so a long ring cannot blow the stack."""
+    if len(ring) < 4:
+        return ring
+    keep = [False] * len(ring)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(ring) - 1)]
+    while stack:
+        lo, hi = stack.pop()
+        worst, worst_i = tol, None
+        for i in range(lo + 1, hi):
+            d = _perp_distance(ring[i], ring[lo], ring[hi])
+            if d > worst:
+                worst, worst_i = d, i
+        if worst_i is not None:
+            keep[worst_i] = True
+            stack.append((lo, worst_i))
+            stack.append((worst_i, hi))
+    out = [pt for pt, k in zip(ring, keep) if k]
+    # A ring that collapses below a triangle is no longer an area.
+    return out if len(out) >= 4 else ring
+
+
+def _ring_area(ring: list) -> float:
+    """Shoelace area in square degrees. Only used for relative comparison."""
+    a = 0.0
+    for i in range(len(ring) - 1):
+        a += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1]
+    return abs(a) / 2
+
+
+def _thin(gj: dict, tol: float | None, min_area: float | None = None) -> dict:
+    """Round coordinates, and simplify polygon rings where asked."""
+    def ring(r):
+        r = _simplify_ring(r, tol) if tol else r
+        return [[round(x, COORD_PLACES), round(y, COORD_PLACES)] for x, y in
+                ((c[0], c[1]) for c in r)]
+
+    kept = []
+    for f in gj.get("features", []):
+        g = f.get("geometry") or {}
+        t = g.get("type")
+        if t == "Polygon":
+            g["coordinates"] = [ring(r) for r in g["coordinates"]]
+            if min_area and _ring_area(g["coordinates"][0]) < min_area:
+                continue
+        elif t == "MultiPolygon":
+            g["coordinates"] = [[ring(r) for r in poly] for poly in g["coordinates"]]
+            if min_area:
+                g["coordinates"] = [poly for poly in g["coordinates"]
+                                    if _ring_area(poly[0]) >= min_area]
+                if not g["coordinates"]:
+                    continue
+        elif t == "Point":
+            c = g["coordinates"]
+            g["coordinates"] = [round(c[0], COORD_PLACES), round(c[1], COORD_PLACES)]
+        kept.append(f)
+    gj["features"] = kept
+    return gj
 
 
 def _clean(f: dict) -> dict:

@@ -12,6 +12,7 @@ that on every drag of the time slider.
 
 from __future__ import annotations
 
+import gzip
 import json
 import mimetypes
 import subprocess
@@ -141,9 +142,26 @@ class Handler(BaseHTTPRequestHandler):
         pass  # quiet; errors still surface through _send_json
 
     # ---------------------------------------------------------------- helpers
+    # Chart GeoJSON is the bulk of what this server sends -- depth areas alone
+    # are a few megabytes -- and a phone on the water is reaching it over a
+    # tailnet, not a LAN. GeoJSON is nearly all digits and punctuation, so it
+    # compresses about eightfold for a few milliseconds of CPU.
+    GZIP_MIN = 1400          # below one packet there is nothing to win
+
     def _send(self, body: bytes, ctype: str, status: int = 200):
+        encoding = None
+        if (len(body) >= self.GZIP_MIN
+                and "gzip" in self.headers.get("Accept-Encoding", "")
+                and ("json" in ctype or ctype.startswith("text/")
+                     or "javascript" in ctype)):
+            body = gzip.compress(body, 6)
+            encoding = "gzip"
+
         self.send_response(status)
         self.send_header("Content-Type", ctype)
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()

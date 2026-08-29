@@ -1311,5 +1311,59 @@ class CatchLogCoordinates(unittest.TestCase):
             self.assertAlmostEqual(row["lon"], sp.lon)
 
 
+class DepthLayer(unittest.TestCase):
+    def setUp(self):
+        from tiderace import charts
+        self.charts = charts
+        if not charts.load("depth_area"):
+            self.skipTest("depth layer not cached — run: tiderace charts")
+
+    def test_depth_survives_simplification(self):
+        """The layer is simplified and sliver-filtered on write to keep the
+        browser able to parse it. These bands are the check that the geometry
+        is still describing the same water afterwards."""
+        for lat, lon, lo, hi in ((41.4408, -71.4228, 49, 66),      # Whale Rock
+                                 (41.4256, -71.3611, 66, 98),      # Brenton Reef
+                                 (41.5750, -71.2967, 33, 49)):     # Dyer Island
+            d = self.charts.depth_at(lat, lon)
+            self.assertIsNotNone(d, f"{lat},{lon}")
+            self.assertEqual((round(d["min_ft"]), round(d["max_ft"])), (lo, hi))
+
+    def test_depth_is_an_overlay_but_land_is_not(self):
+        self.assertIn("depth_area", self.charts.available())
+        self.assertNotIn("land", self.charts.available())
+
+    def test_simplification_keeps_rings_closed(self):
+        gj = self.charts.load("depth_area")
+        for f in gj["features"][:400]:
+            for ring in f["geometry"]["coordinates"]:
+                self.assertGreaterEqual(len(ring), 4)
+                self.assertEqual(ring[0], ring[-1], "ring left open by simplify")
+
+    def test_ramp_is_a_single_hue_stepped_light_to_dark(self):
+        """The map's depth ramp is sequential, so it must be monotone in
+        lightness -- a rainbow here would encode magnitude as identity."""
+        import re
+        html = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "tiderace", "web", "index.html")
+        with open(html) as fh:
+            src = fh.read()
+        m = re.search(r"const DEPTH_RAMP = \[(.*?)\];", src, re.S)
+        self.assertIsNotNone(m, "DEPTH_RAMP not found")
+        ramp = re.findall(r"#([0-9A-Fa-f]{6})", m.group(1))
+        self.assertEqual(len(ramp), 8)
+
+        def lum(h):
+            def lin(c):
+                c /= 255
+                return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+            r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+            return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+
+        lums = [lum(h) for h in ramp]
+        self.assertEqual(lums, sorted(lums, reverse=True),
+                         "depth ramp is not monotone light to dark")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

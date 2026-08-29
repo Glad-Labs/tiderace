@@ -87,7 +87,13 @@ label.chk{display:flex; align-items:center; gap:5px; font-size:12px; color:var(-
 #layers label{display:flex; align-items:center; gap:7px; font-size:12px;
   color:var(--ink-2); cursor:pointer; padding:3px 0}
 #layers .sw{width:10px; height:10px; border-radius:50%; flex:none; border:1px solid rgba(0,0,0,.5)}
+#layers .sw.ramp{width:26px; border-radius:2px}
 #layers .cnt{margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--muted)}
+#depthkey{margin:6px 0 2px}
+#depthkey .bar{display:flex; height:7px; border-radius:2px; overflow:hidden}
+#depthkey .bar i{flex:1}
+#depthkey .ends{display:flex; justify-content:space-between; margin-top:3px;
+  font-family:var(--mono); font-size:9.5px; color:var(--muted)}
 #layers .hint{margin:7px 0 0; padding-top:7px; border-top:1px solid var(--hair);
   font-size:10.5px; color:var(--muted); line-height:1.45; font-family:var(--mono)}
 
@@ -465,7 +471,46 @@ function select(key){
 // rocks are coloured by tide exposure (a rock that covers and uncovers is the
 // classic striper piece), wrecks by whether a depth is charted at all, and
 // seabed by substrate — tautog want boulder, fluke want sand.
+// Charted depth, as a bathymetric fill. This is the one chart layer that is
+// ground rather than marks: it sits under everything, it is never clickable,
+// and it is what makes a drop-off visible instead of merely knowable.
+//
+// A sequential ramp, so it is one hue with monotone lightness — the map's own
+// --depth cyan, stepped from bright shallow to dark deep. Light-means-shallow
+// is both the nautical convention and the useful one here: the shallow edges
+// are where the fishing is, and deep water receding toward the background is
+// exactly the right emphasis. Steps were solved rather than picked, then
+// validated: monotone lightness, every adjacent gap >= 0.06 OKLCH L, single
+// hue (4° spread), and both ends clearing 2:1 against the surface so neither
+// "dries" nor "deep" collapses into the basemap. Checked twice, because this
+// layer has two surfaces: the dark panel (#0B1518) and the desaturated OSM
+// raster the fill actually borders (~#909EA2). It passes on both.
+const DEPTH_RAMP = ['#D2EEF4','#A2DAE7','#73C5D7','#44B0C5',
+                    '#2598AD','#277F8F','#2F6671','#354C52'];
+const DEPTH_LABELS = ['dries','0–2 m','2–5 m','5–10 m',
+                      '10–15 m','15–20 m','20–30 m','30 m+'];
+
 const CHART_STYLE = {
+  depth_area: {
+    kind: 'fill',
+    // DRVAL2 is the deep limit of the band. Anything at or below zero dries.
+    colour: ['step', ['coalesce', ['get','depth_max_m'], 0],
+      DEPTH_RAMP[0],
+      0.5,  DEPTH_RAMP[1],
+      2.5,  DEPTH_RAMP[2],
+      5.5,  DEPTH_RAMP[3],
+      10.5, DEPTH_RAMP[4],
+      15.5, DEPTH_RAMP[5],
+      20.5, DEPTH_RAMP[6],
+      30.5, DEPTH_RAMP[7]],
+    // Opaque on purpose: at partial alpha the colour on screen is a blend with
+    // whatever basemap sits under it, and the ramp that was validated is not
+    // the ramp anyone sees. Depth areas tile the water anyway, so there is
+    // nothing underneath worth keeping.
+    opacity: 1,
+    swatch: `linear-gradient(90deg, ${DEPTH_RAMP[0]}, ${DEPTH_RAMP[3]}, ${DEPTH_RAMP[7]})`,
+    minzoom: 0
+  },
   rocks: {
     colour: ['match', ['get','water_level'],
       'covers and uncovers', '#D9A521',
@@ -509,13 +554,26 @@ const CHART_STYLE = {
     swatch: '#E08A3C', minzoom: 11
   }
 };
-const CHART_ON = {rocks:false, wrecks:true, obstructions:false,
+const CHART_ON = {depth_area:true, rocks:false, wrecks:true, obstructions:false,
                   turbulence:true, kelp:false, seabed:false};
 const CHART_DATA = {};
 
 fetch('/api/meta').then(r=>r.json()).then(m => {
   if (m.source_url) $('#src').href = m.source_url;
 }).catch(()=>{});
+
+// Layers load asynchronously and depth is last in the manifest, so without a
+// reference it would be painted over the rocks it is meant to sit beneath.
+// It goes directly above the basemap, under every point layer. That leaves the
+// seamark raster beneath it, so at full opacity the buoys are covered -- the
+// layers menu says so rather than letting them quietly disappear.
+function FIRST_POINT_LAYER(){
+  const ids = Object.keys(CHART_STYLE)
+    .filter(n => CHART_STYLE[n].kind !== 'fill')
+    .map(n => 'c-' + n)
+    .concat(['bait','bait-label']);
+  return ids.find(id => map.getLayer(id));
+}
 
 async function loadCharts(){
   let meta;
@@ -531,10 +589,13 @@ async function loadCharts(){
   box.innerHTML = '<h4>Chart overlays</h4>' + meta.layers.map(l => {
     const st = CHART_STYLE[l.name] || {};
     return `<label title="${l.label}">
-      <span class="sw" style="background:${st.swatch||'#8CA3A8'}"></span>
+      <span class="sw${st.kind==='fill'?' ramp':''}"
+            style="background:${st.swatch||'#8CA3A8'}"></span>
       <input type="checkbox" data-layer="${l.name}" ${CHART_ON[l.name]?'checked':''}>
       ${l.name}<span class="cnt" id="cnt-${l.name}"></span></label>`;
-  }).join('') + `<p class="hint">NOAA ENC · public domain<br>click any feature for detail</p>`;
+  }).join('') + depthLegend()
+    + `<p class="hint">NOAA ENC · public domain<br>click any feature for detail<br>
+        depth draws over seamarks — turn it off to read the buoys</p>`;
 
   for (const l of meta.layers){
     const st = CHART_STYLE[l.name];
@@ -546,9 +607,33 @@ async function loadCharts(){
     // three quarters of a megabyte.
     if (!CHART_DATA[l.name]) CHART_DATA[l.name] = await (await fetch(l.url)).json();
     const gj = CHART_DATA[l.name];
-    document.querySelector('#cnt-' + l.name).textContent = gj.features.length;
-    if (!MAP_READY) continue;
+    const cnt = document.querySelector('#cnt-' + l.name);
+    if (cnt) cnt.textContent = gj.features.length;
+    // Re-checked after the await, not just before it: loadCharts runs twice --
+    // on boot and again when the map is ready -- and each layer awaits a fetch
+    // in between. Both passes can clear the guard at the top of the loop and
+    // then both try to add the same source; the second throws and takes the
+    // rest of the chart stack with it.
+    if (!MAP_READY || map.getSource('c-' + l.name)) continue;
     map.addSource('c-' + l.name, {type:'geojson', data:gj});
+
+    if (st.kind === 'fill'){
+      // Under every other chart layer and under the spot markers. The band
+      // edges are the depth contours, so a hairline of the map's own ground
+      // colour separates them and reads as the contour at the same time.
+      map.addLayer({
+        id: 'c-' + l.name, type:'fill', source:'c-' + l.name,
+        minzoom: st.minzoom || 0,
+        layout:{visibility: CHART_ON[l.name] ? 'visible' : 'none'},
+        paint:{
+          'fill-color': st.colour,
+          'fill-opacity': st.opacity ?? 0.5,
+          'fill-outline-color': 'rgba(11,21,24,.45)'
+        }
+      }, FIRST_POINT_LAYER());
+      continue;         // ground is not clickable -- see the map click handler
+    }
+
     map.addLayer({
       id: 'c-' + l.name, type:'circle', source:'c-' + l.name,
       minzoom: st.minzoom || 9,
@@ -572,6 +657,15 @@ async function loadCharts(){
     if (MAP_READY && map.getLayer(id))
       map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none');
   });
+}
+
+function depthLegend(){
+  return `<div id="depthkey">
+    <div class="bar">${DEPTH_RAMP.map(c =>
+      `<i style="background:${c}"></i>`).join('')}</div>
+    <div class="ends"><span>${DEPTH_LABELS[0]}</span>
+      <span>${DEPTH_LABELS[DEPTH_LABELS.length-1]}</span></div>
+  </div>`;
 }
 
 function chartPopup(e, layer){
@@ -942,10 +1036,17 @@ function renderMark(){
 // popups; a tap that landed on one of those was not a request for a report.
 map.on('click', e => {
   if (!MAP_READY) return;
-  const layers = ((map.getStyle() || {}).layers || [])
+  // Fills are excluded on purpose. The depth layer covers every square metre of
+  // water, so counting it as "you clicked a feature" would swallow every tap
+  // and the map would silently stop answering.
+  const clickable = ((map.getStyle() || {}).layers || [])
     .map(l => l.id)
-    .filter(id => (id.startsWith('c-') || id === 'bait') && map.getLayer(id));
-  if (layers.length && map.queryRenderedFeatures(e.point, {layers}).length) return;
+    .filter(id => (id === 'bait' ||
+                   (id.startsWith('c-') &&
+                    (CHART_STYLE[id.slice(2)] || {}).kind !== 'fill'))
+                  && map.getLayer(id));
+  if (clickable.length && map.queryRenderedFeatures(e.point, {layers: clickable}).length)
+    return;
   reportAt(e.lngLat.lat, e.lngLat.lng);
 });
 
