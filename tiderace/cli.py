@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timedelta
 
 from . import bait as baitmod
-from . import features, regs, score, spots
+from . import features, gso, regs, score, spots
 from . import log as catchlog
 from .sources import SourceError
 
@@ -118,6 +118,11 @@ def run(argv=None) -> int:
     sub.add_parser("history", help="summarise the catch log")
     sub.add_parser("evaluate", help="does the model beat the free baseline?")
 
+    g = sub.add_parser("gso", help="URI GSO trawl series — 65y temperature climatology")
+    g.add_argument("--rebuild", action="store_true", help="re-parse the spreadsheets")
+    g.add_argument("--station", default="fox_island",
+                   choices=("fox_island", "whale_rock"))
+
     ch = sub.add_parser("charts", help="download NOAA chart features (rocks, wrecks, bottom)")
     ch.add_argument("--bbox", help="xmin,ymin,xmax,ymax (default: Narragansett Bay)")
 
@@ -135,6 +140,8 @@ def run(argv=None) -> int:
         return _cmd_log(args)
     if args.cmd == "history":
         return _cmd_history()
+    if args.cmd == "gso":
+        return _cmd_gso(args)
     if args.cmd == "bait":
         return _cmd_bait(args)
     if args.cmd == "evaluate":
@@ -182,6 +189,36 @@ def _cmd_log(args) -> int:
           f"({when:%Y-%m-%d %H:%M}) with {n} conditions captured")
     if not n:
         print("  ! conditions snapshot failed -- entry saved without features")
+    return 0
+
+
+def _cmd_gso(args) -> int:
+    data = gso.load(rebuild=args.rebuild)
+    if not data:
+        print("\n  GSO spreadsheets not found in data/gso/.")
+        print("  Download catch.xlsx and temp.xlsx from:")
+        print(f"  {gso.SOURCE}\n")
+        return 1
+
+    st = data["stations"][args.station]
+    print(f"\n  {args.station.replace('_', ' ').title()}  ·  "
+          f"{st['years'][0]}–{st['years'][1]}  ·  {st['observations']:,} weekly observations")
+    print("  " + "─" * 62)
+    print(f"  {'week':>5}  {'typical':>8}  {'p10':>6}  {'p90':>6}   thermal window")
+
+    curves = {sp: gso.thermal_season(sp, args.station) for sp in score.PROFILES}
+    for w in range(1, 53, 2):
+        rec = st["weeks"].get(str(w))
+        if not rec:
+            continue
+        openish = [score.PROFILES[sp].name.split()[0].lower()
+                   for sp, c in curves.items() if c.get(w, 0) >= 0.5]
+        print(f"  {w:>5}  {rec['surface_f']:>7.1f}°  {rec['p10_f']:>5.1f}  "
+              f"{rec['p90_f']:>5.1f}   {', '.join(openish) or '—'}")
+
+    print("  " + "─" * 62)
+    print(f"  {gso.CITATION}")
+    print(f"  {gso.SOURCE}\n")
     return 0
 
 

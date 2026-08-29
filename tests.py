@@ -10,7 +10,7 @@ from __future__ import annotations
 import unittest
 from datetime import date, datetime, timedelta
 
-from tiderace import astro, bait, evaluate, regs, score, spots
+from tiderace import astro, bait, evaluate, gso, regs, score, spots
 from tiderace.features import _local_tz, _wind_against_tide
 from tiderace.sources import current_at
 
@@ -187,6 +187,84 @@ class Bait(unittest.TestCase):
             "spring_strength": .7, "bait_signal": 1.0})
         self.assertGreater(fed["score"], base["score"])
         self.assertIn("bait", fed["modifiers"])
+
+
+class GSO(unittest.TestCase):
+    """Climatology maths, tested against a synthetic curve so the suite does
+    not depend on the spreadsheets being downloaded."""
+
+    def _fake(self):
+        # A clean sinusoid: cold in Feb, warm in Aug, like the real bay.
+        import math
+        weeks = {}
+        for w in range(1, 53):
+            t = 54 - 20 * math.cos(2 * math.pi * (w - 6) / 52)
+            weeks[str(w)] = {"surface_f": round(t, 2), "bottom_f": round(t - 1, 2),
+                             "p10_f": round(t - 4, 2), "p90_f": round(t + 4, 2),
+                             "sd_f": 2.0, "n": 60}
+        return {"stations": {"fox_island": {"weeks": weeks, "observations": 3000,
+                                            "years": [1959, 2024]}}}
+
+    def test_excel_serial_dates(self):
+        """Anchored on well-known serials in Excel's 1900 date system, which
+        offsets from 1899-12-30 because of its phantom 1900 leap day."""
+        self.assertEqual(gso._excel_date("45292"), date(2024, 1, 1))
+        self.assertEqual(gso._excel_date("25569"), date(1970, 1, 1))   # unix epoch
+        self.assertEqual(gso._excel_date("21571"), date(1959, 1, 21))  # first GSO row
+        self.assertIsNone(gso._excel_date("not-a-date"))
+
+    def test_celsius_conversion(self):
+        self.assertAlmostEqual(gso.c_to_f(0), 32.0)
+        self.assertAlmostEqual(gso.c_to_f(100), 212.0)
+
+    def test_no_day_estimate_on_a_flat_curve(self):
+        """Regression: a 3F August anomaly reported '35 days', which was purely
+        the clamp -- the summer plateau has no meaningful slope to divide by."""
+        d = self._fake()
+        peak_week = max(d["stations"]["fox_island"]["weeks"].items(),
+                        key=lambda kv: kv[1]["surface_f"])[0]
+        when = date(2026, 1, 1) + timedelta(days=(int(peak_week) - 1) * 7)
+        a = gso.anomaly(d["stations"]["fox_island"]["weeks"][peak_week]["surface_f"] + 3,
+                        when, "fox_island", d)
+        self.assertIsNone(a["season_shift_days"])
+
+    def test_shift_direction_matches_phase(self):
+        d = self._fake()
+        spring = gso.anomaly(60, date(2026, 5, 10), "fox_island", d)
+        autumn = gso.anomaly(60, date(2026, 10, 20), "fox_island", d)
+        self.assertEqual(spring["phase"], "warming")
+        self.assertEqual(autumn["phase"], "cooling")
+        # Warm water in spring is ahead of schedule; in autumn it is behind.
+        if spring["delta_f"] > 0:
+            self.assertGreater(spring["season_shift_days"], 0)
+        if autumn["delta_f"] > 0:
+            self.assertLess(autumn["season_shift_days"], 0)
+
+    def test_shift_is_bounded(self):
+        d = self._fake()
+        a = gso.anomaly(200, date(2026, 5, 10), "fox_island", d)
+        self.assertLessEqual(abs(a["season_shift_days"]), 21)
+
+    def test_thermal_presence_replaces_guessed_months(self):
+        """Tautog should come out bimodal -- spring and autumn, not summer."""
+        curve = gso.thermal_season("tautog", "fox_island", self._fake())
+        if not curve:
+            self.skipTest("no climatology")
+        summer = [v for w, v in curve.items() if 27 <= w <= 35]
+        shoulder = [v for w, v in curve.items() if w in (17, 18, 19, 43, 44, 45)]
+        self.assertLess(max(summer), 0.2)
+        self.assertGreater(max(shoulder), 0.8)
+
+    def test_season_term_degrades_without_climatology(self):
+        p = score.PROFILES["striped_bass"]
+        self.assertGreater(score._season_term(p, 6), 0)      # in season
+        self.assertEqual(score._season_term(p, 1), 0.0)      # out of season
+
+    def test_season_term_uses_thermal_when_given(self):
+        p = score.PROFILES["tautog"]
+        cold = score._season_term(p, 11, week=45, thermal={45: 1.0, 46: 1.0})
+        warm = score._season_term(p, 11, week=45, thermal={45: 0.0, 46: 0.0})
+        self.assertGreater(cold, warm)
 
 
 class Privacy(unittest.TestCase):

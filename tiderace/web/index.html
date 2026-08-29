@@ -261,7 +261,10 @@ function paint(){
   const d = new Date(t);
   $('#tlabel').textContent = d.toLocaleString([], {weekday:'short', hour:'2-digit', minute:'2-digit'});
   const det = GRID.spots.find(s=>s.detail.length)?.detail[TI];
-  $('#tsub').textContent = det ? `${det.light_phase} · moon ${det.moon_phase.toLowerCase()}` : '';
+  $('#tsub').textContent = det
+    ? `${det.light_phase} · moon ${det.moon_phase.toLowerCase()}` +
+      (det.season_note ? ` · ${det.season_note}` : '')
+    : '';
 
   GRID.spots.forEach(sp => {
     const s = sp.scores[TI];

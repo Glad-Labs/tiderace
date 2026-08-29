@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from . import astro, bait, sources
+from . import astro, bait, gso, sources
 from .sources import SourceError
 from .spots import Spot
 
@@ -67,6 +67,17 @@ def build(spot: Spot, start: datetime, hours: int = 48,
     # loop is 96 iterations deep.
     sightings = bait.load() if species else []
 
+    # Sixty-five years of GSO weekly temperature: the thermal window for this
+    # species, and how far ahead or behind normal this year is running.
+    thermal = gso.thermal_season(species, _gso_station(spot)) if species else None
+    shift = None
+    anom = None
+    if thermal:
+        obs = temp_series[-1]["temp_f"] if temp_series else None
+        if obs is not None:
+            anom = gso.anomaly(obs, start.date(), _gso_station(spot))
+            shift = (anom or {}).get("season_shift_days")
+
     fallback_temp = temp_series[-1]["temp_f"] if temp_series else None
     if fallback_temp is None:
         fallback_temp = sources.latest_water_temp(spot.tide_station)
@@ -87,6 +98,10 @@ def build(spot: Spot, start: datetime, hours: int = 48,
 
         rows.append({
             "time": t,
+            "week": min(52, t.isocalendar().week),
+            "thermal_season": thermal,
+            "season_shift_days": shift,
+            "season_note": gso.describe_anomaly(anom) if anom else None,
             "bait_signal": b["signal"],
             "bait_known": b.get("known", False),
             "bait_note": bait.describe(b) if b.get("known") else None,
@@ -148,6 +163,12 @@ def _weather(spot: Spot, start: datetime | None = None,
         except SourceError:
             continue
     return [], []
+
+
+def _gso_station(spot: Spot) -> str:
+    """Whale Rock sits at the mouth and runs cooler and more oceanic than the
+    mid-bay; Fox Island represents everything up-bay of the passages."""
+    return "whale_rock" if spot.lat < 41.50 else "fox_island"
 
 
 def _next_tide(tides: list[dict], when: datetime) -> str | None:

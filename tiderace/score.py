@@ -145,12 +145,45 @@ PROFILES: dict[str, Profile] = {
 
 # ------------------------------------------------------------------- the scorer
 
-def _season_term(p: Profile, month: int) -> float:
-    if month in p.peak_months:
-        return 1.0
-    if month in p.months:
-        return 0.55
-    return 0.0
+def _season_term(p: Profile, month: int, week: int | None = None,
+                 thermal: dict[int, float] | None = None,
+                 shift_days: int = 0) -> float:
+    """Seasonal presence, from measurement where possible.
+
+    Two different things are folded together here and it is worth keeping them
+    apart in your head:
+
+      * **Thermal presence** is derived from sixty-five years of weekly GSO
+        temperature. It is measurement, and it replaces the hand-written month
+        tuples -- which is how the tautog error surfaced, the data carving the
+        summer closure out on its own.
+      * **Migratory peak** is not thermal at all. Stripers peak in May-June and
+        again in September-October because they are *moving through*, not
+        because midsummer is too warm for them. No temperature series can tell
+        you that, so those months stay hand-set.
+
+    `shift_days` slides the thermal lookup when the year is running warm or
+    cold: a spring five degrees ahead of normal pulls the whole run forward by
+    a couple of weeks, which is exactly the local knowledge a fixed calendar
+    cannot hold.
+    """
+    if thermal and week:
+        eff = week + shift_days / 7.0
+        lo = int(eff) % 52 or 52
+        hi = (lo % 52) + 1
+        frac = eff - int(eff)
+        a, b = thermal.get(lo), thermal.get(hi)
+        if a is not None and b is not None:
+            presence = a + (b - a) * frac
+        elif a is not None:
+            presence = a
+        else:
+            presence = 1.0 if month in p.months else 0.0
+    else:
+        presence = 1.0 if month in p.months else 0.0
+
+    peak = 1.0 if month in p.peak_months else 0.72
+    return max(0.0, min(1.0, presence * peak))
 
 
 def _wind_term(p: Profile, wind_kt: float | None, exposed: bool) -> float:
@@ -181,7 +214,9 @@ def score(species: str, feat: dict, exposed: bool = False,
     intended to be replaced by fitted values once a catch log exists."""
     p = PROFILES[species]
     terms: dict[str, float] = {
-        "season": _season_term(p, feat["month"]),
+        "season": _season_term(p, feat["month"], feat.get("week"),
+                               feat.get("thermal_season"),
+                               feat.get("season_shift_days") or 0),
         "temp": trapezoid(feat["water_temp_f"], *p.temp) if feat.get("water_temp_f") else 0.6,
         "current": peaked(feat.get("current_speed", 0.0), *p.current),
         "light": p.light.get(feat["light_phase"], 0.6),

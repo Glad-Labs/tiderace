@@ -137,6 +137,54 @@ tiderace/
   cli.py        forecast / spots / log / history
 ```
 
+## Seasonal timing, from 65 years of measurement
+
+```bash
+python3 -m tiderace gso            # weekly climatology + thermal windows
+```
+
+The species month tuples used to be guesses, and one of them was provably
+wrong. They are now derived from the **URI GSO Fish Trawl Survey** — weekly
+water temperature at two fixed stations since 1959, 6,583 observations, parsed
+with nothing but the standard library (an `.xlsx` is a zip of XML).
+
+Two things worth knowing about what those files actually contain:
+
+- **Temperature is weekly** — the valuable half. It gives a climatology: the
+  water you should expect in any given week, and therefore how far ahead or
+  behind normal this year is running.
+- **Catch is annual means**, not weekly, so it cannot give seasonal timing
+  directly — only long-term abundance trends. There is also no striped bass in
+  it, because a bottom otter trawl is the wrong gear for them.
+
+So presence is *derived*: each species has a thermal preference, and 65 years
+of weekly temperature says when the bay historically sits inside it. The data
+finds tautog's bimodal spring/autumn season on its own, correctly excluding the
+summer months a flat month-list had wrong.
+
+**What temperature cannot tell you** is migratory peak. Stripers peak in
+May–June and again in September–October because they are *moving through*, not
+because midsummer is thermally hostile. Those months stay hand-set, and the
+code says so.
+
+The payoff is season shift. A spring running 5°F warm is about **17 days
+ahead**, and the whole run moves with it:
+
+```
+May, warm    5.3°F warm for the week, spring warm-up ~17 days ahead
+late Oct, cold   7.9°F cold for the week, autumn cool-down ~21 days ahead
+Feb              1.7°F warm for the week
+```
+
+February gets no day estimate on purpose: converting a temperature anomaly into
+a timing shift only works where the climatology is actually moving. On the
+summer plateau and winter floor the curve is flat, and dividing by that slope
+produced a meaningless "35 days" that was purely the clamp.
+
+Data © University of Rhode Island Graduate School of Oceanography. Their
+[data use policy](https://web.uri.edu/gso/research/fish-trawl/) asks that URI's
+role in collecting it be cited in any use — `tiderace gso` prints the citation.
+
 ## Bait
 
 The dominant variable, and the one you cannot compute. Tide and light come out
