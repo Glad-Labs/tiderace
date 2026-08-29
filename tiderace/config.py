@@ -19,6 +19,9 @@ DEFAULTS = {
     # assumed: RI commercial licences are issued to a named individual, so the
     # log should say which one a trip belongs to.
     "license_holder": None,
+    # Aggregate Program enrolment. Permit-required and annual, so it is opt-in:
+    # an unenrolled vessel fishing to these limits would be over its own.
+    "aggregate_program": "none",      # none | winter | summer_fall
     # Extraction backend. Ollama is the default because it is free, local, and
     # needs no Python dependency at all -- the client is plain urllib.
     "llm_backend": "ollama",          # ollama | anthropic | none
@@ -40,6 +43,8 @@ def load(path: str | None = None) -> dict:
         cfg["license_mode"] = "recreational"
     if cfg["llm_backend"] not in ("ollama", "anthropic", "none"):
         cfg["llm_backend"] = "ollama"
+    if cfg["aggregate_program"] not in ("none", "winter", "summer_fall"):
+        cfg["aggregate_program"] = "none"
     return cfg
 
 

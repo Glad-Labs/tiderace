@@ -178,14 +178,23 @@ def parse_notice(sentence: str) -> dict | None:
                 reopens = None
 
     amount = parse_amount(body)
-    per = ("per day" if re.search(r"per (vessel per )?day", low)
+    per = ("per bi-week" if "bi-week" in low or "biweek" in low
+           else "per day" if re.search(r"per (vessel per )?day", low)
            else "per week" if "per week" in low or "/wk" in low else None)
+
+    # The Aggregate Program is a separate, permit-required fishery. Its limits
+    # are not the general commercial ones and must not be compared against them.
+    prog = None
+    if "aggregate" in low:
+        prog = ("winter" if "winter" in low
+                else "summer_fall" if "summer" in low or "fall" in low else "unknown")
 
     return {
         "effective_date": eff.isoformat(),
         "species": name, "species_key": key,
         "license_mode": mode, "change_type": change,
         "amount": amount, "period": per,
+        "aggregate_program": prog,
         "reopens_on": reopens,
         # "until further notice" only means indefinite when no reopen date is
         # given alongside it -- most notices say both.

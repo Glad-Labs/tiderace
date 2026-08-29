@@ -13,6 +13,7 @@ exist so that staleness is visible rather than silent.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -172,7 +173,99 @@ COMMERCIAL: dict[str, CommercialRule] = {
 }
 
 
-def commercial_status(species: str, when: date | None = None) -> dict:
+# ------------------------------------------------------- the Aggregate Program
+#
+# A permit-required commercial programme that pools a daily limit into a longer
+# landing window. It appears nowhere on RIDEM's limits table -- everything below
+# is transcribed from in-season notices, which is a weaker source than the rest
+# of this file and should be treated accordingly.
+#
+# The Summer/Fall limit is deliberately stored as a **multiplier, not a
+# poundage**. The notices say "seven (7) times the daily limit, or two thousand
+# eight hundred (2,800) pounds per week" -- the 2,800 is derived from a 400
+# lb/day base, so hardcoding it would go stale the moment the daily limit moves,
+# which it does several times a season. Storing the multiplier makes the weekly
+# figure follow the daily one automatically.
+#
+# Participation is opt-in and permitted annually, so nothing here applies unless
+# `aggregate_program` is set in config. An unenrolled vessel fishing to these
+# numbers would be over its limit.
+
+@dataclass(frozen=True)
+class AggregatePeriod:
+    key: str
+    name: str
+    species: tuple[str, ...]
+    window: tuple[tuple[int, int], tuple[int, int]] | None
+    multiplier: float | None = None          # x the daily limit
+    fixed_amount: str | None = None          # when not a multiple of the daily
+    unit: str = "per week"
+    note: str = ""
+
+    def is_open(self, when: date) -> bool:
+        if self.window is None:
+            return False
+        md = (when.month, when.day)
+        return self.window[0] <= md <= self.window[1]
+
+
+AGGREGATE: dict[str, AggregatePeriod] = {
+    "summer_fall": AggregatePeriod(
+        "summer_fall", "Summer/Fall Aggregate Program",
+        species=("fluke", "black_sea_bass"),
+        # The notices give no explicit start; the winter programme closes
+        # 30 April, and the summer/fall notices run into December.
+        window=((5, 1), (12, 31)),
+        multiplier=7.0, unit="per week",
+        note="Weekly limit is seven times the daily limit, permitted vessels "
+             "only. Black sea bass was amended from six to seven times daily "
+             "for the 16 Oct - 31 Dec sub-period."),
+    "winter": AggregatePeriod(
+        "winter", "Winter Aggregate Program",
+        species=("fluke",),
+        window=((3, 15), (4, 30)),
+        fixed_amount="6,000 lb", unit="per bi-week",
+        note="Winter I was closed from 1 January 2026 and reopened 15 March at "
+             "6,000 lb per bi-week; the programme closes 30 April. Summer "
+             "flounder only."),
+}
+
+
+def aggregate_status(species: str, program: str,
+                     when: date | None = None) -> dict:
+    """What the Aggregate Program adds for a species, if enrolled."""
+    when = when or date.today()
+    ap = AGGREGATE.get(program)
+    if not ap or species not in ap.species:
+        return {"applies": False}
+
+    base = COMMERCIAL.get(species)
+    daily = None
+    if base and ap.multiplier:
+        m = re.search(r"(\d[\d,]*)\s*lb/day", base.limit or "")
+        if m:
+            daily = int(m.group(1).replace(",", ""))
+
+    if ap.multiplier:
+        derived = (f"{ap.multiplier:g}x daily"
+                   + (f" = {int(daily * ap.multiplier):,} lb {ap.unit}"
+                      if daily else f" {ap.unit}"))
+    else:
+        derived = f"{ap.fixed_amount} {ap.unit}"
+
+    return {
+        "applies": True,
+        "program": ap.name,
+        "open": ap.is_open(when),
+        "limit": derived,
+        "multiplier": ap.multiplier,
+        "note": ap.note,
+        "permit_required": True,
+    }
+
+
+def commercial_status(species: str, when: date | None = None,
+                      program: str | None = None) -> dict:
     when = when or date.today()
     r = COMMERCIAL.get(species)
     if not r:
@@ -196,13 +289,15 @@ def commercial_status(species: str, when: date | None = None) -> dict:
         "days_since_checked": age,
         # Unlike recreational, this is never presented as settled.
         "advisory": True,
+        "aggregate": (aggregate_status(species, program, when)
+                      if program and program != "none" else {"applies": False}),
     }
 
 
 def status(species: str, when: date | None = None,
-           mode: str = "recreational") -> dict:
+           mode: str = "recreational", program: str | None = None) -> dict:
     if mode == "commercial":
-        return commercial_status(species, when)
+        return commercial_status(species, when, program)
 
     when = when or date.today()
     r = RULES.get(species)
@@ -226,8 +321,8 @@ def status(species: str, when: date | None = None,
 
 
 def summary_line(species: str, when: date | None = None,
-                 mode: str = "recreational") -> str:
-    s = status(species, when, mode)
+                 mode: str = "recreational", program: str | None = None) -> str:
+    s = status(species, when, mode, program)
     if not s["known"]:
         return ""
     bits = [s["season"]]
@@ -237,6 +332,9 @@ def summary_line(species: str, when: date | None = None,
         bits.append(f'min {s["min_inches"]:.0f}"')
     if s.get("bag"):
         bits.append(s["bag"])
+    agg = s.get("aggregate") or {}
+    if agg.get("applies") and agg.get("open"):
+        bits.append(f"{agg['program']}: {agg['limit']}")
     return " · ".join(bits)
 
 

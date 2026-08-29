@@ -8,6 +8,7 @@ website is slow trains you to ignore it.
 from __future__ import annotations
 
 import os
+import re
 import unittest
 from datetime import date, datetime, timedelta
 
@@ -636,6 +637,77 @@ class Backends(unittest.TestCase):
     def test_injection_field_is_scoped_to_real_directives(self):
         p = extract.SYSTEM.lower()
         self.assertIn("ordinary fishing prose is never an injection", p)
+
+
+class AggregateProgram(unittest.TestCase):
+    AUG = date(2026, 8, 28)
+    MAR = date(2026, 3, 20)
+
+    def test_enrolment_is_opt_in(self):
+        """Permit required annually — an unenrolled vessel fishing to these
+        limits would be over its own."""
+        self.assertFalse(regs.aggregate_status("fluke", "none", self.AUG)["applies"])
+        self.assertFalse(
+            regs.status("fluke", self.AUG, "commercial")["aggregate"]["applies"])
+        self.assertTrue(
+            regs.status("fluke", self.AUG, "commercial",
+                        "summer_fall")["aggregate"]["applies"])
+
+    def test_summer_fall_is_a_multiplier_not_a_poundage(self):
+        """The notices publish '7x the daily limit, or 2,800 lb per week'. The
+        2,800 is derived from a 400 lb/day base, so storing it would go stale
+        the moment the daily limit moved — which it does several times a
+        season."""
+        a = regs.aggregate_status("fluke", "summer_fall", self.AUG)
+        self.assertEqual(a["multiplier"], 7.0)
+        daily = int(re.search(r"(\d+) lb/day",
+                              regs.COMMERCIAL["fluke"].limit).group(1))
+        self.assertIn(f"{daily * 7:,}", a["limit"])
+
+    def test_winter_is_summer_flounder_only(self):
+        self.assertTrue(regs.aggregate_status("fluke", "winter", self.MAR)["applies"])
+        self.assertFalse(
+            regs.aggregate_status("black_sea_bass", "winter", self.MAR)["applies"])
+
+    def test_winter_window_closes_end_of_april(self):
+        self.assertTrue(regs.aggregate_status("fluke", "winter", self.MAR)["open"])
+        self.assertFalse(regs.aggregate_status("fluke", "winter", self.AUG)["open"])
+        self.assertFalse(
+            regs.aggregate_status("fluke", "winter", date(2026, 5, 1))["open"])
+
+    def test_summary_line_only_mentions_an_open_programme(self):
+        line = regs.summary_line("fluke", self.AUG, "commercial", "summer_fall")
+        self.assertIn("Aggregate", line)
+        self.assertNotIn("Aggregate",
+                         regs.summary_line("fluke", self.AUG, "commercial", "winter"))
+        self.assertNotIn("Aggregate",
+                         regs.summary_line("fluke", self.AUG, "commercial"))
+
+    def test_parser_tags_aggregate_notices(self):
+        n = ridem.parse_notice(
+            "Beginning 12:00AM on Sunday, March 15, 2026, the commercial possession "
+            "limit for Summer Flounder for participants in the Winter Aggregate "
+            "Program will be six-thousand (6,000) pounds per bi-week until further "
+            "notice (permitted vessels only), or until the program closes on "
+            "April 30, 2026.")
+        self.assertEqual(n["aggregate_program"], "winter")
+        self.assertEqual(n["period"], "per bi-week")
+        self.assertEqual(n["amount"]["value"], 6000)
+
+    def test_aggregate_notices_do_not_collide_with_general_limits(self):
+        """Comparing a 6,000 lb bi-weekly aggregate limit against the general
+        300 lb/day one is a category error, not a disagreement."""
+        agg = ridem.parse_notice(
+            "Beginning 12:00AM on Sunday, March 15, 2026, the commercial possession "
+            "limit for Summer Flounder for participants in the Winter Aggregate "
+            "Program will be six-thousand (6,000) pounds per bi-week.")
+        gen = ridem.parse_notice(
+            "Beginning 12:00AM on Sunday, July 19, 2026, the commercial possession "
+            "limit for Summer Flounder will be three hundred (300) pounds per day.")
+        state = reconcile.effective_state([agg, gen], self.AUG)
+        self.assertEqual(len(state), 2)
+        r = reconcile.compare([agg, gen], self.AUG)
+        self.assertEqual([f["severity"] for f in r["findings"]], ["ok", "ok"])
 
 
 class Privacy(unittest.TestCase):

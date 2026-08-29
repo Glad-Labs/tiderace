@@ -427,6 +427,38 @@ Each logged trip records `license_mode` and `license_holder`, because RI
 commercial licences are issued to a named individual and a log that cannot say
 which licence a trip belonged to is no use as a record.
 
+### The Aggregate Program
+
+```bash
+python3 -m tiderace config --aggregate summer_fall   # or winter, or none
+```
+
+A permit-required commercial programme that pools a daily limit into a longer
+landing window. Two periods, both transcribed from in-season notices — it
+appears nowhere on RIDEM's limits table, which makes it a weaker source than
+the rest of `regs.py`:
+
+| period | species | limit |
+|---|---|---|
+| Summer/Fall | fluke, black sea bass | **7× the daily limit**, per week |
+| Winter | fluke only | 6,000 lb per bi-week, 15 Mar – 30 Apr |
+
+The Summer/Fall limit is stored as a **multiplier, not a poundage**. The
+notices say "seven (7) times the daily limit, or two thousand eight hundred
+(2,800) pounds per week" — that 2,800 is derived from a 400 lb/day base, so
+hardcoding it would go stale the moment the daily limit moved, which it does
+several times a season. Storing `7×` makes the weekly figure follow the daily
+one automatically: today it reports 2,100 lb (7 × 300), and on 30 August it
+becomes 2,800 without an edit.
+
+**Enrolment is opt-in and defaults to `none`**, because the permit is annual
+and an unenrolled vessel fishing to these limits would be over its own. Nothing
+in the config assumes you are in the programme.
+
+Adding it also cleared the last mismatch from `scrape --diff`: an aggregate
+notice was being compared against the general commercial limit, which is a
+category error rather than a disagreement. Aggregate notices now key separately.
+
 ## Does it actually work?
 
 ```bash

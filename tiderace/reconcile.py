@@ -35,8 +35,11 @@ from . import regs
 
 
 def _key(n: dict) -> tuple:
-    return (n.get("species_key"), n["license_mode"],
-            n["change_type"], n.get("period"))
+    # The Aggregate Program is a distinct fishery, so its notices key
+    # separately -- comparing a 6,000 lb bi-weekly aggregate limit against the
+    # general 300 lb/day one is not a disagreement, it is a category error.
+    return (n.get("species_key"), n["license_mode"], n["change_type"],
+            n.get("period"), n.get("aggregate_program"))
 
 
 def effective_state(notices: list[dict], on: date | None = None) -> dict:
@@ -93,7 +96,7 @@ def compare(notices: list[dict], on: date | None = None,
     findings = []
 
     for k, n in sorted(state.items(), key=lambda kv: str(kv[0])):
-        species, notice_mode, change, period = k
+        species, notice_mode, change, period, program = k
         if notice_mode not in (mode, "unstated"):
             continue
         rule = regs.COMMERCIAL.get(species) if mode == "commercial" \
@@ -106,9 +109,40 @@ def compare(notices: list[dict], on: date | None = None,
                 "notice": n})
             continue
 
-        stored = getattr(rule, "limit", "") or getattr(rule, "bag", "")
         amount = n.get("amount") or {}
         value = amount.get("value")
+
+        if program:
+            ap = regs.AGGREGATE.get(program)
+            if ap is None:
+                findings.append({
+                    "severity": "unknown", "species": species,
+                    "detail": f"aggregate programme '{program}' is not modelled",
+                    "notice": n})
+                continue
+            # A multiplier-based limit tracks the daily one, so the published
+            # poundage is derived and matching it against a stored number would
+            # be checking arithmetic, not policy.
+            if ap.multiplier:
+                findings.append({
+                    "severity": "ok", "species": species,
+                    "detail": f"{ap.name}: {ap.multiplier:g}x daily (published "
+                              f"{value} {amount.get('unit','')} {period or ''})",
+                    "notice": n})
+            elif ap.fixed_amount and value in _numbers(ap.fixed_amount):
+                findings.append({
+                    "severity": "ok", "species": species,
+                    "detail": f"{ap.name}: {ap.fixed_amount} {ap.unit}",
+                    "notice": n})
+            else:
+                findings.append({
+                    "severity": "mismatch", "species": species,
+                    "detail": (f"{ap.name}: RIDEM {value} {amount.get('unit','')} "
+                               f"{period or ''}  ·  regs.py {ap.fixed_amount}"),
+                    "notice": n})
+            continue
+
+        stored = getattr(rule, "limit", "") or getattr(rule, "bag", "")
 
         if change in ("season_close", "season_open"):
             ridem_open = change == "season_open"

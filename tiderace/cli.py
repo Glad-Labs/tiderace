@@ -123,6 +123,9 @@ def run(argv=None) -> int:
     cf.add_argument("--license", dest="license_mode",
                     choices=("recreational", "commercial"))
     cf.add_argument("--license-holder")
+    cf.add_argument("--aggregate", dest="aggregate_program",
+                    choices=("none", "winter", "summer_fall"),
+                    help="Aggregate Program enrolment (permit required)")
     cf.add_argument("--llm", dest="llm_backend",
                     choices=("ollama", "anthropic", "none"))
     cf.add_argument("--llm-model")
@@ -395,14 +398,19 @@ def _cmd_config(args) -> int:
         changes["license_mode"] = args.license_mode
     if args.license_holder:
         changes["license_holder"] = args.license_holder
-    for attr in ("llm_backend", "llm_model", "ollama_host"):
+    for attr in ("llm_backend", "llm_model", "ollama_host", "aggregate_program"):
         if getattr(args, attr, None):
             changes[attr] = getattr(args, attr)
     cfg = cfgmod.save(changes) if changes else cfgmod.load()
 
     print(f"\n  licence mode   {cfg['license_mode']}")
     print(f"  licence holder {cfg['license_holder'] or '—'}")
+    print(f"  aggregate      {cfg['aggregate_program']}")
     if cfg["license_mode"] == "commercial":
+        if cfg["aggregate_program"] != "none":
+            ap = regs.AGGREGATE[cfg["aggregate_program"]]
+            print(f"\n  {ap.name} — permit required annually.")
+            print(f"  {ap.note}")
         print(f"\n  Commercial limits change in-season. Current numbers: "
               f"{regs.COMMERCIAL_HOTLINE}")
 
@@ -573,14 +581,21 @@ def _cmd_forecast(args) -> int:
         } for w in top], indent=2, default=str))
         return 0
 
-    mode = args.license_mode or cfgmod.load()["license_mode"]
-    reg = regs.status(args.species, start.date(), mode)
+    _cfg = cfgmod.load()
+    mode = args.license_mode or _cfg["license_mode"]
+    program = _cfg.get("aggregate_program", "none")
+    reg = regs.status(args.species, start.date(), mode, program)
     print()
     print(f"  {profile.name.upper()}  —  Narragansett Bay")
     if reg.get("known"):
         flag = "OPEN" if reg["open"] else "CLOSED"
         tag = "COMMERCIAL" if mode == "commercial" else "recreational"
-        print(f"  [{tag}]  {flag} · {regs.summary_line(args.species, start.date(), mode)}")
+        print(f"  [{tag}]  {flag} · "
+              f"{regs.summary_line(args.species, start.date(), mode, program)}")
+        agg = reg.get("aggregate") or {}
+        if agg.get("applies"):
+            state = "open" if agg["open"] else "closed for the season"
+            print(f"           {agg['program']} ({state}) — permit required")
         for d in (regs.differences(args.species, start.date())
                   if mode == "commercial" else []):
             print(f"           differs from recreational — {d}")
