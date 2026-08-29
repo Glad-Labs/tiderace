@@ -27,7 +27,7 @@ WX_PRECISION = 2
 
 CO_OPS = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 NWS = "https://api.weather.gov"
-UA = "tiderace (github.com/gladlabs; mattg@gladlabs.io)"
+UA = "tiderace (+https://github.com/glad-labs/tiderace)"
 
 CACHE_DIR = os.environ.get(
     "TIDERACE_CACHE", os.path.join(os.path.dirname(__file__), "..", ".cache")

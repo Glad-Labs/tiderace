@@ -21,6 +21,11 @@ import os
 import urllib.parse
 import urllib.request
 
+# Identifies the project rather than a person: a sysadmin reading their logs
+# wants to know what is calling and where to complain, and the repository
+# answers both without publishing an email address.
+UA = "tiderace (+https://github.com/glad-labs/tiderace)"
+
 ENC = "https://encdirect.noaa.gov/arcgis/rest/services/encdirect"
 BAND = "enc_harbour"
 PAGE = 1000                     # service maxRecordCount
@@ -50,7 +55,7 @@ WATLEV = {
 
 def _get(url: str) -> dict:
     req = urllib.request.Request(url, headers={
-        "User-Agent": "tiderace (mattg@gladlabs.io)"})
+        "User-Agent": UA})
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read().decode())
 
