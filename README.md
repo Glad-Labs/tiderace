@@ -455,7 +455,35 @@ becomes 2,800 without an edit.
 and an unenrolled vessel fishing to these limits would be over its own. Nothing
 in the config assumes you are in the programme.
 
-Adding it also cleared the last mismatch from `scrape --diff`: an aggregate
+### Parallel fisheries
+
+```bash
+python3 -m tiderace config --sub-fishery general_category   # or floating_fish_trap
+```
+
+Scup runs two fisheries side by side with different limits. On 1 April 2026
+**both were set to 2,000 lb/day** — identical numbers, different licences,
+indistinguishable unless the name is carried through. A Floating Fish Trap
+limit is not a disagreement with a General Category one, so notices key by
+sub-fishery and `--diff` filters to the one you operate in.
+
+Answering that question also uncovered two bugs worth recording:
+
+- **Possession limits expire too.** A notice's own successor date was parsed
+  for possession limits but only *used* for closures, so an April rule was
+  reported as in force in August — against code that was already correct.
+- **The supersede verbs were too narrow.** "or until the program closes on
+  April 30" ends a rule exactly as "until the next sub period begins on May 1"
+  does. Only the latter matched, so the Winter Aggregate limit never expired.
+
+And a structural point: **the amendments page lists changes, not current
+state.** Once expired notices were correctly dropped, several fisheries had
+nothing left to compare. The rule actually in force is usually written inside
+the spent notice's own tail — "…at ten thousand (10,000) pounds per week" — so
+successors are promoted. Scup General Category resolves to 10,000 lb/week and
+tautog to 10 fish/day, both matching `regs.py`.
+
+Adding the Aggregate Program also cleared the last mismatch from `scrape --diff`: an aggregate
 notice was being compared against the general commercial limit, which is a
 category error rather than a disagreement. Aggregate notices now key separately.
 
