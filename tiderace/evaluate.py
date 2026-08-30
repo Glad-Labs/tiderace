@@ -115,8 +115,7 @@ def evaluate(entries: list[dict] | None = None) -> dict:
         # tracks catch as well as the full model does, the birds are not
         # earning their place.
         c_nb = dict(c)
-        if "ebird" in (c.get("bait_sources") or []):
-            c_nb["bait_signal"] = 0.0
+        c_nb["bird_signal"] = 0.0
         nobird.append(score.score(sp, c_nb, exposed=bool(c.get("exposed")))["score"])
         base.append(baseline(c))
         sol.append(solunar_baseline(c))

@@ -1160,28 +1160,71 @@ class Birds(unittest.TestCase):
         self.assertIn("data/config.json", ignore)
 
 
-class BirdsFeedTheForecast(unittest.TestCase):
-    """Birds enter as bait observations, not as a new score term."""
+class BirdsAreNotBait(unittest.TestCase):
+    """Seeing bait is an observation. Seeing birds is a guess about bait."""
+
+    BASE = dict(month=8, water_temp_f=70, current_speed=1.3,
+                light_phase="night", wind_kt=7, pressure_trend_3h=-0.4,
+                spring_strength=0.9)
+
+    def _score(self, bait_sig, bird_sig):
+        return score.score("striped_bass",
+                           dict(self.BASE, bait_signal=bait_sig,
+                                bird_signal=bird_sig))
+
+    def test_a_weak_bird_never_dilutes_a_direct_sighting(self):
+        """The bug this replaced: birds were written into the bait log with a
+        lower confidence, and a single `trace` tern record pulled a `loaded`
+        eyeball sighting of silversides from +0.56 down to +0.44."""
+        alone = self._score(0.8, 0.0)
+        with_weak_bird = self._score(0.8, 0.1)
+        self.assertEqual(alone["score"], with_weak_bird["score"])
+        self.assertEqual(alone["modifiers"].get("bait"),
+                         with_weak_bird["modifiers"].get("bait"))
+
+    def test_observed_bait_takes_precedence_over_birds(self):
+        """A proxy is worth something without the measurement and nothing
+        with it."""
+        both = self._score(0.8, 0.9)
+        self.assertIn("bait", both["modifiers"])
+        self.assertNotIn("birds", both["modifiers"])
+
+    def test_birds_stand_in_when_nothing_was_seen(self):
+        nothing = self._score(0.0, 0.0)
+        birds_only = self._score(0.0, 0.6)
+        self.assertGreater(birds_only["score"], nothing["score"])
+        self.assertIn("birds", birds_only["modifiers"])
+
+    def test_birds_are_discounted_against_a_real_sighting(self):
+        self.assertLess(birds.BIRD_DISCOUNT, 1.0)
+        same = self._score(0.6, 0.0)["score"]
+        proxy = self._score(0.0, 0.6)["score"]
+        self.assertLessEqual(proxy, same)
+
+    def test_birds_are_never_written_to_the_bait_log(self):
+        """They are recomputed on demand so they cannot pile up into something
+        that later looks like evidence."""
+        self.assertFalse(hasattr(birds, "sync_to_bait_log"))
+        import inspect
+        src = inspect.getsource(birds)
+        self.assertNotIn("baitmod.record", src)
 
     def test_bird_species_imply_a_sensible_bait(self):
-        """Terns work small stuff, gannets bigger, shearwaters sand eels."""
         m = birds.BIRD_IMPLIES_BAIT
         self.assertEqual(m["Common Tern"], "silversides")
         self.assertEqual(m["Northern Gannet"], "bunker")
         self.assertEqual(m["Great Shearwater"], "sand eels")
-        # Robbers and slick-pickers imply activity but not a bait type.
         self.assertIsNone(m["Parasitic Jaeger"])
         self.assertIsNone(m["Wilson's Storm-Petrel"])
 
     def test_implied_baits_exist_in_the_bait_model(self):
-        """A bait type the scorer has never heard of would silently score zero."""
         for b in birds.BIRD_IMPLIES_BAIT.values():
             if b is None:
                 continue
             self.assertTrue(any(b in rel for rel in bait.RELEVANCE.values()),
                             f"{b} is implied by a bird but unknown to the scorer")
 
-    def test_abundance_ladder_is_monotonic_and_uses_the_shared_vocabulary(self):
+    def test_abundance_uses_the_shared_vocabulary(self):
         prev = -1
         for w in (1, 20, 60, 400):
             a = birds._abundance(w)
@@ -1189,41 +1232,14 @@ class BirdsFeedTheForecast(unittest.TestCase):
             self.assertGreaterEqual(bait.ABUNDANCE[a], prev)
             prev = bait.ABUNDANCE[a]
 
-    def test_derived_confidence_never_claims_certainty(self):
-        """A checklist location covers more water than standing there does."""
-        import inspect
-        src = inspect.getsource(birds.derived_sightings)
-        self.assertIn('"medium"', src)
-        self.assertNotIn('"high"', src)
-
-    def test_bait_can_be_scored_without_a_source(self):
-        """The only way to ask whether the model works because of the physics
-        or because of the birds."""
-        rows = [
-            {"bait": "silversides", "lat": 41.36, "lon": -71.64,
-             "when": "2026-08-29T12:00", "abundance": "loaded",
-             "confidence": "high", "source": "own"},
-            {"bait": "silversides", "lat": 41.36, "lon": -71.64,
-             "when": "2026-08-29T12:00", "abundance": "trace",
-             "confidence": "medium", "source": "ebird"},
-        ]
-        when = datetime(2026, 8, 29, 13, 0)
-        both = bait.bait_at(41.36, -71.64, when, "striped_bass", rows)
-        own = bait.bait_at(41.36, -71.64, when, "striped_bass", rows,
-                           exclude_sources={"ebird"})
-        self.assertEqual(both["sources"], ["ebird", "own"])
-        self.assertEqual(own["sources"], ["own"])
-        self.assertNotEqual(both["signal"], own["signal"])
-
-    def test_evaluate_reports_the_model_without_birds(self):
+    def test_evaluate_can_remove_the_birds(self):
         base = {"current_speed": 1.2, "light_phase": "night", "month": 9,
                 "water_temp_f": 62, "wind_kt": 8, "spring_strength": .6,
                 "pressure_trend_3h": -.5, "exposed": False,
-                "bait_signal": 0.8, "bait_sources": ["ebird"]}
+                "bait_signal": 0.0, "bird_signal": 0.8}
         rows = [{"species": "striped_bass", "count": n, "conditions": dict(base)}
                 for n in (0, 1, 2, 3, 4)]
-        r = evaluate.evaluate(rows)
-        self.assertIn("model_without_birds_rho", r)
+        self.assertIn("model_without_birds_rho", evaluate.evaluate(rows))
 
 
 class SurfaceCurrent(unittest.TestCase):

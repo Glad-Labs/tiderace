@@ -143,10 +143,9 @@ def run(argv=None) -> int:
                     help="lat,lon (default: Charlestown Breachway)")
     bd.add_argument("--km", type=int, default=25)
     bd.add_argument("--days", type=int, default=3)
-    bd.add_argument("--sync", action="store_true",
-                    help="add the implied bait sightings to the bait log")
-    bd.add_argument("--dry-run", action="store_true",
-                    help="show what --sync would add, and add nothing")
+    bd.add_argument("--species", dest="bird_species", default="striped_bass",
+                    choices=sorted(score.PROFILES),
+                    help="whose diet to read the birds against")
 
     hm = sub.add_parser("hms", help="federal rules for tuna, marlin, swordfish")
     hm.add_argument("species", nargs="?", help="bluefin, yellowfin, white marlin…")
@@ -462,26 +461,22 @@ def _cmd_birds(args) -> int:
         w = birds.BAIT_BIRDS.get(name, 0)
         print(f"    {n:>6}  {name:<28} weight {w:.2f}")
 
-    if args.sync or args.dry_run:
-        res = birds.sync_to_bait_log(lat, lon, args.km, args.days,
-                                     apply=args.sync and not args.dry_run)
-        print()
-        print("  implied bait sightings")
-        for d in res["sightings"]:
-            print(f"    {d['abundance']:<10} {d['bait']:<13} "
-                  f"conf {d['confidence']:<7} {d['when'][:16]}")
-        print(f"\n    {res['found']} implied · {res['already_logged']} already logged"
-              f" · {res['applied']} added")
-        if args.dry_run:
-            print("    (dry run — nothing written)")
+    from . import birds as B
+    sig = B.signal_at(lat, lon, args.bird_species, args.km, args.days)
+    print()
+    print(f"  as a bait proxy for {args.bird_species}")
+    if sig["known"]:
+        print(f"    signal {sig['signal']:+.2f}   {B.describe(sig)}")
+    else:
+        print("    nothing relevant to this species")
 
     print()
     print("  " + "─" * 74)
-    print("  Bait type is inferred from the bird, not observed: terns work small")
-    print("  stuff, gannets bigger, shearwaters sand eels offshore. Synced")
-    print("  sightings are tagged source=ebird so evaluation can tell them from")
-    print("  yours, and confidence is capped at medium — a checklist location")
-    print("  covers more water than standing there does.\n")
+    print("  Birds are kept OUT of the bait log. Seeing bait is an observation;")
+    print("  seeing birds is a guess about bait. They also loaf, rest and pass")
+    print("  through. So this never gets written down, and in the forecast a")
+    print("  bait sighting you made yourself always outranks it — birds only")
+    print("  count where nothing has been seen.\n")
     return 0
 
 

@@ -126,23 +126,29 @@ def bait_activity(lat: float, lon: float, radius_km: int = 25,
 
 # ---------------------------------------------------------------- inference
 #
-# Birds feed the forecast the same way your own sightings do -- as bait
-# observations, through the existing decay -- rather than as a separate score
-# term. That is deliberate on three counts:
+# Birds are kept OUT of the bait log, and the distinction is not pedantry.
 #
-#   * It IS the same fact. A tern working a patch and you seeing silversides
-#     are two reports of one thing, and the bait layer already knows how to
-#     age a report and weigh it per predator.
-#   * A new multiplicative term would double-count. Birds are over bait; bait
-#     is already in the score. Multiplying both would say the same thing twice
-#     and call it agreement.
-#   * Provenance survives. Every derived sighting is tagged `source="ebird"`,
-#     so the evaluation can ask whether the model works because of physics or
-#     because of birds -- a question it could not ask if these arrived
-#     indistinguishable from your own.
+#   Seeing bait is an observation. Seeing birds is a guess about bait.
 #
-# What birds cannot tell you is WHAT the bait is. That is inferred from the
-# bird, which is defensible but is an inference, and it is recorded as one.
+# Birds are over bait often enough to be worth having, and not often enough to
+# be the same thing: they also loaf, rest, follow boats, and pass through. An
+# earlier version wrote them into the bait log with a lower confidence, which
+# quietly made a certainty and an inference the same kind of record differing
+# by a tag. It produced exactly the failure that framing invites -- a single
+# `trace` tern record DILUTED a `loaded` sighting of silversides that had been
+# made by eye, dropping the signal from +0.56 to +0.44.
+#
+# A weak inference must never weaken a direct observation. So birds live in
+# their own layer, and the rule between them is precedence rather than blend:
+#
+#   observed bait present  ->  birds add nothing, the real thing is already known
+#   no observed bait       ->  birds stand in, at a discount
+#
+# A proxy is worth something when you lack the measurement and worth nothing
+# when you have it.
+#
+# What birds cannot tell you at all is WHAT the bait is. That is inferred from
+# the bird, which is defensible and is still an inference.
 
 BIRD_IMPLIES_BAIT = {
     # small terns plunge from low down onto small stuff
@@ -212,35 +218,62 @@ def derived_sightings(lat: float, lon: float, radius_km: int = 25,
     return out
 
 
-def sync_to_bait_log(lat: float, lon: float, radius_km: int = 25,
-                     days_back: int = 3, apply: bool = False) -> dict:
-    """Add derived sightings to the bait log, skipping ones already there.
 
-    Deduplicated on place and day: re-running this must not stack the same
-    checklist into the log five times and manufacture a bait pile out of one
-    observation.
+
+# How much a pure-bird signal is worth against a seen-it-yourself one. Birds
+# are a good proxy, not a great one, and this is the discount for that.
+BIRD_DISCOUNT = 0.55
+
+
+def signal_at(lat: float, lon: float, species: str,
+              radius_km: int = 25, days_back: int = 3) -> dict:
+    """A bait-like signal derived from birds, on the same -1..1 scale.
+
+    Deliberately never written anywhere. It is recomputed from eBird when
+    asked, so it cannot accumulate in a log and cannot be mistaken later for
+    something anybody saw.
     """
-    from . import bait as baitmod
-    derived = derived_sightings(lat, lon, radius_km, days_back)
-    existing = baitmod.load()
+    from .bait import RELEVANCE
+    rel = RELEVANCE.get(species, {})
+    if not rel:
+        return {"signal": 0.0, "known": False}
 
-    def seen(d):
-        for e in existing:
-            if e.get("source") != "ebird":
-                continue
-            if (abs(e.get("lat", 0) - d["lat"]) < 0.002
-                    and abs(e.get("lon", 0) - d["lon"]) < 0.002
-                    and (e.get("when") or "")[:10] == d["when"][:10]):
-                return True
-        return False
+    try:
+        derived = derived_sightings(lat, lon, radius_km, days_back)
+    except Exception:                                             # noqa: BLE001
+        return {"signal": 0.0, "known": False}
+    if not derived:
+        return {"signal": 0.0, "known": False}
 
-    new = [d for d in derived if not seen(d)]
-    if apply:
-        for d in new:
-            baitmod.record(baitmod.Sighting(
-                bait=d["bait"], lat=d["lat"], lon=d["lon"], when=d["when"],
-                abundance=d["abundance"], source="ebird",
-                confidence=d["confidence"], notes=d["notes"]))
-    return {"found": len(derived), "new": len(new),
-            "already_logged": len(derived) - len(new),
-            "applied": len(new) if apply else 0, "sightings": new}
+    from .bait import ABUNDANCE, CONFIDENCE, HALF_LIFE_DAYS, MAX_NM, SIGMA_NM, _nm
+    import math
+    from datetime import datetime
+
+    now = datetime.now()
+    best, top = 0.0, None
+    for d in derived:
+        r = rel.get(d["bait"])
+        if not r:
+            continue
+        dist = _nm(lat, lon, d["lat"], d["lon"])
+        if dist > MAX_NM:
+            continue
+        try:
+            age = max(0.0, (now - datetime.fromisoformat(d["when"])).total_seconds() / 86400)
+        except ValueError:
+            continue
+        w = (0.5 ** (age / HALF_LIFE_DAYS)) * math.exp(-(dist ** 2) / (2 * SIGMA_NM ** 2))
+        v = w * r * ABUNDANCE.get(d["abundance"], 0.4) \
+            * CONFIDENCE.get(d["confidence"], 0.7) * BIRD_DISCOUNT
+        if v > best:
+            best, top = v, d
+
+    return {"signal": round(min(1.0, best), 3), "known": bool(top), "top": top}
+
+
+def describe(sig: dict) -> str:
+    if not sig.get("known"):
+        return "no bird activity on record nearby"
+    t = sig["top"]
+    return (f"{t['abundance']} {t['bait']} implied by birds "
+            f"({t['notes'].split(chr(8212))[0].strip()[:38]})")

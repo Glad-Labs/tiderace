@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from . import astro, bait, gso, solunar, sources
+from . import astro, bait, birds as birdmod, gso, solunar, sources
 from .sources import SourceError
 from .spots import Spot
 
@@ -67,6 +67,12 @@ def build(spot: Spot, start: datetime, hours: int = 48,
     # loop is 96 iterations deep.
     sightings = bait.load() if species else []
 
+    # Computed once per spot, never stored. Birds are a live proxy, not a
+    # record of anything, and writing them down would let them accumulate into
+    # something that looks like evidence.
+    _bird = ({"signal": 0.0, "known": False} if not species else
+             birdmod.signal_at(spot.lat, spot.lon, species))
+
     # Lunar events are a per-day, per-place calculation, so they are computed
     # once here rather than 96 times in the loop. Recorded on every row even
     # though nothing scores them -- a factor you did not record is a factor you
@@ -120,6 +126,8 @@ def build(spot: Spot, start: datetime, hours: int = 48,
             "solunar_kind": sol["kind"],
             "bait_signal": b["signal"],
             "bait_sources": b.get("sources"),
+            "bird_signal": _bird["signal"],
+            "bird_note": birdmod.describe(_bird) if _bird.get("known") else None,
             "bait_known": b.get("known", False),
             "bait_note": bait.describe(b) if b.get("known") else None,
             "month": t.month,

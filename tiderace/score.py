@@ -258,10 +258,18 @@ def score(species: str, feat: dict, exposed: bool = False,
     # Bait scales everything rather than nudging one term: perfect water with
     # nothing to eat in it is still an empty spot. No reports means unknown,
     # which is neutral -- only an explicit "nothing around" scores below 1.
-    bait_signal = feat.get("bait_signal")
+    # Observed bait outranks birds. Birds are a proxy for bait, and a proxy is
+    # worth something when you lack the measurement and nothing when you have
+    # it -- so this is precedence, not a blend. Blending let a trace bird
+    # record weaken a sighting somebody made with their own eyes.
+    bait_signal = feat.get("bait_signal") or 0.0
+    bird_signal = feat.get("bird_signal") or 0.0
     if bait_signal:
         from .bait import modifier as _bait_mod
         mods["bait"] = round(_bait_mod(bait_signal), 3)
+    elif bird_signal:
+        from .bait import modifier as _bait_mod
+        mods["birds"] = round(_bait_mod(bird_signal), 3)
 
     for m in mods.values():
         total *= m
@@ -296,7 +304,7 @@ def explain(result: dict, top_n: int = 3) -> str:
     # spot_quality is always < 1 by construction, so only mention it when the
     # spot is genuinely a weak choice rather than merely not the very best.
     thresholds = {"spot_quality": 0.78}
-    pretty = {"bait": "bait nearby", "heat_night": "heat pushing the bite to dark",
+    pretty = {"bait": "bait seen nearby", "birds": "birds working nearby", "heat_night": "heat pushing the bite to dark",
               "heat_daytime": "daytime heat", "tide_stage": "wrong tide stage",
               "spot_quality": "spot quality", "spring_tide": "neap tide",
               "wind_against_tide": "wind against tide"}
