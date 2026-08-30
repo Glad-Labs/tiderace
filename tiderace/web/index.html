@@ -316,7 +316,10 @@ function makeMarker(sp){
         box-shadow:0 0 0 1px rgba(228,236,238,.35);flex:none"></div>
      <div class="lbl" style="font-family:var(--mono);font-size:10px;font-weight:600;
         color:#E4ECEE;text-shadow:0 1px 3px #0B1518,0 0 6px #0B1518;white-space:nowrap">${sp.name}</div>`;
-  el.onclick = () => select(sp.key);
+  // Markers live inside the map's canvas container, so a tap on one also
+  // reaches the map's own click handler -- selecting the spot AND dropping a
+  // mark pin on top of it, with a report request behind it.
+  el.onclick = ev => { ev.stopPropagation(); select(sp.key); };
   const m = new maplibregl.Marker({element:el, anchor:'center'})
       .setLngLat([sp.lon, sp.lat]).addTo(map);
   m.el = el;

@@ -440,9 +440,14 @@ def _cmd_reports(args) -> int:
         return 0
 
     outlets = sorted({r["outlet"] for r in rows})
+    people = sorted({r["witness"] for r in rows})
     weeks = sorted({r["week"] for r in rows})
-    print(f"\n{len(rows)} dated observations from {len(outlets)} outlet(s) "
-          f"across {len(weeks)} week(s): {', '.join(outlets)}")
+    print(f"\n{len(rows)} dated observations across {len(weeks)} week(s): "
+          f"{len(people)} distinct observers, published by {len(outlets)} "
+          f"outlet(s) ({', '.join(outlets)}).")
+    print("A column relays several tackle shops, and two magazines often relay "
+          "the same one,\nso witnesses are counted by who saw the fish, not who "
+          "printed it.")
     print("Reports corroborate. They never outrank what you saw yourself.\n")
 
     want = [args.rep_species] if args.rep_species else sorted(score.PROFILES)
@@ -463,7 +468,8 @@ def _cmd_reports(args) -> int:
         print("\n  ── the model and the reports disagree ──")
         for d in dis:
             print(f"  {d['species']}: model says absent this week "
-                  f"({d['model_presence']:.2f}), {d['witnesses']} outlet(s) say caught")
+                  f"({d['model_presence']:.2f}), {d['witnesses']} independent "
+                  f"observer(s) say caught")
             for q in d["quotes"]:
                 print(f"      “{q}”")
             print("      Surface thermometers read warmer than the structure these "
@@ -499,7 +505,6 @@ def _cmd_birds(args) -> int:
 
     print()
     for s in r["hotspots"]:
-        d = birds and 0
         print(f"    {s['weighted']:>7.0f}  {s['birds']:>5} birds  "
               f"{s['place'][:38]:<38} {s['last'][:16]}")
         print(f"             {', '.join(s['species'])[:66]}")
@@ -1060,15 +1065,25 @@ def _cmd_stations(args) -> int:
         print("\n  tiderace stations --at 41.4408,-71.4228   to resolve a point\n")
         return 0
 
-    lat, lon = spots.parse_coord(args.at)
-    res = stations.resolve(lat, lon)
+    try:
+        lat, lon = spots.parse_coord(args.at)
+        res = stations.resolve(lat, lon)
+    except (ValueError, stations.StationError) as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+
     print(f"\n  {lat:.5f}, {lon:.5f}   confidence: {res['confidence']}")
     print("  " + "─" * 74)
+    # `resolve` documents returning None for any of these and says so in its
+    # warnings; subscripting them anyway turned a prepared message into a
+    # traceback.
     c, t, tp = res["current"], res["tide"], res.get("temp")
-    print(f"  current   {c['id']:<9} {c['name'][:40]:<42}{c['distance_nm']:>5} nm")
-    print(f"  tide      {t['id']:<9} {t['name'][:40]:<42}{t['distance_nm']:>5} nm")
-    if tp:
-        print(f"  temp      {tp['id']:<9} {tp['name'][:40]:<42}{tp['distance_nm']:>5} nm")
+    row = "  {:<9} {:<9} {:<42}{:>5} nm"
+    for label, st in (("current", c), ("tide", t), ("temp", tp)):
+        if st:
+            print(row.format(label, st["id"], st["name"][:40], st["distance_nm"]))
+        elif label != "temp":
+            print(f"  {label:<9} none found")
 
     if res["current_rejected"]:
         print("\n  rejected — path crosses land:")

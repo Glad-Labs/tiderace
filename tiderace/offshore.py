@@ -80,7 +80,13 @@ def _get(url: str, ttl: int = 6 * 3600) -> str:
     if os.path.exists(p) and time.time() - os.path.getmtime(p) < ttl:
         with open(p) as fh:
             return fh.read()
+    # A miss suppresses the request, never the data. A body already on disk is
+    # stale, not wrong -- refusing to serve it because one later request timed
+    # out threw away the good scene and the bad news together.
     if _negcache(p):
+        if os.path.exists(p):
+            with open(p) as fh:
+                return fh.read()
         raise OffshoreError("recently unavailable (cached miss)")
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     try:
@@ -94,6 +100,10 @@ def _get(url: str, ttl: int = 6 * 3600) -> str:
         raise OffshoreError(f"{type(e).__name__}: {e}") from e
     with open(p, "w") as fh:
         fh.write(body)
+    # The URL answered, so whatever it was that failed is over. Leaving the
+    # marker meant one transient timeout kept costing a request 12 hours later.
+    if os.path.exists(p + ".miss"):
+        os.remove(p + ".miss")
     return body
 
 

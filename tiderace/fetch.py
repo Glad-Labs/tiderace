@@ -217,7 +217,29 @@ SOURCES = {
     "otw_ri_report": {
         "url": "https://onthewater.com/fishing-reports",
         "kind": "report",
-        "note": "Editorial fishing reports. Extract facts only — never store prose.",
+        "note": "Editorial fishing reports. Extract facts only — never store prose. "
+                "Relays Ocean State Tackle (Providence) and The Saltwater Edge "
+                "(Middletown), so it is several witnesses, not one.",
+    },
+    "fisherman_ri": {
+        "url": "https://www.thefisherman.com/area/rhode-island/",
+        "kind": "report",
+        "note": "The Fisherman, RI area page. Relays Snug Harbor Marina and Watch "
+                "Hill Outfitters — expect overlap with On The Water on the same "
+                "shops, which is exactly why witnesses are keyed on the shop.",
+    },
+    "coastal_angler_ri": {
+        "url": "https://coastalanglermag.com/rhodeisland/report/",
+        "kind": "report",
+        "note": "Coastal Angler weekly RI column (Zach Harvey). Independent byline; "
+                "Block Island and south shore heavy.",
+    },
+    "risaa": {
+        "url": "https://www.risaa.org/",
+        "kind": "report",
+        "note": "RI Saltwater Anglers Association. Member reports rather than a "
+                "trade column — a genuinely different observer pool from the "
+                "tackle-shop circuit the magazines all phone.",
     },
 }
 

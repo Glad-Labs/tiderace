@@ -1761,10 +1761,17 @@ class Reports(unittest.TestCase):
     URL2 = "https://thefisherman.com/ri-report"
 
     def _rows(self, specs):
-        """specs: (url, species_key, day) -> queue-shaped catch_report rows."""
-        return [{"kind": "catch_report", "species_key": k, "species_raw": k,
-                 "observed_on": d, "source_url": u, "place": "Point Judith",
-                 "quote": "q", "confidence": "high"} for u, k, d in specs]
+        """specs: (url, species_key, day[, who[, place]]) -> queue rows."""
+        out = []
+        for i, spec in enumerate(specs):
+            u, k, d = spec[:3]
+            who = spec[3] if len(spec) > 3 else ""
+            place = spec[4] if len(spec) > 4 else "Point Judith"
+            out.append({"kind": "catch_report", "species_key": k, "species_raw": k,
+                        "observed_on": d, "source_url": u, "place": place,
+                        "attributed_to": who, "queued_at": f"2026-08-28T00:00:{i:02d}",
+                        "quote": "q", "confidence": "high"})
+        return out
 
     def _load(self, specs):
         import unittest.mock as m
@@ -1776,10 +1783,13 @@ class Reports(unittest.TestCase):
         # The invariant that matters. A weekly report naming a species in six
         # places is ONE observation, not six -- counting rows would manufacture
         # a consensus out of a single writer's week.
-        rows = self._load([(self.URL, "tautog", "2026-08-27")] * 6)
-        self.assertEqual(len(rows), 6, "all rows should load")
+        # Six genuinely different places, one unattributed column: still one
+        # witness, because one writer saw all six.
+        rows = self._load([(self.URL, "tautog", "2026-08-27", "", p)
+                           for p in ("a", "b", "c", "d", "e", "f")])
+        self.assertEqual(len(rows), 6, "six distinct observations should load")
         ev = reports.corroborate("tautog", date(2026, 8, 28), rows)
-        self.assertEqual(ev["witnesses"], 1, "six rows from one outlet is one witness")
+        self.assertEqual(ev["witnesses"], 1, "one unattributed column is one witness")
         self.assertEqual(ev["observations"], 6)
 
     def test_separate_outlets_are_separate_witnesses(self):
@@ -1811,11 +1821,186 @@ class Reports(unittest.TestCase):
                            ("porgies", "scup"), ("blackfish", "tautog"), ("tog", "tautog")):
             self.assertEqual(extract.normalize_species(name)[0], want, name)
 
+    def test_one_column_can_hold_several_witnesses(self):
+        # A single On The Water column quotes Ocean State Tackle in one
+        # paragraph and The Saltwater Edge in the next. Keying on the publisher
+        # would call that one witness; it is two.
+        rows = self._load([(self.URL, "tautog", "2026-08-27", "Ocean State Tackle", "a"),
+                           (self.URL, "tautog", "2026-08-27", "The Saltwater Edge", "b")])
+        ev = reports.corroborate("tautog", date(2026, 8, 28), rows)
+        self.assertEqual(ev["witnesses"], 2)
+
+    def test_two_magazines_relaying_one_shop_is_one_witness(self):
+        # The failure that actually matters: RI magazines all phone the same
+        # shops, so counting publishers would manufacture agreement.
+        rows = self._load([(self.URL, "tautog", "2026-08-27", "Snug Harbor Marina"),
+                           (self.URL2, "tautog", "2026-08-27", "Snug Harbor")])
+        ev = reports.corroborate("tautog", date(2026, 8, 28), rows)
+        self.assertEqual(ev["witnesses"], 1, "same shop via two magazines is one witness")
+
+    def test_person_at_shop_resolves_to_the_shop(self):
+        rows = self._load([(self.URL, "scup", "2026-08-27", "Dave at Ocean State Tackle"),
+                           (self.URL2, "scup", "2026-08-27", "Ocean State Tackle")])
+        self.assertEqual(reports.corroborate("scup", date(2026, 8, 28), rows)["witnesses"], 1)
+
+    def test_bare_first_names_do_not_merge_across_outlets(self):
+        # Two different Daves would be false corroboration.
+        rows = self._load([(self.URL, "scup", "2026-08-27", "Dave"),
+                           (self.URL2, "scup", "2026-08-27", "Dave")])
+        self.assertEqual(reports.corroborate("scup", date(2026, 8, 28), rows)["witnesses"], 2)
+
+    def test_rescraping_an_article_does_not_add_witnesses(self):
+        # The queue is append-only; a weekly re-run must not look like new
+        # agreement from the same sentence.
+        spec = (self.URL, "tautog", "2026-08-27", "Ocean State Tackle")
+        ev = reports.corroborate("tautog", date(2026, 8, 28), self._load([spec, spec, spec]))
+        self.assertEqual(ev["witnesses"], 1)
+        self.assertEqual(ev["observations"], 1)
+
     def test_unmodelled_species_are_kept_not_dropped(self):
         # A bonito run is real information; the gap is in the scorer, not the report.
         rows = self._load([(self.URL, None, "2026-08-27")])
         rows[0]["species_raw"] = "bonito"
         self.assertEqual(reports.unmodelled(rows), {"bonito": 1})
+
+
+class ReviewRegressions(unittest.TestCase):
+    """Bugs found reviewing the coordinate-marks branch. Each one produced a
+    plausible-looking answer rather than an obvious failure, which is why they
+    survived to be found by reading rather than by running."""
+
+    NOW = datetime(2026, 8, 28, 20, 0)
+
+    def _row(self, days, source, abundance="decent"):
+        return {"bait": "bunker", "lat": 41.44, "lon": -71.42,
+                "when": (self.NOW - timedelta(days=days)).isoformat(),
+                "abundance": abundance, "confidence": "high", "source": source}
+
+    def test_the_two_corroboration_weights_stay_separate(self):
+        """`CORROBORATION` was defined twice in bait.py: 0.10 for bait agreeing
+        with bait, then 0.30 for bait agreeing with birds. The second silently
+        replaced the first, so every corroborated bait signal was boosted by 3x
+        the documented amount and the two could not be tuned apart."""
+        self.assertAlmostEqual(bait.CORROBORATION, 0.10)
+        self.assertAlmostEqual(bait.CONJUNCTION, 0.30)
+        self.assertNotEqual(bait.CORROBORATION, bait.CONJUNCTION)
+
+    def test_corroboration_is_bounded_by_its_own_weight(self):
+        one = bait.bait_at(41.44, -71.42, self.NOW, "striped_bass",
+                           [self._row(0, "own")])["signal"]
+        two = bait.bait_at(41.44, -71.42, self.NOW, "striped_bass",
+                           [self._row(0, "own"), self._row(0, "report")])["signal"]
+        self.assertGreater(two, one)
+        self.assertLessEqual(two, one * (1 + bait.CORROBORATION * bait.MAX_CORROBORATION))
+
+    def test_only_witnesses_that_scored_are_named(self):
+        """`sources` was built from every row in the log, including ones too
+        old or too far to contribute. Provenance then reported 'you saw it +
+        a report said so' when only the report carried any weight -- an
+        agreement claim about evidence that was never used."""
+        rows = [self._row(0, "report"), self._row(400, "own")]   # decayed away
+        b = bait.bait_at(41.44, -71.42, self.NOW, "striped_bass", rows)
+        self.assertEqual(b["sources"], ["report"])
+
+        from tiderace import provenance
+        ag = provenance.agreement({"bait_sources": b["sources"], "bird_signal": 0})
+        self.assertFalse(ag["corroborated"])
+        self.assertEqual(ag["count"], 1)
+
+    def test_bird_signal_decays_across_the_horizon(self):
+        """Birds were scored once against now() and stamped on all 96 rows, so
+        a forecast two days out rested on undiscounted evidence from today
+        while the bait beside it decayed properly."""
+        derived = [{"bait": "bunker", "lat": 41.44, "lon": -71.42,
+                    "when": self.NOW.isoformat(), "abundance": "loaded",
+                    "confidence": "medium", "source": "ebird"}]
+        now = birds.signal_at(41.44, -71.42, "striped_bass",
+                              when=self.NOW, derived=derived)["signal"]
+        later = birds.signal_at(41.44, -71.42, "striped_bass",
+                                when=self.NOW + timedelta(days=2),
+                                derived=derived)["signal"]
+        self.assertGreater(now, 0)
+        self.assertLess(later, now)
+
+    def test_a_half_open_depth_range_does_not_crash(self):
+        """S-57 carries DRVAL1 and DRVAL2 independently; the deepest area on a
+        chart has no deep limit. Formatting the missing end raised TypeError
+        and took out the whole `at` report, or rendered "30-0 ft"."""
+        from tiderace.cli import _depth_range
+        self.assertIsNone(_depth_range(None))
+        self.assertIsNone(_depth_range({}))
+        self.assertEqual(_depth_range({"min_ft": 12.4, "max_ft": 30.2}),
+                         "12\u201330 ft")
+        self.assertEqual(_depth_range({"min_ft": 30.2, "max_ft": None}), "30+ ft")
+        self.assertEqual(_depth_range({"min_ft": None, "max_ft": 2.1}),
+                         "less than 2 ft")
+
+    def test_a_dropped_minus_sign_is_refused(self):
+        """71.42 instead of -71.42 parsed clean, bound to whichever NOAA
+        station was least far away, and produced a full confident forecast.
+        parse_coord's own docstring had promised to refuse it."""
+        with self.assertRaises(ValueError):
+            spots.parse_coord("41.4408,71.4228")
+        with self.assertRaises(ValueError):
+            spots.parse_coord("41 26.448 N, 71 25.368 E")
+
+    def test_an_absurd_binding_distance_is_an_error_not_a_warning(self):
+        """Belt and braces behind the parser: a coordinate that reaches
+        `resolve` from anywhere else must not get a forecast off a station in
+        another ocean."""
+        from tiderace import stations
+        self.assertLess(stations.FAR_NM, stations.ABSURD_NM)
+        try:
+            cat = stations.catalog()
+        except stations.StationError:
+            self.skipTest("station catalog not cached")
+        with self.assertRaises(stations.StationError):
+            stations.resolve(35.0, 139.0, cat)              # Tokyo Bay
+
+    def test_a_success_clears_the_negative_cache(self):
+        """One transient timeout wrote a .miss marker that was never removed,
+        so the URL stayed suppressed for 12 hours -- and the negcache was
+        checked before the stale-body fallback, so a good cached scene was
+        thrown away along with the bad news."""
+        from tiderace import offshore
+        import inspect
+        src = inspect.getsource(offshore._get)
+        self.assertIn('os.remove(p + ".miss")', src)
+        neg = src.index("if _negcache(p):")
+        raise_at = src.index('raise OffshoreError("recently unavailable', neg)
+        self.assertIn("return fh.read()", src[neg:raise_at])
+
+    def test_depth_polygons_survive_an_empty_ring(self):
+        """land_index guarded `not poly`; depth_index did not, so a single
+        empty coordinate array was an IndexError that killed every depth
+        lookup on the map."""
+        from tiderace import charts
+        empty = charts._polygons({"type": "MultiPolygon", "coordinates": [[]]})
+        self.assertEqual(empty, [[]])
+        for poly in empty:                    # the guard, as the index runs it
+            self.assertFalse(poly and len(poly[0]) >= 3)
+        import inspect
+        self.assertIn("if not poly or len(poly[0]) < 3:",
+                      inspect.getsource(charts.depth_index))
+
+    def test_chart_layers_are_parsed_once(self):
+        """structure_near walks five layers per report and reparsed ~770 KB of
+        GeoJSON every time."""
+        from tiderace import charts
+        if not charts.available():
+            self.skipTest("no chart layers cached -- run: tiderace charts")
+        name = charts.available()[0]
+        self.assertIs(charts.load(name), charts.load(name))
+
+    def test_hms_staleness_honours_the_date_asked_about(self):
+        """`when` was defaulted and then never used."""
+        from tiderace import hms
+        far = hms.status("bluefin",
+                         hms.CHECKED_ON + timedelta(days=hms.STALE_AFTER_DAYS + 5))
+        near = hms.status("bluefin", hms.CHECKED_ON + timedelta(days=1))
+        self.assertTrue(far["stale"])
+        self.assertFalse(near["stale"])
+        self.assertEqual(near["days_since_checked"], 1)
 
 
 if __name__ == "__main__":

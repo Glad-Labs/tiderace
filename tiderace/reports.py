@@ -30,8 +30,7 @@ Silence is silence.
 
 from __future__ import annotations
 
-import json
-import os
+import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
@@ -40,13 +39,68 @@ from . import extract
 # A report is a snapshot of one week. Beyond this it stops describing "now".
 FRESH_DAYS = 10
 
-# Distinct outlets covering the same week are the corroboration that matters;
-# two articles from one outlet are closer to one witness than two.
 def _outlet(url: str) -> str:
+    """The publisher. Used only as a fallback identity -- see _witness."""
     try:
         return url.split("/")[2].lower().removeprefix("www.")
     except (IndexError, AttributeError):
         return "unknown"
+
+
+# Rhode Island has a handful of magazines and a handful of tackle shops, and
+# the magazines all phone the same shops. A single On The Water column quotes
+# Ocean State Tackle in one paragraph and The Saltwater Edge in the next, while
+# On The Water and The Fisherman may both be relaying Snug Harbor in the same
+# week. So the publisher is the wrong unit of independence in BOTH directions:
+# it splits one article into too few witnesses and merges two magazines into
+# too many.
+#
+# The witness is whoever actually saw the fish. Fall back to the publisher only
+# when a paragraph credits nobody, and keep the two namespaced apart so an
+# unattributed On The Water item never silently merges with an attributed one.
+_NOISE = {"the", "at", "in", "of", "inc", "llc", "co", "and", "bait", "tackle",
+          "marina", "outfitters", "outfitter", "shop", "store", "charters",
+          "guide", "guides", "capt", "captain", "mr", "ms"}
+
+
+def _norm_name(name: str) -> str:
+    """Collapse a credited source to a stable identity.
+
+    Reports name the same shop several ways across a season -- "Ocean State
+    Tackle", "Ocean State Tackle in Providence", "Dave at Ocean State". Keeping
+    the first two significant words absorbs the trailing town and the dropped
+    suffix, which is what actually varies. Two words rather than one because
+    "Watch Hill" and "Watch anything else" should not merge.
+    """
+    raw = (name or "").lower()
+    # "Dave at Ocean State Tackle" -- the person moves jobs, the shop is the
+    # stable identity, and the article writes it both ways across a season.
+    if " at " in raw:
+        raw = raw.rsplit(" at ", 1)[1]
+    words = re.findall(r"[a-z0-9]+", raw)
+    keep = [w for w in words if w not in _NOISE]
+    return "".join(keep[:2])
+
+
+def _witness(row: dict) -> str:
+    """Stable identity for whoever actually saw the fish.
+
+    A two-word credit -- "The Saltwater Edge", "Frances Fleet", "Rob Taylor" --
+    identifies a business or a named person well enough to recognise across
+    outlets, so it merges globally. A bare first name does not: the "Dave" in
+    one magazine and the "Dave" in another are not evidently the same Dave, and
+    merging them would invent corroboration out of a common name. Those stay
+    namespaced to the publisher that printed them, which costs us a real merge
+    occasionally and never fabricates one.
+    """
+    raw = row.get("attributed_to", "")
+    who = _norm_name(raw)
+    if not who:
+        return f"pub:{_outlet(row.get('source_url', ''))}"
+    tokens = [w for w in re.findall(r"[a-z0-9]+", raw.lower()) if w not in _NOISE]
+    if len(tokens) < 2:
+        return f"pub:{_outlet(row.get('source_url', ''))}/{who}"
+    return f"who:{who}"
 
 
 def _parse_day(s: str | None) -> date | None:
@@ -66,6 +120,36 @@ def catch_reports(path: str | None = None) -> list[dict]:
     silently stamping it with today's date would invent evidence.
     """
     rows = extract.load_queue(path) if path else extract.load_queue()
+
+    # The queue is append-only, so re-scraping an article on Tuesday and again
+    # on Friday writes the same observation twice. Left alone that would look
+    # like fresh corroboration -- the same writer's same sentence, counted
+    # again.
+    #
+    # But collapsing on (article, species, place, day) alone is too aggressive:
+    # one column often has Ocean State and The Saltwater Edge both reporting
+    # sea bass off the south shore, and that IS two witnesses. So attribution
+    # is part of the identity, and unattributed rows are dropped only when an
+    # attributed row covers the same observation -- which is what a re-run with
+    # better extraction produces.
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in rows:
+        if r.get("kind") != "catch_report":
+            continue
+        groups[(r.get("source_url", ""), r.get("species_key"),
+                r.get("place", ""), str(r.get("observed_on")))].append(r)
+
+    rows = []
+    for grp in groups.values():
+        attributed = [r for r in grp if r.get("attributed_to")]
+        pool = attributed or grp[:1]
+        newest: dict[str, dict] = {}
+        for r in pool:
+            who = r.get("attributed_to", "")
+            if str(r.get("queued_at", "")) >= str(newest.get(who, {}).get("queued_at", "")):
+                newest[who] = r
+        rows.extend(newest.values())
+
     out = []
     for r in rows:
         if r.get("kind") != "catch_report":
@@ -81,6 +165,8 @@ def catch_reports(path: str | None = None) -> list[dict]:
             "place": r.get("place", ""),
             "spot": r.get("matched_spot"),
             "outlet": _outlet(r.get("source_url", "")),
+            "attributed_to": r.get("attributed_to", ""),
+            "witness": _witness(r),
             "url": r.get("source_url", ""),
             "confidence": r.get("confidence", "medium"),
             "quote": r.get("quote", ""),
@@ -98,7 +184,7 @@ def witnesses(rows: list[dict] | None = None) -> dict[tuple, set]:
     idx: dict[tuple, set] = defaultdict(set)
     for r in rows:
         if r["species"]:
-            idx[(r["species"], r["week"])].add(r["outlet"])
+            idx[(r["species"], r["week"])].add(r["witness"])
     return idx
 
 
@@ -126,7 +212,7 @@ def corroborate(species: str, on: date | None = None,
     rows = catch_reports() if rows is None else rows
     recent = [r for r in rows
               if r["species"] == species and 0 <= (on - r["day"]).days <= FRESH_DAYS]
-    outlets = {r["outlet"] for r in recent}
+    outlets = {r["witness"] for r in recent}
     places = sorted({r["place"] for r in recent if r["place"]})
     newest = max((r["day"] for r in recent), default=None)
     return {

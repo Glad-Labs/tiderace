@@ -120,7 +120,7 @@ def status(species: str, when: date | None = None) -> dict:
     r = RULES.get(key)
     if not r:
         return {"known": False}
-    age = (date.today() - CHECKED_ON).days
+    age = (when - CHECKED_ON).days
     return {
         "known": True, "common": r.common, "scientific": r.species,
         "min_inches": r.min_inches, "measure": r.measure, "bag": r.bag,

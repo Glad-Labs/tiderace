@@ -251,12 +251,29 @@ def cache_all(bbox=BAY_BBOX, out_dir: str | None = None) -> dict[str, int]:
     return counts
 
 
+# Parsed layers, keyed by name and mtime. `structure_near` walks five layers
+# per report and `point.report` is called per mark, so re-reading and
+# re-parsing ~770 KB of GeoJSON every time was the single most expensive thing
+# in a report. Keyed on mtime so a `tiderace charts` rebuild in the same
+# process is picked up rather than served stale.
+#
+# Callers treat the result as read-only. Nothing here mutates it, and nothing
+# should start: the object is shared now.
+_LOADED: dict[str, tuple[float, dict]] = {}
+
+
 def load(name: str) -> dict | None:
     path = os.path.join(CHART_DIR, f"{name}.geojson")
     if not os.path.exists(path):
         return None
+    mtime = os.path.getmtime(path)
+    hit = _LOADED.get(name)
+    if hit and hit[0] == mtime:
+        return hit[1]
     with open(path) as fh:
-        return json.load(fh)
+        gj = json.load(fh)
+    _LOADED[name] = (mtime, gj)
+    return gj
 
 
 def available(include_analysis: bool = False) -> list[str]:

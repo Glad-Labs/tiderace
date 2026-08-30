@@ -154,10 +154,12 @@ REPORT_SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["bait", "place", "abundance", "quote", "confidence"],
+                "required": ["bait", "place", "abundance", "attributed_to",
+                             "quote", "confidence"],
                 "properties": {
                     "bait": {"type": "string"},
                     "place": {"type": "string"},
+                    "attributed_to": {"type": "string"},
                     "abundance": {"type": "string",
                                   "enum": ["none", "trace", "scattered",
                                            "decent", "loaded"]},
@@ -173,11 +175,13 @@ REPORT_SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["species", "place", "quote", "confidence"],
+                "required": ["species", "place", "attributed_to",
+                             "quote", "confidence"],
                 "properties": {
                     "species": {"type": "string"},
                     "place": {"type": "string"},
                     "observed_on": {"type": "string"},
+                    "attributed_to": {"type": "string"},
                     "note": {"type": "string",
                              "description": "method or size, if stated"},
                     "quote": {"type": "string"},
@@ -306,7 +310,15 @@ def extract_report(url: str, force: bool = False,
                "with no date at all describes the week ending on the report "
                "date, so use that date. Only omit observed_on if the text gives "
                "you nothing whatsoever to date it by.\n"
-               "For species, write the common name as the report writes it.",
+               "For species, write the common name as the report writes it.\n\n"
+               "Set attributed_to to the shop, captain or person the report "
+               "credits for THAT observation — these columns are stitched "
+               "together from several local sources, so different paragraphs "
+               "usually have different ones (e.g. 'Ocean State Tackle', 'The "
+               "Saltwater Edge', 'Snug Harbor Marina'). Use the shop name if "
+               "one is given, otherwise the named person. Use an empty string "
+               "if that paragraph credits nobody — do not guess, and do not "
+               "reuse a name from a different paragraph.",
                doc)
 
     applied = 0

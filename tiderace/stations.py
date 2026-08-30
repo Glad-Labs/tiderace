@@ -51,6 +51,13 @@ CATALOG_MAX_AGE_DAYS = 90
 NEAR_NM = 1.5
 FAR_NM = 3.0
 
+# Past this, the coordinate is not far -- it is wrong. A dropped minus sign on
+# the longitude puts you in the Yellow Sea, and every layer downstream will
+# still produce a number: a tide curve, a solunar peak, a score. Warnings do
+# not help, because the answer looks exactly like a real one. So this refuses.
+# Generous on purpose -- it is a typo detector, not a service area.
+ABSURD_NM = 300.0
+
 
 class StationError(RuntimeError):
     pass
@@ -219,6 +226,16 @@ def resolve(lat: float, lon: float, cat: dict | None = None) -> dict:
     """
     cat = cat or catalog()
     from . import charts
+
+    # Cheapest possible first: a plain distance sort, before any land geometry.
+    # A coordinate this far out is a typo, and the land tests below cost real
+    # seconds -- there is no sense spending them to describe the wrong ocean.
+    probe = _ranked(list(cat.get("current", [])) + list(cat.get("tide", [])),
+                    lat, lon, 1)
+    if probe and probe[0]["distance_nm"] > ABSURD_NM:
+        raise StationError(
+            f"{lat},{lon} is {probe[0]['distance_nm']:.0f} nm from the nearest "
+            "NOAA station — check the coordinate (longitude here is negative)")
 
     warnings: list[str] = []
     land_known = bool(charts.land_index())
