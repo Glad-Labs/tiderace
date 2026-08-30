@@ -8,6 +8,8 @@ import os
 import sys
 from datetime import datetime, timedelta
 
+from . import cache
+
 from . import bait as baitmod
 from . import birds as birdmod
 from . import config as cfgmod
@@ -460,7 +462,8 @@ def _res(m):
         return "zone"
     if m < 1000:
         return f"{m}m"
-    return f"{m/1000:.0f}km"
+    km = m / 1000
+    return f"{km:.1f}km" if km < 10 else f"{km:.0f}km"
 
 
 def _cmd_survey(args) -> int:
@@ -1458,9 +1461,9 @@ def _save_mark(key: str, spot, res: dict) -> str:
         "notes": spot.notes,
         "species": list(spot.species),
     })
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path, "w") as fh:
-        json.dump(existing, fh, indent=2)
+    # Your own marks. A torn write here loses a spot you found, which
+    # is the one kind of data in this project that cannot be refetched.
+    cache.write_json(path, existing)
     return path
 
 

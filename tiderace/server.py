@@ -222,6 +222,32 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"error": str(exc)}, 502)
                 except ValueError as exc:
                     return self._send_json({"error": str(exc)}, 400)
+            if url.path == "/api/survey":
+                try:
+                    lat = float(q.get("lat", [""])[0])
+                    lon = float(q.get("lon", [""])[0])
+                except ValueError:
+                    return self._send_json({"error": "lat and lon required"}, 400)
+                species = q.get("species", ["striped_bass"])[0]
+                if species not in score.PROFILES:
+                    return self._send_json({"error": f"unknown species {species}"}, 400)
+                when = None
+                raw = (q.get("when", [""])[0] or "").strip()
+                if raw:
+                    try:
+                        when = datetime.fromisoformat(raw)
+                    except ValueError:
+                        return self._send_json({"error": "bad when"}, 400)
+                # Default to fast on the water: the satellite layers take tens
+                # of seconds and a phone on a boat is on a marginal connection.
+                fast = (q.get("fast", ["1"])[0] or "1") not in ("0", "false", "no")
+                from . import survey as surveymod
+                try:
+                    return self._send_json(
+                        surveymod.survey(lat, lon, when, species,
+                                         include_slow=not fast))
+                except ValueError as exc:
+                    return self._send_json({"error": str(exc)}, 400)
             if url.path == "/api/charts":
                 return self._send_json({
                     "layers": [{"name": n, "label": charts.LAYERS[n][1],

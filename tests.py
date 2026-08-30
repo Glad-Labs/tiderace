@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       provenance,
-                      llm, reconcile, reports, protected, survey, whales,
+                      cache as cachemod, llm, reconcile, reports, protected, survey, whales,
                       regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
@@ -2282,6 +2282,77 @@ class Survey(unittest.TestCase):
         d = survey._d(3.2, "NDBC", survey.RES["buoy"], "measured")
         self.assertEqual(set(d), {"value", "source", "resolution_m", "note", "when"})
         self.assertEqual(d["resolution_m"], 100)
+
+
+class AtomicCache(unittest.TestCase):
+    """A reader must never see a half-written cache file.
+
+    This is not hypothetical: `tiderace serve` runs on the tailnet while you
+    also use the CLI, and a reader catching an iNaturalist cache mid-write made
+    the map's own /api/grid return a 500 with a JSON error at an 8 KB boundary.
+    Nothing was wrong with the grid.
+    """
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp()
+
+    def test_a_reader_never_sees_a_partial_file(self):
+        import json, os, threading
+        path = os.path.join(self.dir, "c.json")
+        cachemod.write_json(path, {"seq": 0, "pad": "x" * 5000})
+        stop, seen = threading.Event(), []
+
+        def reader():
+            while not stop.is_set():
+                try:
+                    with open(path) as fh:
+                        seen.append(json.load(fh)["seq"])
+                except FileNotFoundError:
+                    pass
+                except ValueError:
+                    seen.append("PARTIAL")
+
+        t = threading.Thread(target=reader, daemon=True); t.start()
+        for n in range(1, 60):
+            cachemod.write_json(path, {"seq": n, "pad": "x" * (5000 + n)})
+        stop.set(); t.join(timeout=3)
+        self.assertNotIn("PARTIAL", seen, "a reader observed a torn write")
+
+    def test_a_corrupt_file_reads_as_absent_not_an_exception(self):
+        import os
+        path = os.path.join(self.dir, "bad.json")
+        with open(path, "w") as fh:
+            fh.write('{"truncated": ')
+        self.assertIsNone(cachemod.read_json(path))
+        self.assertEqual(cachemod.read_json(path, default={}), {})
+
+    def test_a_failed_write_leaves_no_temp_litter(self):
+        import os
+        path = os.path.join(self.dir, "x.json")
+
+        class Unserialisable:
+            pass
+        # default=str makes almost anything serialise, so force a real failure.
+        boom = {"k": Unserialisable()}
+        boom["self"] = boom                      # circular -> ValueError
+        with self.assertRaises(ValueError):
+            cachemod.write_json(path, boom)
+        leftovers = [f for f in os.listdir(self.dir) if f.startswith(".tmp-")]
+        self.assertEqual(leftovers, [], "temp file left behind after a failure")
+
+    def test_every_cache_write_in_the_project_goes_through_here(self):
+        # Guard against the pattern creeping back in.
+        import pathlib, re
+        root = pathlib.Path(__file__).parent / "tiderace"
+        offenders = []
+        for f in root.glob("*.py"):
+            if f.name in ("cache.py", "log.py", "bait.py", "extract.py", "config.py"):
+                continue                          # append-only logs, not caches
+            src = f.read_text()
+            if re.search(r'with open\([^)]*,\s*"w[b]?"\) as \w+:\s*\n\s*(json\.dump|\w+\.write)', src):
+                offenders.append(f.name)
+        self.assertEqual(offenders, [], "non-atomic cache write reintroduced")
 
 
 if __name__ == "__main__":

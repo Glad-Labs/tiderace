@@ -33,6 +33,8 @@ import urllib.parse
 import urllib.request
 import urllib.robotparser
 from datetime import datetime
+
+from . import cache
 from html.parser import HTMLParser
 
 UA = ("tiderace/0.1 (open-source personal fishing forecast; "
@@ -137,8 +139,7 @@ def fetch(url: str, ttl: float = CACHE_TTL_S, force: bool = False) -> dict:
 
     doc = {"url": url, "status": status, "fetched_at": datetime.now().isoformat(
         timespec="seconds"), "text": to_text(body), "title": title_of(body)}
-    with open(path, "w") as fh:
-        json.dump(doc, fh)
+    cache.write_json(path, doc)
     return doc
 
 

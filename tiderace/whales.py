@@ -47,6 +47,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 
+from . import cache
+
 INAT = "https://api.inaturalist.org/v1/observations"
 UA = "tiderace/0.1 (+https://github.com/Glad-Labs/tiderace)"
 CACHE_TTL = 3 * 3600
@@ -121,8 +123,9 @@ def _get(url: str, ttl: float = CACHE_TTL) -> dict:
     key = str(abs(hash(url)))
     path = _cache_path(key)
     if os.path.exists(path) and time.time() - os.path.getmtime(path) < ttl:
-        with open(path) as fh:
-            return json.load(fh)
+        hit = cache.read_json(path)
+        if hit is not None:
+            return hit
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
@@ -131,8 +134,7 @@ def _get(url: str, ttl: float = CACHE_TTL) -> dict:
         raise WhaleError(f"iNaturalist returned {e.code}") from e
     except Exception as e:                                        # noqa: BLE001
         raise WhaleError(str(e)) from e
-    with open(path, "w") as fh:
-        json.dump(data, fh)
+    cache.write_json(path, data)
     return data
 
 

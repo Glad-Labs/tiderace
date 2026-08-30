@@ -22,6 +22,8 @@ import os
 import urllib.parse
 import urllib.request
 
+from . import cache
+
 # Identifies the project rather than a person: a sysadmin reading their logs
 # wants to know what is calling and where to complain, and the repository
 # answers both without publishing an email address.
@@ -255,8 +257,7 @@ def cache_all(bbox=BAY_BBOX, out_dir: str | None = None) -> dict[str, int]:
             print(f"  ! {name}: {exc}")
             continue
         path = os.path.join(out_dir, f"{name}.geojson")
-        with open(path, "w") as fh:
-            json.dump(gj, fh, separators=(",", ":"))
+        cache.write_json(path, gj)
         counts[name] = len(gj["features"])
         print(f"  {name:<14} {counts[name]:>5} features  "
               f"{os.path.getsize(path)/1024:>7.0f} KB")

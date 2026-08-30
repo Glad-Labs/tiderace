@@ -28,6 +28,8 @@ import urllib.request
 from collections import defaultdict
 from datetime import datetime
 
+from . import cache as cachemod
+
 API = "https://api.ebird.org/v2"
 UA = "tiderace (+https://github.com/Glad-Labs/tiderace)"
 
@@ -95,8 +97,7 @@ def _get(path: str, **params) -> list:
                 return json.load(fh)
         raise
 
-    with open(cache, "w") as fh:
-        json.dump(payload, fh)
+    cachemod.write_json(cache, payload)
     return payload
 
 

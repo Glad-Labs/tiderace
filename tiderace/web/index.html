@@ -196,6 +196,84 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
      the basemap ships under. */
   #timebar{right:12px; bottom:44px}
 }
+
+/* ---- conditions sheet -------------------------------------------------
+   Built for a phone held in one hand on a moving boat. Everything that
+   matters is in the bottom third where a thumb reaches; type is large
+   because the alternative is a wet screen in direct sun; and the sheet is
+   dragged rather than tapped shut so a knuckle cannot dismiss it by
+   accident mid-read. */
+#sheet{
+  position:fixed; left:0; right:0; bottom:0; z-index:40;
+  background:var(--panel); border-top:1px solid var(--hair);
+  border-radius:16px 16px 0 0;
+  transform:translateY(100%); transition:transform .22s cubic-bezier(.2,.8,.3,1);
+  max-height:86vh; display:flex; flex-direction:column;
+  padding-bottom:env(safe-area-inset-bottom);
+  box-shadow:0 -18px 44px rgba(0,0,0,.5);
+  touch-action:none;
+}
+#sheet.up{transform:translateY(0)}
+#sheet.peek{transform:translateY(calc(100% - 168px))}
+#sheetgrip{
+  /* 44px of actual touch target, not the 21px the visible bar would give.
+     This is the control you use with wet hands on a moving boat, so the hit
+     area is sized for that even though the bar drawn inside it is small. */
+  flex:none; min-height:44px; padding:14px 0 10px;
+  display:grid; place-items:center; cursor:grab;
+}
+#sheetgrip div{width:44px; height:5px; border-radius:3px; background:var(--hair)}
+#sheethead{
+  flex:none; display:flex; align-items:baseline; gap:10px;
+  padding:0 16px 10px; border-bottom:1px solid var(--hair);
+}
+#sheethead b{font:600 17px/1.15 var(--display); color:var(--ink)}
+#sheethead span{font:11px/1 var(--mono); color:var(--muted); letter-spacing:.06em}
+#sheetzone{
+  margin-left:auto; font:10px/1 var(--mono); letter-spacing:.1em;
+  text-transform:uppercase; color:var(--depth);
+  border:1px solid var(--hair); border-radius:999px; padding:5px 9px;
+}
+#sheetbody{overflow-y:auto; -webkit-overflow-scrolling:touch; padding:4px 0 18px}
+.sgroup{padding:14px 16px 4px; font:10px/1 var(--mono); letter-spacing:.16em;
+        text-transform:uppercase; color:var(--muted)}
+.srow{
+  display:flex; align-items:center; gap:10px; padding:11px 16px;
+  border-bottom:1px solid rgba(39,64,72,.5);
+}
+.srow .k{flex:none; width:34%; font:12px/1.25 var(--mono); color:var(--ink-2)}
+/* The number is the thing you glance at from three feet away with salt on
+   the screen, so it gets the largest type in the app. */
+.srow .v{flex:1; font:600 19px/1.15 var(--display); color:var(--ink);
+         font-variant-numeric:tabular-nums}
+.srow .v small{font:11px/1 var(--mono); color:var(--muted); font-weight:400}
+/* The footprint chip. Present on every value on purpose: these numbers
+   describe patches of ocean that differ by four orders of magnitude, and
+   without this the layout quietly claims they are equally precise. */
+.res{
+  flex:none; font:10px/1 var(--mono); color:var(--muted);
+  border:1px solid var(--hair); border-radius:999px; padding:4px 7px;
+}
+.res.fine{color:var(--good); border-color:rgba(79,191,137,.45)}
+.res.coarse{color:var(--warn); border-color:rgba(217,165,33,.4)}
+.srule{padding:11px 16px; font:12px/1.5 var(--mono); color:var(--ink-2);
+       border-bottom:1px solid rgba(39,64,72,.5)}
+.srule b{color:var(--crit); font-weight:600}
+.sdim{padding:12px 16px; font:11px/1.5 var(--mono); color:var(--muted)}
+#here{
+  position:fixed; right:14px; z-index:35;
+  bottom:calc(20px + env(safe-area-inset-bottom));
+  width:60px; height:60px; border-radius:50%;
+  background:var(--accent); color:#fff; border:none;
+  font:600 10px/1.1 var(--mono); letter-spacing:.06em;
+  box-shadow:0 6px 18px rgba(0,0,0,.45); cursor:pointer;
+}
+#here:active{transform:scale(.94)}
+#here.busy{opacity:.55}
+@media (min-width:901px){
+  #sheet{left:auto; right:0; width:420px; max-height:92vh; border-radius:16px 0 0 0}
+  #here{display:none}
+}
 </style>
 </head>
 <body>
@@ -1067,6 +1145,10 @@ map.on('click', e => {
   if (clickable.length && map.queryRenderedFeatures(e.point, {layers: clickable}).length)
     return;
   reportAt(e.lngLat.lat, e.lngLat.lng);
+  // On a phone the sheet IS the answer -- the side panel is off-screen and
+  // the forecast is not what you want mid-drift anyway. showConditions is
+  // defined further down the file, so guard against firing before it exists.
+  if (window.showConditions) window.showConditions(e.lngLat.lat, e.lngLat.lng);
 });
 
 (async function boot(){
@@ -1081,6 +1163,201 @@ map.on('click', e => {
       `<div style="text-align:center;line-height:1.7">could not reach the forecast API<br>
        <span style="color:#8CA3A8;text-transform:none;letter-spacing:0">${err.message}</span></div>`;
   }
+})();
+</script>
+
+<button id="here" aria-label="Conditions at my location">HERE</button>
+<div id="sheet" aria-live="polite">
+  <div id="sheetgrip"><div></div></div>
+  <div id="sheethead">
+    <b id="sheettitle">Conditions</b>
+    <span id="sheetwhen"></span>
+    <span id="sheetzone"></span>
+  </div>
+  <div id="sheetbody"></div>
+</div>
+
+<script>
+/* ---- conditions sheet -------------------------------------------------
+   Renders /api/survey. Deliberately dumb: the server already decided what
+   is worth asking at this zone and what each value's footprint is, and
+   duplicating either of those judgements in the client is how the two
+   drift apart. */
+(function(){
+  const sheet = document.getElementById('sheet');
+  const body  = document.getElementById('sheetbody');
+  const title = document.getElementById('sheettitle');
+  const when  = document.getElementById('sheetwhen');
+  const zoneE = document.getElementById('sheetzone');
+  let SURVEY_AT = null;
+
+  function resChip(m){
+    if (m == null) return '<span class="res">zone</span>';
+    if (m < 1000)  return `<span class="res fine">${m}m</span>`;
+    // 2500 m is the NWS grid. Rounding it to "3km" overstates the
+    // coarseness of one and understates the difference from the next.
+    const km = m / 1000;
+    return `<span class="res coarse">${km < 10 ? km.toFixed(1) : Math.round(km)}km</span>`;
+  }
+  const esc = t => String(t == null ? '' : t)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  function row(k, v, res, sub){
+    return `<div class="srow"><div class="k">${esc(k)}</div>` +
+           `<div class="v">${esc(v)}${sub ? ` <small>${esc(sub)}</small>` : ''}</div>` +
+           resChip(res) + `</div>`;
+  }
+  const group = t => `<div class="sgroup">${esc(t)}</div>`;
+
+  function render(d){
+    const L = d.layers || {};
+    const val = k => (L[k] || {}).value;
+    const res = k => (L[k] || {}).resolution_m;
+    const c = val('conditions') || {};
+    const w = val('weather') || {};
+    let h = '';
+
+    h += group('the water');
+    if (c.current_speed != null)
+      h += row('current', `${c.current_speed.toFixed(2)} kt`,
+               res('conditions'), c.current_dir || '');
+    if (c.water_temp_f != null)
+      h += row('water', `${c.water_temp_f.toFixed(1)}°F`, res('conditions'));
+    if (c.next_tide) h += row('next tide', c.next_tide, 100);
+    const dep = val('depth');
+    if (dep && dep.min_ft != null)
+      h += row('depth', `${dep.min_ft}–${dep.max_ft} ft`, res('depth'), 'charted');
+    else if (d.charted === false)
+      h += row('depth', 'no chart here', null);
+    const sc = val('surface_current');
+    if (sc && sc.mean_kt != null){
+      h += row('drift', `${sc.mean_kt} kt`, res('surface_current'),
+               `toward ${sc.toward_deg}° · measured`);
+      if (sc.shear_kt != null)
+        h += row('drift shear', `${sc.shear_kt.toFixed(2)} kt`,
+                 res('surface_current'), 'across the cell');
+    }
+    const wl = val('water_level_anomaly');
+    if (wl && wl.anomaly_ft != null)
+      h += row('water level', `${wl.anomaly_ft > 0 ? '+' : ''}${wl.anomaly_ft.toFixed(2)} ft`,
+               res('water_level_anomaly'), 'vs predicted');
+    const bt = val('bottom'); if (bt) h += row('bottom', bt, res('bottom'));
+    const st = val('structure') || {};
+    const stk = Object.keys(st);
+    if (stk.length)
+      h += row('structure', stk.map(k => `${k} ${st[k]}`).join(', '),
+               res('structure'), 'within 0.25 nm');
+
+    h += group('the air');
+    if (c.wind_kt != null)
+      h += row('wind', `${Math.round(c.wind_kt)} kt`, 2500,
+               `${c.wind_dir || ''} · forecast`);
+    if (w.wind_kt != null)
+      h += row('wind now', `${Math.round(w.wind_kt)} kt`, res('weather'),
+               'observed');
+    if (w.air_temp_f != null)
+      h += row('air', `${Math.round(w.air_temp_f)}°F`, res('weather'));
+    if (c.pressure_trend_3h != null)
+      h += row('pressure', `${c.pressure_trend_3h > 0 ? '+' : ''}${c.pressure_trend_3h.toFixed(1)} mb`,
+               2500, '3h');
+    if (c.light_phase) h += row('light', c.light_phase, null);
+    const bu = val('buoy');
+    if (bu && bu.wave_m != null)
+      h += row('sea', `${bu.wave_m} m`, res('buoy'),
+               `${bu.dom_period_s ?? '?'}s · buoy`);
+
+    const tu = val('turbine');
+    if (tu) h += row('turbine', `${tu[0]}`, res('turbine'), `${tu[1]} nm`);
+
+    h += group('what else is here');
+    const bl = val('bait_log') || [];
+    h += row('bait seen', bl.length ? `${bl.length}` : 'none', 500, 'logged');
+    const bd = val('birds') || {};
+    h += row('birds', `${bd.bait_bird_records ?? 0}`, 500, 'bait-bird records');
+    const wh = val('whales') || {};
+    h += row('whales', `${wh.cetacean_records ?? 0}`, 500, 'records');
+
+    const pr = val('protected');
+    if (pr && (pr.rules || []).length){
+      h += group('rules');
+      pr.rules.forEach(r => { h += `<div class="srule">${esc(r)}</div>`; });
+      (pr.areas || []).filter(a => !a.active).forEach(a => {
+        h += `<div class="srule">In the ${esc(a.name)} SMA, out of season ` +
+             `(${esc(a.season)}).</div>`;
+      });
+    }
+
+    const un = Object.keys(d.unavailable || {});
+    if (un.length)
+      h += `<div class="sdim">not available: ${esc(un.join(', '))} — ` +
+           `missing, not zero.</div>`;
+    if ((d.binding_warnings || []).length)
+      h += `<div class="sdim">${d.binding_warnings.map(esc).join('<br>')}</div>`;
+
+    body.innerHTML = h;
+  }
+
+  async function show(lat, lon, label){
+    SURVEY_AT = [lat, lon];
+    title.textContent = label || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+    when.textContent = '';
+    zoneE.textContent = '';
+    body.innerHTML = '<div class="sdim">reading conditions…</div>';
+    sheet.classList.add('up'); sheet.classList.remove('peek');
+    try{
+      const r = await fetch(`/api/survey?lat=${lat}&lon=${lon}&fast=1`);
+      const d = await r.json();
+      if (d.error){ body.innerHTML = `<div class="sdim">${esc(d.error)}</div>`; return; }
+      zoneE.textContent = d.zone || '';
+      when.textContent = new Date(d.when).toLocaleTimeString([],
+                          {hour:'2-digit', minute:'2-digit'});
+      render(d);
+    }catch(err){
+      // Offline is the normal case on a boat, not an error state.
+      body.innerHTML = '<div class="sdim">no connection — conditions need the ' +
+                       'network. The map and your marks still work.</div>';
+    }
+  }
+  window.showConditions = show;
+
+  /* Dragged, not tapped, shut: a knuckle on a moving boat should not be able
+     to dismiss the panel mid-read. */
+  let y0 = null, t0 = 0;
+  const grip = document.getElementById('sheetgrip');
+  grip.addEventListener('pointerdown', e => {
+    y0 = e.clientY; t0 = Date.now(); grip.setPointerCapture(e.pointerId);
+  });
+  grip.addEventListener('pointerup', e => {
+    if (y0 == null) return;
+    const dy = e.clientY - y0, dt = Date.now() - t0;
+    if (dy > 40 || (dy > 12 && dt < 220)){
+      if (sheet.classList.contains('peek')) sheet.classList.remove('up','peek');
+      else { sheet.classList.add('peek'); }
+    } else if (dy < -30){
+      sheet.classList.remove('peek');
+    }
+    y0 = null;
+  });
+
+  const here = document.getElementById('here');
+  here.addEventListener('click', () => {
+    if (!navigator.geolocation){
+      show(map.getCenter().lat, map.getCenter().lng, 'Map centre');
+      return;
+    }
+    here.classList.add('busy');
+    navigator.geolocation.getCurrentPosition(pos => {
+      here.classList.remove('busy');
+      const {latitude:la, longitude:lo} = pos.coords;
+      map.easeTo({center:[lo, la], zoom: Math.max(map.getZoom(), 13)});
+      show(la, lo, 'Where you are');
+    }, () => {
+      // Denied or unavailable: the map centre is still a real place to ask
+      // about, and is better than an error toast on a boat.
+      here.classList.remove('busy');
+      show(map.getCenter().lat, map.getCenter().lng, 'Map centre');
+    }, {enableHighAccuracy:true, timeout:8000, maximumAge:15000});
+  });
 })();
 </script>
 </body>

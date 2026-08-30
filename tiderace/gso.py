@@ -33,6 +33,8 @@ import zipfile
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 
+from . import cache
+
 NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 GSO_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "gso")
 CACHE = os.path.join(GSO_DIR, "climatology.json")
@@ -206,9 +208,7 @@ def load(rebuild: bool = False) -> dict | None:
     except FileNotFoundError:
         return None
     data["trends"] = build_trends()
-    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
-    with open(CACHE, "w") as fh:
-        json.dump(data, fh, separators=(",", ":"))
+    cache.write_json(CACHE, data)
     return data
 
 

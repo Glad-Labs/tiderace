@@ -36,6 +36,8 @@ import time
 import urllib.error
 import urllib.request
 
+from . import cache
+
 MDAPI = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json"
 UA = "tiderace (+https://github.com/Glad-Labs/tiderace)"
 
@@ -110,9 +112,7 @@ def refresh(path: str | None = None) -> dict:
         "current": _fetch("currentpredictions"),
         "tide": _fetch("waterlevels"),
     }
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path, "w") as fh:
-        json.dump(cat, fh, separators=(",", ":"))
+    cache.write_json(path, cat)
     return cat
 
 

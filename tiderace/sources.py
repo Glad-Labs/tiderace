@@ -19,6 +19,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 
+from . import cache
+
 # Weather lookups are the only place a *spot coordinate* leaves this machine.
 # NWS grid cells are ~2.5 km, so querying at 4 decimal places (~11 m) discloses
 # far more precision than the answer contains. Two decimals is ~1.1 km: no loss
@@ -66,8 +68,7 @@ def _fetch(url: str, ttl: int = CACHE_TTL) -> dict:
     if isinstance(payload, dict) and "error" in payload:
         raise SourceError(payload["error"].get("message", "unknown CO-OPS error").strip())
 
-    with open(path, "w") as fh:
-        json.dump(payload, fh)
+    cache.write_json(path, payload)
     return payload
 
 
@@ -90,8 +91,7 @@ def _fetch_text(url: str, ttl: int = CACHE_TTL) -> str:
             with open(path) as fh:
                 return fh.read()
         raise SourceError(f"text fetch failed for {url}: {exc}") from exc
-    with open(path, "w") as fh:
-        fh.write(body)
+    cache.write_bytes(path, body.encode() if isinstance(body, str) else body)
     return body
 
 

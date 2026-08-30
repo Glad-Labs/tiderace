@@ -32,6 +32,8 @@ import urllib.request
 from collections import Counter
 from datetime import date, datetime, timedelta
 
+from . import cache
+
 ERDDAP = "https://coastwatch.pfeg.noaa.gov/erddap/griddap"
 OBIS = "https://api.obis.org/v3"
 NDBC = "https://www.ndbc.noaa.gov/data/realtime2"
@@ -98,8 +100,8 @@ def _get(url: str, ttl: int = 6 * 3600) -> str:
                 return fh.read()
         open(p + ".miss", "w").close()
         raise OffshoreError(f"{type(e).__name__}: {e}") from e
-    with open(p, "w") as fh:
-        fh.write(body)
+    cache.write_bytes(p, body if isinstance(body, bytes)
+                      else str(body).encode())
     # The URL answered, so whatever it was that failed is over. Leaving the
     # marker meant one transient timeout kept costing a request 12 hours later.
     if os.path.exists(p + ".miss"):
