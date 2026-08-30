@@ -141,6 +141,16 @@ def run(argv=None) -> int:
                     help="NWS marine zone (ANZ236 bay, ANZ237 RI/Block sounds)")
     cd.add_argument("--station", default="8452660", help="CO-OPS water level station")
 
+    sv = sub.add_parser("survey", help="every condition at one place and time")
+    sv.add_argument("coord", nargs="?", default="41.4408,-71.4228",
+                    help="lat,lon (default: Whale Rock)")
+    sv.add_argument("--at", dest="sv_when", default=None,
+                    help="time, e.g. '2026-08-31 05:00' (default: now)")
+    sv.add_argument("--species", dest="sv_species", default="striped_bass",
+                    choices=sorted(score.PROFILES))
+    sv.add_argument("--fast", action="store_true",
+                    help="skip the satellite layers")
+
     wh = sub.add_parser("whales", help="whale and dolphin activity — bait, bigger")
     wh.add_argument("coord", nargs="?", default="41.3720,-71.6390",
                     help="lat,lon (default: Charlestown Breachway)")
@@ -200,6 +210,8 @@ def run(argv=None) -> int:
         return _cmd_scrape(args)
     if args.cmd == "review":
         return _cmd_review(args)
+    if args.cmd == "survey":
+        return _cmd_survey(args)
     if args.cmd == "whales":
         return _cmd_whales(args)
     if args.cmd == "reports":
@@ -438,6 +450,155 @@ def _cmd_review(args) -> int:
     print("  Regulations are NOT applied automatically. Check each against the")
     print("  source, then edit tiderace/regs.py by hand and bump CHECKED_ON.")
     print(f"  Queue: {extract.REVIEW_PATH}\n")
+    return 0
+
+
+def _res(m):
+    """Footprint of a value, in units a person reads. The whole point of
+    showing it is that these differ by four orders of magnitude."""
+    if m is None:
+        return "zone"
+    if m < 1000:
+        return f"{m}m"
+    return f"{m/1000:.0f}km"
+
+
+def _cmd_survey(args) -> int:
+    from . import survey as S
+    lat, lon = spots.parse_coord(args.coord)
+    when = None
+    if args.sv_when:
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%H:%M"):
+            try:
+                when = datetime.strptime(args.sv_when, fmt)
+                if fmt == "%H:%M":
+                    n = datetime.now()
+                    when = when.replace(year=n.year, month=n.month, day=n.day)
+                break
+            except ValueError:
+                continue
+        if when is None:
+            print(f"could not read a time from {args.sv_when!r}")
+            return 2
+
+    s = S.survey(lat, lon, when, args.sv_species, include_slow=not args.fast)
+    L = s["layers"]
+    when_txt = datetime.fromisoformat(s["when"]).strftime("%a %d %b %H:%M")
+
+    print(f"\n{lat:.4f}, {lon:.4f}   {when_txt}   [{s['zone']}]")
+    if s.get("binding_confidence"):
+        print(f"station binding: {s['binding_confidence']}")
+    for w in s.get("binding_warnings", []):
+        print(f"  ! {w}")
+    print("─" * 74)
+    print("Each figure is followed by the size of the patch of ocean it")
+    print("actually describes. They are not comparable.\n")
+
+    def row(label, text, res_m):
+        print(f"  {label:<20} {text:<38} {_res(res_m):>7}")
+
+    c = (L.get("conditions") or {}).get("value") or {}
+    if c:
+        print("  THE WATER")
+        cur = c.get("current_speed")
+        if cur is not None:
+            row("current", f"{cur:.2f} kt {c.get('current_dir') or ''}".strip(),
+                L["conditions"]["resolution_m"])
+        if c.get("water_temp_f"):
+            row("water temp", f"{c['water_temp_f']:.1f}°F", RESW := 100)
+        if c.get("next_tide"):
+            row("next tide", str(c["next_tide"]), 100)
+        d = (L.get("depth") or {}).get("value")
+        if d:
+            row("charted depth", f"{d.get('min_ft')}–{d.get('max_ft')} ft", 1)
+        elif not s["charted"]:
+            row("charted depth", "no chart data for this area", None)
+        b = (L.get("bottom") or {}).get("value")
+        if b:
+            row("bottom", str(b), 5)
+        st = (L.get("structure") or {}).get("value") or {}
+        if st:
+            row("structure", ", ".join(f"{k} {v}" for k, v in st.items()), 5)
+        sc = (L.get("surface_current") or {}).get("value")
+        if sc:
+            # Shear is the interesting number offshore: a big spread across
+            # the cell means a front, and fish sit on fronts.
+            row("surface drift", f"{sc.get('mean_kt','?')} kt toward "
+                                 f"{sc.get('toward_deg','?')}°  (measured)", 6000)
+            if sc.get("shear_kt") is not None:
+                row("  drift shear", f"{sc['shear_kt']:.2f} kt across the cell "
+                                     f"({sc.get('slowest_kt')}–{sc.get('fastest_kt')})", 6000)
+        wl = (L.get("water_level_anomaly") or {}).get("value")
+        if wl and wl.get("anomaly_ft") is not None:
+            row("water level", f"{wl['anomaly_ft']:+.2f} ft vs predicted", 100)
+        print()
+
+    w = (L.get("weather") or {}).get("value") or {}
+    if c or w:
+        print("  THE AIR")
+        if c.get("wind_kt") is not None:
+            row("wind (forecast)", f"{c['wind_kt']:.0f} kt {c.get('wind_dir') or ''}".strip(), 2500)
+        if w.get("wind_kt") is not None:
+            row("wind (observed)", f"{w['wind_kt']:.0f} kt   {w.get('observed_at','')[:16]}", 2500)
+        if w.get("air_temp_f") is not None:
+            row("air temp", f"{w['air_temp_f']:.0f}°F", 2500)
+        if c.get("pressure_trend_3h") is not None:
+            row("pressure 3h", f"{c['pressure_trend_3h']:+.1f} mb", 2500)
+        if c.get("light_phase"):
+            row("light", str(c["light_phase"]), None)
+        bu = (L.get("buoy") or {}).get("value")
+        if bu:
+            row("sea state (buoy)", f"{bu.get('wave_m','?')} m @ "
+                                    f"{bu.get('dom_period_s','?')}s", 100)
+        print()
+
+    tb = (L.get("thermal_breaks") or {}).get("value")
+    tu = (L.get("turbine") or {}).get("value")
+    if tb or tu:
+        print("  OFFSHORE")
+        if tu:
+            row("nearest turbine", f"{tu[0]} at {tu[1]:.1f} nm", 5)
+        if tb:
+            row("thermal break", str(tb)[:36], 1000)
+        print()
+
+    print("  WHAT ELSE IS HERE")
+    bl = (L.get("bait_log") or {}).get("value") or []
+    row("bait seen", f"{len(bl)} logged sighting(s) within range", 500)
+    bd = (L.get("birds") or {}).get("value") or {}
+    row("birds", f"{bd.get('bait_bird_records',0)} bait-bird records", 500)
+    wl2 = (L.get("whales") or {}).get("value") or {}
+    row("whales", f"{wl2.get('cetacean_records',0)} cetacean records", 500)
+    print()
+
+    pr = (L.get("protected") or {}).get("value") or {}
+    if pr:
+        print("  RULES")
+        for line in pr.get("rules", []):
+            print(f"    • {line}")
+        for a in pr.get("areas", []):
+            if not a["active"]:
+                print(f"    • In the {a['name']} SMA, out of season ({a['season']}).")
+        print()
+
+    mf = (L.get("marine_forecast") or {}).get("value") or {}
+    if mf.get("text"):
+        print(f"  MARINE FORECAST — {mf.get('name','')}")
+        for ln in str(mf["text"]).strip().splitlines()[:4]:
+            print(f"    {ln[:70]}")
+        print()
+
+    al = (L.get("alerts") or {}).get("value") or []
+    if al:
+        print("  ACTIVE ALERTS")
+        for a in al[:3]:
+            print(f"    ! {a}")
+        print()
+
+    if s["unavailable"]:
+        print("  not available right now:")
+        for k, v in s["unavailable"].items():
+            print(f"    {k:20} {v[:46]}")
     return 0
 
 

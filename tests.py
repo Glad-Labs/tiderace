@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       provenance,
-                      llm, reconcile, reports, protected, whales,
+                      llm, reconcile, reports, protected, survey, whales,
                       regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
@@ -2244,6 +2244,44 @@ class Protected(unittest.TestCase):
         for banned in ("PROFILES", "score(", "modifier", "signal_at"):
             self.assertNotIn(banned, src, f"protected.py must not touch {banned}")
         self.assertNotIn("right", str(whales.BAIT_WHALES).lower())
+
+
+class Survey(unittest.TestCase):
+    """Everything at one place and time, each value with its own footprint."""
+
+    def test_zones_band_the_water(self):
+        self.assertEqual(survey.zone(41.72, -71.34), survey.INSHORE)   # Conimicut
+        self.assertEqual(survey.zone(41.44, -71.42), survey.MIDBAY)    # Whale Rock
+        self.assertEqual(survey.zone(41.12, -71.50), survey.OFFSHORE)  # wind farm
+
+    def test_a_shallow_southern_mark_is_not_called_offshore(self):
+        # Depth overrides latitude: a 30 ft mark south of the line is still
+        # bay-like water and river discharge is still irrelevant there.
+        self.assertEqual(survey.zone(41.20, -71.60, depth_ft=30), survey.MIDBAY)
+        self.assertEqual(survey.zone(41.20, -71.60, depth_ft=120), survey.OFFSHORE)
+
+    def test_resolutions_span_orders_of_magnitude(self):
+        # The reason every value carries a footprint at all.
+        self.assertLess(survey.RES["sounding"], survey.RES["station"])
+        self.assertLess(survey.RES["station"], survey.RES["nws_grid"])
+        self.assertLess(survey.RES["nws_grid"], survey.RES["hf_radar"])
+        self.assertGreater(survey.RES["hf_radar"] / survey.RES["sounding"], 1000)
+
+    def test_a_layer_failing_does_not_take_the_survey_down(self):
+        boom = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("satellite down"))
+        val, err = survey._try(boom)
+        self.assertIsNone(val)
+        self.assertIn("satellite down", err)
+
+    def test_a_missing_layer_is_reported_missing_not_zero(self):
+        val, err = survey._try(lambda: (_ for _ in ()).throw(OSError("no net")))
+        self.assertIsNone(val, "must be None, never 0 — a dead feed is not calm water")
+        self.assertTrue(err)
+
+    def test_every_datum_carries_its_source_and_footprint(self):
+        d = survey._d(3.2, "NDBC", survey.RES["buoy"], "measured")
+        self.assertEqual(set(d), {"value", "source", "resolution_m", "note", "when"})
+        self.assertEqual(d["resolution_m"], 100)
 
 
 if __name__ == "__main__":
