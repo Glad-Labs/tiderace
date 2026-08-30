@@ -130,6 +130,16 @@ def run(argv=None) -> int:
                      help="degrees either side for the SST grid")
     ofs.add_argument("--json", action="store_true")
 
+    cd = sub.add_parser("conditions",
+                        help="water level anomaly, rivers, marine forecast")
+    cd.add_argument("--zone", default="ANZ236",
+                    help="NWS marine zone (ANZ236 bay, ANZ237 RI/Block sounds)")
+    cd.add_argument("--station", default="8452660", help="CO-OPS water level station")
+
+    hm = sub.add_parser("hms", help="federal rules for tuna, marlin, swordfish")
+    hm.add_argument("species", nargs="?", help="bluefin, yellowfin, white marlin…")
+    hm.add_argument("--length", type=float, help="check a fish against the size classes")
+
     sub.add_parser("history", help="summarise the catch log")
     sub.add_parser("evaluate", help="does the model beat the free baseline?")
 
@@ -165,6 +175,10 @@ def run(argv=None) -> int:
         return _cmd_scrape(args)
     if args.cmd == "review":
         return _cmd_review(args)
+    if args.cmd == "conditions":
+        return _cmd_conditions(args)
+    if args.cmd == "hms":
+        return _cmd_hms(args)
     if args.cmd == "offshore":
         return _cmd_offshore(args)
     if args.cmd == "config":
@@ -396,6 +410,109 @@ def _cmd_review(args) -> int:
     return 0
 
 
+def _cmd_conditions(args) -> int:
+    """Facts a tide table cannot give you. Nothing here is ranked."""
+    from . import conditions as C
+
+    print()
+    print("  conditions   —   Narragansett Bay")
+    print("  " + "─" * 74)
+
+    al = C.alerts(args.zone)
+    if al:
+        for a in al:
+            print(f"  ! {a['severity'].upper()}  {a['event']} — {a['headline']}")
+        print()
+
+    a = C.water_level_anomaly(args.station)
+    if a:
+        d = a["anomaly_ft"]
+        word = ("stacked in by wind" if d > 0.25
+                else "blown out" if d < -0.25 else "close to prediction")
+        print(f"  water level ({a['when']})")
+        print(f"    observed {a['observed_ft']:.2f} ft · predicted "
+              f"{a['predicted_ft']:.2f} ft · {d:+.2f} ft — {word}")
+        print(f"    six-hour mean {a['mean_anomaly_ft']:+.2f} ft")
+        print("    every printed depth and current in the bay shifts with this")
+
+    riv = C.rivers()
+    if riv:
+        total = sum(r["cfs"] for r in riv)
+        print()
+        print(f"  freshwater into the bay — {total:,.0f} cfs across "
+              f"{len(riv)} gauges")
+        for r in riv[:5]:
+            print(f"    {r['cfs']:>9,.1f} cfs   {r['name']}")
+        print("    a spike after rain drops salinity up-bay and moves bait")
+
+    f = C.marine_forecast(args.zone)
+    if f:
+        print()
+        print(f"  {f['name']} — NWS coastal waters, issued {f['issued']}")
+        for pd in f["periods"]:
+            print(f"    {pd['name']:<11} {pd['text'][:78]}")
+
+    print()
+    print("  " + "─" * 74)
+    print("  Observed levels and discharge are measurements; the forecast is NWS.")
+    print("  None of it is scored.\n")
+    return 0
+
+
+def _cmd_hms(args) -> int:
+    """Federal rules for the offshore species the state does not manage."""
+    from . import hms
+
+    if not args.species:
+        print()
+        print("  Atlantic Highly Migratory Species — federal, not state")
+        print("  " + "─" * 74)
+        for key in hms.RULES:
+            print(f"    {key:<22} {hms.summary_line(key)[:60]}")
+        print()
+        print(f"  {hms.PERMIT}")
+        print(f"  {hms.PERMIT_URL}\n")
+        return 0
+
+    st = hms.status(args.species)
+    print()
+    if st.get("managed_elsewhere"):
+        print(f"  {args.species} — not an HMS species")
+        print(f"  {st['note']}\n")
+        return 0
+    if not st.get("known"):
+        print(f"  no federal HMS rule recorded for {args.species!r}")
+        print(f"  known: {', '.join(hms.RULES)}\n")
+        return 1
+
+    print(f"  {st['common']}  ({st['scientific']})")
+    print("  " + "─" * 74)
+    size = (f"{st['min_inches']:.0f}\" {st['measure']}" if st["min_inches"]
+            else "no minimum size")
+    print(f"  minimum   {size}")
+    print(f"  bag       {st['bag']}")
+    if st["size_classes"]:
+        print("  classes")
+        for name, lo, hi in st["size_classes"]:
+            rng = f'{lo:.0f}" to under {hi:.0f}"' if hi else f'{lo:.0f}" and over'
+            print(f"    {name:<28} {rng}")
+    if args.length:
+        print()
+        print(f"  a {args.length:.0f}\" fish → {hms.classify(args.species, args.length)}")
+    if st["note"]:
+        print(f"\n  {st['note']}")
+    print(f"\n  permit    {st['permit']}")
+
+    print("\n  " + "─" * 74)
+    age = st["days_since_checked"]
+    print(f"  Transcribed {st['checked_on']} ({age}d ago).")
+    if st["volatile"]:
+        print("  ⚠ NOAA adjusts this in-season by notice in the Federal Register.")
+        print(f"    Landings and status: {st['landings']}")
+    print(f"  {st['source']}\n")
+    return 0
+
+
 def _cmd_offshore(args) -> int:
     """Report offshore conditions. Deliberately ranks nothing.
 
@@ -476,6 +593,10 @@ def _cmd_offshore(args) -> int:
                          sorted(months.items(), key=lambda kv: -kv[1])[:3])
         print(f"    {n:<14} {d['records']:>6} records   peak {peak}"
               f"   this month {100*this//tot}% of them")
+        from . import hms
+        line = hms.summary_line(n)
+        if line:
+            print(f"                   federal: {line[:60]}")
 
     print()
     print("  " + "─" * 74)

@@ -12,7 +12,8 @@ import re
 import unittest
 from datetime import date, datetime, timedelta
 
-from tiderace import (astro, bait, evaluate, extract, fetch, gso, llm, reconcile,
+from tiderace import (astro, bait, conditions, evaluate, extract, fetch, gso, hms,
+                      llm, reconcile,
                       regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
@@ -1046,6 +1047,82 @@ class Offline(unittest.TestCase):
         srv = open(os.path.join(os.path.dirname(self.WEB), "server.py")).read()
         self.assertIn('data.get("entries")', srv)
         self.assertIn("client_id", srv)
+
+
+class HMS(unittest.TestCase):
+    """Federal rules for the offshore species Rhode Island does not manage."""
+
+    def test_bluefin_size_classes_are_ordered_and_gapless(self):
+        cls = hms.RULES["bluefin"].size_classes
+        self.assertEqual([c[0] for c in cls],
+                         ["school", "large school / small medium", "trophy"])
+        for (_, _, hi), (_, lo2, _) in zip(cls, cls[1:]):
+            self.assertEqual(hi, lo2, "a gap here means a legal fish scores as none")
+
+    def test_classify_matches_the_boundaries(self):
+        self.assertEqual(hms.classify("bluefin", 27), "school")
+        self.assertEqual(hms.classify("bluefin", 46.9), "school")
+        self.assertEqual(hms.classify("bluefin", 47), "large school / small medium")
+        self.assertEqual(hms.classify("bluefin", 72.9), "large school / small medium")
+        self.assertEqual(hms.classify("bluefin", 73), "trophy")
+        self.assertIn("released", hms.classify("bluefin", 26))
+
+    def test_billfish_minimums(self):
+        self.assertEqual(hms.RULES["blue marlin"].min_inches, 99)
+        self.assertEqual(hms.RULES["white marlin"].min_inches, 66)
+        self.assertEqual(hms.RULES["sailfish"].min_inches, 63)
+        for k in ("blue marlin", "white marlin", "roundscale spearfish"):
+            self.assertEqual(hms.RULES[k].measure, "lower-jaw fork length")
+
+    def test_mahi_and_wahoo_are_flagged_as_managed_elsewhere(self):
+        """Silence would read as 'no rules'. They have rules, just not these."""
+        for sp in ("mahi", "wahoo"):
+            st = hms.status(sp)
+            self.assertFalse(st["known"])
+            self.assertTrue(st["managed_elsewhere"])
+            self.assertIn("FMP", st["note"])
+
+    def test_volatile_species_are_marked(self):
+        """NOAA adjusts bluefin retention and billfish landings in-season."""
+        self.assertTrue(hms.status("bluefin")["volatile"])
+        self.assertTrue(hms.status("white marlin")["volatile"])
+        self.assertFalse(hms.status("yellowfin")["volatile"])
+
+    def test_everything_is_advisory_with_a_short_shelf_life(self):
+        self.assertTrue(hms.status("bluefin")["advisory"])
+        self.assertLessEqual(hms.STALE_AFTER_DAYS, 14)
+
+    def test_every_pelagic_the_offshore_report_names_is_covered(self):
+        from tiderace import offshore
+        for common in offshore.PELAGICS:
+            st = hms.status(common)
+            self.assertTrue(st.get("known") or st.get("managed_elsewhere"),
+                            f"{common} appears offshore with no federal note")
+
+
+class Conditions(unittest.TestCase):
+    def test_marine_zones_cover_the_bay_and_outside(self):
+        self.assertIn("ANZ236", conditions.ZONES)
+        self.assertIn("ANZ237", conditions.ZONES)
+
+    def test_river_gauges_are_usgs_site_numbers(self):
+        for site in conditions.RIVERS:
+            self.assertTrue(site.isdigit() and len(site) >= 8, site)
+
+    def test_anomaly_sign_is_observed_minus_predicted(self):
+        """Positive must mean more water than predicted -- wind stacked it in.
+        Getting the sign backwards would invert every reading."""
+        import inspect
+        src = inspect.getsource(conditions.water_level_anomaly)
+        self.assertIn("o[latest] - p[latest]", src)
+
+    def test_marine_forecast_uses_the_products_api(self):
+        """/zones/{id}/forecast 404s for marine zones; the forecast is a text
+        product covering every zone the office issues."""
+        import inspect
+        src = inspect.getsource(conditions.marine_forecast)
+        self.assertIn("products/types/CWF", src)
+        self.assertNotIn("zones/forecast", src)
 
 
 class Privacy(unittest.TestCase):
