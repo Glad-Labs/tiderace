@@ -12,7 +12,12 @@
  * still fish: the ranked list, the spot detail and the log form are the parts
  * that matter, and they are all data.
  */
-const SHELL = 'tiderace-shell-v1';
+// Bump SHELL whenever the page changes, or the old shell is served for one
+// more load after every edit. That is correct offline-first behaviour and it
+// is genuinely confusing during development -- a browser check against a
+// stale cache proves nothing, which is how a debug probe survived one round
+// of "verification" here.
+const SHELL = 'tiderace-shell-v2';
 const DATA  = 'tiderace-data-v1';
 
 const SHELL_URLS = [

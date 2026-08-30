@@ -562,17 +562,22 @@ fetch('/api/meta').then(r=>r.json()).then(m => {
   if (m.source_url) $('#src').href = m.source_url;
 }).catch(()=>{});
 
-// Layers load asynchronously and depth is last in the manifest, so without a
-// reference it would be painted over the rocks it is meant to sit beneath.
-// It goes directly above the basemap, under every point layer. That leaves the
-// seamark raster beneath it, so at full opacity the buoys are covered -- the
-// layers menu says so rather than letting them quietly disappear.
-function FIRST_POINT_LAYER(){
-  const ids = Object.keys(CHART_STYLE)
-    .filter(n => CHART_STYLE[n].kind !== 'fill')
-    .map(n => 'c-' + n)
-    .concat(['bait','bait-label']);
-  return ids.find(id => map.getLayer(id));
+// Depth shading is ground, not a mark, so it belongs at the bottom of the
+// overlay stack: directly above the basemap raster and beneath everything else.
+// Seamarks, charted rocks and the spot markers all read over it, which is the
+// order a paper chart uses and the only one in which the buoys stay legible.
+//
+// Anchored to the basemap rather than to a named overlay because the layers
+// above it load asynchronously and in a different order each time -- depth is
+// last in the manifest, so "insert before whatever happens to exist" is not a
+// position, it is a race.
+function ABOVE_BASEMAP(){
+  const ids = ((map.getStyle() || {}).layers || []).map(l => l.id);
+  const i = ids.indexOf('osm');
+  if (i === -1) return ids[0];
+  // undefined when the basemap is the only layer, which appends -- and
+  // appending is still directly above it.
+  return ids[i + 1];
 }
 
 async function loadCharts(){
@@ -594,8 +599,7 @@ async function loadCharts(){
       <input type="checkbox" data-layer="${l.name}" ${CHART_ON[l.name]?'checked':''}>
       ${l.name}<span class="cnt" id="cnt-${l.name}"></span></label>`;
   }).join('') + depthLegend()
-    + `<p class="hint">NOAA ENC · public domain<br>click any feature for detail<br>
-        depth draws over seamarks — turn it off to read the buoys</p>`;
+    + `<p class="hint">NOAA ENC · public domain<br>click any feature for detail</p>`;
 
   for (const l of meta.layers){
     const st = CHART_STYLE[l.name];
@@ -618,9 +622,8 @@ async function loadCharts(){
     map.addSource('c-' + l.name, {type:'geojson', data:gj});
 
     if (st.kind === 'fill'){
-      // Under every other chart layer and under the spot markers. The band
-      // edges are the depth contours, so a hairline of the map's own ground
-      // colour separates them and reads as the contour at the same time.
+      // The band edges are the depth contours, so a hairline of the map's own
+      // ground colour separates them and reads as the contour at the same time.
       map.addLayer({
         id: 'c-' + l.name, type:'fill', source:'c-' + l.name,
         minzoom: st.minzoom || 0,
@@ -630,7 +633,7 @@ async function loadCharts(){
           'fill-opacity': st.opacity ?? 0.5,
           'fill-outline-color': 'rgba(11,21,24,.45)'
         }
-      }, FIRST_POINT_LAYER());
+      }, ABOVE_BASEMAP());
       continue;         // ground is not clickable -- see the map click handler
     }
 
