@@ -1163,9 +1163,13 @@ class Birds(unittest.TestCase):
 class BirdsAreNotBait(unittest.TestCase):
     """Seeing bait is an observation. Seeing birds is a guess about bait."""
 
-    BASE = dict(month=8, water_temp_f=70, current_speed=1.3,
-                light_phase="night", wind_kt=7, pressure_trend_3h=-0.4,
-                spring_strength=0.9)
+    # Deliberately a middling afternoon, not a perfect night. On ideal
+    # conditions the score is already at the 100 ceiling and every modifier
+    # comparison collapses -- which is how the first version of the
+    # conjunction test passed while proving nothing.
+    BASE = dict(month=8, water_temp_f=72, current_speed=0.6,
+                light_phase="day", wind_kt=10, pressure_trend_3h=0.2,
+                spring_strength=0.4)
 
     def _score(self, bait_sig, bird_sig):
         return score.score("striped_bass",
@@ -1173,21 +1177,38 @@ class BirdsAreNotBait(unittest.TestCase):
                                 bird_signal=bird_sig))
 
     def test_a_weak_bird_never_dilutes_a_direct_sighting(self):
-        """The bug this replaced: birds were written into the bait log with a
-        lower confidence, and a single `trace` tern record pulled a `loaded`
-        eyeball sighting of silversides from +0.56 down to +0.44."""
-        alone = self._score(0.8, 0.0)
-        with_weak_bird = self._score(0.8, 0.1)
-        self.assertEqual(alone["score"], with_weak_bird["score"])
-        self.assertEqual(alone["modifiers"].get("bait"),
-                         with_weak_bird["modifiers"].get("bait"))
+        """The original bug: birds were written into the bait log at a lower
+        confidence, and one `trace` tern record pulled a `loaded` eyeball
+        sighting of silversides from +0.56 to +0.44. Birds may now add to a
+        sighting, but they must never subtract from one."""
+        alone = self._score(0.8, 0.0)["score"]
+        with_weak_bird = self._score(0.8, 0.1)["score"]
+        self.assertGreaterEqual(with_weak_bird, alone)
 
-    def test_observed_bait_takes_precedence_over_birds(self):
-        """A proxy is worth something without the measurement and nothing
-        with it."""
-        both = self._score(0.8, 0.9)
-        self.assertIn("bait", both["modifiers"])
-        self.assertNotIn("birds", both["modifiers"])
+    def test_bait_worked_by_birds_beats_either_alone(self):
+        """Passive bait and bait being driven up are not the same water. Birds
+        over bait means something is pushing it, so the conjunction says more
+        than either half -- it is not double-counting, the two facts differ."""
+        bait_only = self._score(0.8, 0.0)["score"]
+        birds_only = self._score(0.0, 0.8)["score"]
+        both = self._score(0.8, 0.8)["score"]
+        self.assertGreater(both, bait_only)
+        self.assertGreater(both, birds_only)
+        self.assertIn("bait_worked_by_birds", self._score(0.8, 0.8)["modifiers"])
+
+    def test_the_conjunction_is_capped(self):
+        """A hand-set interaction must not run away."""
+        from tiderace.bait import COMBINED_CAP, combined_modifier
+        m, _ = combined_modifier(1.0, 1.0)
+        self.assertLessEqual(m, COMBINED_CAP)
+        self.assertLess(COMBINED_CAP, 1.7)
+
+    def test_each_case_is_labelled_distinctly(self):
+        from tiderace.bait import combined_modifier
+        self.assertEqual(combined_modifier(0.8, 0.0)[1], "bait")
+        self.assertEqual(combined_modifier(0.0, 0.8)[1], "birds")
+        self.assertEqual(combined_modifier(0.8, 0.8)[1], "bait_worked_by_birds")
+        self.assertEqual(combined_modifier(0.0, 0.0)[1], "")
 
     def test_birds_stand_in_when_nothing_was_seen(self):
         nothing = self._score(0.0, 0.0)

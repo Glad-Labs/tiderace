@@ -204,6 +204,43 @@ def bait_at(lat: float, lon: float, when: datetime, species: str,
     }
 
 
+# How much the two together beat bait alone. Birds working over bait means the
+# bait is being *driven up*, and something has to be driving it -- so the
+# conjunction says more than either half. This is a hand-set number and a
+# hypothesis about magnitude, which is why `evaluate` keeps a birds-removed
+# column: if the interaction is not real, that column will say so.
+CORROBORATION = 0.30
+COMBINED_CAP = 1.55
+
+
+def combined_modifier(bait_signal: float, bird_signal: float) -> tuple[float, str]:
+    """Fold bait and birds together, and say which case applied.
+
+    Three situations, and they are genuinely different:
+
+      bait, no birds   food is present. Necessary, not sufficient.
+      birds, no bait   probably food. A proxy, discounted.
+      bait AND birds   food is being forced to the surface, and something is
+                       doing the forcing. That is the blitz signature and it
+                       is worth more than either half.
+
+    An earlier version treated this as precedence and let birds add nothing
+    when bait was known. That was wrong for the reason above: passive bait and
+    driven bait are not the same water.
+    """
+    b = bait_signal or 0.0
+    d = bird_signal or 0.0
+
+    if b > 0 and d > 0:
+        m = modifier(b) * (1.0 + CORROBORATION * min(1.0, d))
+        return round(min(COMBINED_CAP, m), 3), "bait_worked_by_birds"
+    if b:
+        return round(modifier(b), 3), "bait"
+    if d:
+        return round(modifier(d), 3), "birds"
+    return 1.0, ""
+
+
 def modifier(signal: float) -> float:
     """Bait scales the whole forecast rather than nudging one term: perfect
     water with nothing to eat in it is still an empty spot."""
