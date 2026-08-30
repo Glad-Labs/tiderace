@@ -973,6 +973,9 @@ function renderMark(){
   }
   if (pl.bottom) place.push(pl.bottom.bottom);
   for (const [k, n] of Object.entries(pl.structure || {})) place.push(`${n} ${k}`);
+  // Outside the cached bay there is no chart to be empty. Saying nothing at
+  // all would let a blank row read as clear water over a reef.
+  if (!place.length && pl.charted === false) place.push('no chart data here');
 
   $('#markbox').innerHTML = `
     <p class="ph">Mark</p>

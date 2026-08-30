@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       provenance,
-                      llm, reconcile, reports, whales,
+                      llm, reconcile, reports, protected, whales,
                       regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
@@ -2186,6 +2186,64 @@ class Whales(unittest.TestCase):
             d = whales.derived_sightings(41.3, -71.7, taxa_days := 7)
         self.assertEqual(d[0]["confidence"], "low")
         self.assertEqual(d[0]["bait"], "sand eels")
+
+
+class Protected(unittest.TestCase):
+    """Right whale rules. Constraints, never inputs to a score."""
+
+    WINDMILLS = (41.12, -71.50)
+    CHARLESTOWN = (41.3720, -71.6390)
+
+    def test_the_wind_farm_is_inside_the_block_island_sma(self):
+        got = [a["name"] for a in protected.areas_at(*self.WINDMILLS)]
+        self.assertIn("Block Island Sound", got)
+
+    def test_the_bay_shore_is_outside_it(self):
+        self.assertEqual(protected.areas_at(*self.CHARLESTOWN), [])
+
+    def test_the_season_wraps_the_new_year(self):
+        # Block Island Sound runs Nov 1 - Apr 30. A season that wraps is the
+        # easy one to get backwards and it would read as always-off.
+        for when, want in ((date(2026, 12, 15), True), (date(2026, 2, 1), True),
+                           (date(2026, 4, 30), True), (date(2026, 8, 30), False),
+                           (date(2026, 5, 1), False), (date(2026, 11, 1), True)):
+            a = protected.advisory(*self.WINDMILLS, on=when)
+            self.assertEqual(a["in_active_sma"], want, str(when))
+
+    def test_an_out_of_season_area_is_reported_not_hidden(self):
+        a = protected.advisory(*self.WINDMILLS, on=date(2026, 8, 30))
+        self.assertFalse(a["in_active_sma"])
+        self.assertTrue(a["areas"], "should still say you are in the polygon")
+        self.assertIn("out of season", " ".join(protected.describe(a)))
+
+    def test_the_approach_rule_applies_regardless_of_area_or_season(self):
+        # 500 yards is the one that actually binds a small boat, everywhere.
+        for lat, lon in (self.WINDMILLS, self.CHARLESTOWN, (25.0, -80.0)):
+            a = protected.advisory(lat, lon, on=date(2026, 8, 30))
+            self.assertEqual(a["approach_yards"], 500)
+            self.assertIn("500 yards", a["rules"][0])
+
+    def test_the_speed_rule_is_not_claimed_to_bind_a_small_boat(self):
+        small = protected.advisory(*self.WINDMILLS, on=date(2026, 12, 15),
+                                   vessel_loa_ft=28)
+        big = protected.advisory(*self.WINDMILLS, on=date(2026, 12, 15),
+                                 vessel_loa_ft=70)
+        self.assertIs(small["speed_rule_binds"], False)
+        self.assertIs(big["speed_rule_binds"], True)
+        self.assertIn("not to yours", " ".join(small["rules"]))
+
+    def test_unknown_vessel_size_does_not_guess(self):
+        a = protected.advisory(*self.WINDMILLS, on=date(2026, 12, 15))
+        self.assertIsNone(a["speed_rule_binds"])
+
+    def test_right_whales_are_never_a_scoring_input(self):
+        # The whole point of a separate module. A protected species must not be
+        # able to raise a number anywhere.
+        import inspect
+        src = inspect.getsource(protected)
+        for banned in ("PROFILES", "score(", "modifier", "signal_at"):
+            self.assertNotIn(banned, src, f"protected.py must not touch {banned}")
+        self.assertNotIn("right", str(whales.BAIT_WHALES).lower())
 
 
 if __name__ == "__main__":

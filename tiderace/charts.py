@@ -188,6 +188,18 @@ def _thin(gj: dict, tol: float | None, min_area: float | None = None) -> dict:
     return gj
 
 
+def covers(lat: float, lon: float, bbox=BAY_BBOX, pad: float = 0.05) -> bool:
+    """Is this point inside the area the cached chart layers describe?
+
+    The land, depth and structure layers are one bay. Outside it every chart
+    lookup returns "nothing here", which is indistinguishable from "open
+    water" and is the wrong answer for a mark off another coast. Callers ask
+    this first so they can say "no data" rather than imply "all clear".
+    """
+    x0, y0, x1, y1 = bbox
+    return (x0 - pad) <= lon <= (x1 + pad) and (y0 - pad) <= lat <= (y1 + pad)
+
+
 def _clean(f: dict) -> dict:
     """Drop chart bookkeeping, keep what a fisherman would want, and decode
     the S-57 codes that are meaningless as raw integers."""

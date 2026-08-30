@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from . import charts, features, score, spots, stations
+from . import charts, protected as protectedmod, features, score, spots, stations
 from .sources import SourceError
 
 
@@ -145,8 +145,14 @@ def report(lat: float, lon: float, species: str = "striped_bass",
             "bottom": charts.bottom_at(lat, lon),
             "structure": structure_near(lat, lon),
             "on_land": res["on_land"],
+            # "we looked and found nothing" and "we have no chart here" are
+            # different facts, and only one of them is good news.
+            "charted": charts.covers(lat, lon),
             "water_point": res.get("water_point"),
         },
+        # Rules, not signals. Kept beside the place rather than the score so
+        # nothing here can ever raise a number.
+        "protected": protectedmod.advisory(lat, lon),
         # No history at a bare coordinate, so the spot-quality modifier is a
         # default rather than knowledge. Said out loud so a caller cannot
         # mistake 0.6 for a measurement.

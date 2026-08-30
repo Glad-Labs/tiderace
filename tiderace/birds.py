@@ -20,6 +20,7 @@ Needs a free key from https://ebird.org/api/keygen — set it with
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import urllib.parse
@@ -108,7 +109,7 @@ def nearby(lat: float, lon: float, radius_km: int = 25,
 
 
 def bait_activity(lat: float, lon: float, radius_km: int = 25,
-                  days_back: int = 3) -> dict:
+                  days_back: int = 3, limit: int = 8) -> dict:
     """What the bait-following species have been doing near here.
 
     Returns counts and a weighted total. It does not return a score for a
@@ -147,7 +148,7 @@ def bait_activity(lat: float, lon: float, radius_km: int = 25,
         "observations": len(obs), "bait_bird_records": len(hits),
         "other_species_ignored": others,
         "by_species": dict(sorted(by_species.items(), key=lambda kv: -kv[1])),
-        "hotspots": ranked[:8],
+        "hotspots": ranked[:limit],
         "radius_km": radius_km, "days_back": days_back,
     }
 
@@ -211,7 +212,7 @@ def _abundance(weighted: float) -> str:
 
 
 def derived_sightings(lat: float, lon: float, radius_km: int = 25,
-                      days_back: int = 3) -> list[dict]:
+                      days_back: int = 3, limit: int = 8) -> list[dict]:
     """Turn bird activity into bait sightings the forecast can use.
 
     Confidence is capped at medium: a bird tells you something was being
@@ -219,7 +220,7 @@ def derived_sightings(lat: float, lon: float, radius_km: int = 25,
     can cover a lot of water. That is weaker than standing there and looking
     at the bait, and it is recorded as weaker.
     """
-    r = bait_activity(lat, lon, radius_km, days_back)
+    r = bait_activity(lat, lon, radius_km, days_back, limit)
     out = []
     for spot in r["hotspots"]:
         # Pick the bait implied by the most informative bird present.
@@ -246,6 +247,94 @@ def derived_sightings(lat: float, lon: float, radius_km: int = 25,
     return out
 
 
+
+
+# ------------------------------------------------------- one query, shared
+#
+# A forecast asks about twenty-one spots, and asking eBird separately for each
+# was twenty-one round trips describing largely the same water -- the bay is
+# about 40 km across and eBird will answer for a 50 km radius in one request.
+#
+# So a query is treated as covering a CIRCLE, and any spot far enough inside
+# that circle reuses it. "Far enough" means the query still reaches every
+# observation the spot could care about: bait stops counting past
+# `bait.MAX_NM`, so a spot within (radius - MAX_NM) of the centre sees exactly
+# what a query centred on it would have seen.
+#
+# Nothing here is bay-specific. The first spot asked fetches a circle around
+# itself, its neighbours fall inside it, and a spot on another coast simply
+# opens a second circle.
+
+REGION_KM = 50          # eBird's maximum radius for one geo query
+REGION_LIMIT = 60       # hotspots kept from a regional query, not 8
+
+# (lat, lon, days_back, fetched_at, sightings). In-process only, and
+# deliberately so: the disk cache in `_get` already spans runs, and this exists
+# to collapse one forecast's worth of spots into one request. It carries the
+# same TTL, because `tiderace serve` runs for days and a cache with no expiry
+# would pin one afternoon's birds to every forecast after it.
+_REGIONS: list[tuple[float, float, int, float, list[dict]]] = []
+
+
+def _km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle-ish distance in km. Uses cos(lat) rather than a constant
+    per-degree figure, because a spot can be anywhere, not just at 41.5N."""
+    mid = math.radians((lat1 + lat2) / 2)
+    dx = (lon2 - lon1) * 111.32 * math.cos(mid)
+    dy = (lat2 - lat1) * 110.57
+    return math.hypot(dx, dy)
+
+
+def region_reuse_km() -> float:
+    """How far inside a query circle a spot has to be to reuse it."""
+    from .bait import MAX_NM
+    return REGION_KM - MAX_NM * 1.852
+
+
+def sightings_near(lat: float, lon: float, days_back: int = 3) -> list[dict]:
+    """Bird-derived bait sightings covering a point, reusing a wider query.
+
+    Returns everything the regional query found, not a filtered subset:
+    `bait.bait_at` and `signal_at` already apply the distance falloff, and
+    pre-filtering here would only duplicate it less accurately.
+    """
+    margin = region_reuse_km()
+    now = time.time()
+    for clat, clon, back, at, found in _REGIONS:
+        if (back == days_back and now - at < CACHE_TTL
+                and _km(lat, lon, clat, clon) <= margin):
+            return found
+    try:
+        found = derived_sightings(lat, lon, REGION_KM, days_back, REGION_LIMIT)
+    except Exception:                                             # noqa: BLE001
+        # No key, no network, or eBird is down. Birds are a bonus layer; the
+        # forecast is physics and must not fail with them.
+        found = []
+    _REGIONS.append((lat, lon, days_back, now, found))
+    return found
+
+
+def prime(points, days_back: int = 3) -> bool:
+    """Fetch one query covering a whole set of spots, before any is asked.
+
+    Without this the first spot in the loop opens a circle around itself, and
+    a spot at the far end of the bay can fall outside it -- two requests where
+    one centred between them would do. Returns whether one circle sufficed.
+    """
+    pts = [(float(a), float(b)) for a, b in points]
+    if not pts:
+        return False
+    clat = sum(p[0] for p in pts) / len(pts)
+    clon = sum(p[1] for p in pts) / len(pts)
+    if max(_km(clat, clon, a, b) for a, b in pts) > region_reuse_km():
+        return False              # too spread out; each opens its own circle
+    sightings_near(clat, clon, days_back)
+    return True
+
+
+def forget_regions() -> None:
+    """Drop the in-process region cache. For tests and long-lived servers."""
+    _REGIONS.clear()
 
 
 # How much a pure-bird signal is worth against a seen-it-yourself one. Birds

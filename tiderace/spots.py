@@ -240,8 +240,11 @@ def parse_coord(text: str) -> tuple[float, float]:
         41 26.448 N, 71 25.368 W
         41°26'26.9"N 71°25'22.1"W
 
-    Longitude in Rhode Island is negative. A positive one is a typo every
-    time, and silently fishing the Yellow Sea is a worse failure than an error.
+    Longitude in Rhode Island is negative, and a positive one is nearly always
+    a dropped minus sign -- but "nearly" is not "always", so this parses what
+    you typed rather than second-guessing it. `stations.resolve` is where a
+    mark outside the charted area gets said out loud, because that is the
+    layer that knows how far away the nearest real data is.
     """
     import re
     t = text.strip().replace("°", " ").replace("'", " ").replace('"', " ")
@@ -273,13 +276,6 @@ def parse_coord(text: str) -> tuple[float, float]:
 
     if not -90 <= lat <= 90 or not -180 <= lon <= 180:
         raise ValueError(f"{lat},{lon} is not a coordinate")
-    # The docstring above promised this and the code did not do it, so a
-    # dropped minus sign parsed clean and got a full forecast off a station on
-    # the other side of the world.
-    if lon > 0:
-        raise ValueError(
-            f"longitude {lon} is positive — east of Greenwich. "
-            f"Did you mean {-lon}?")
     return round(lat, 6), round(lon, 6)
 
 

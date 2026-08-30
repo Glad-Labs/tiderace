@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import bait as baitmod
-from . import charts, config as cfgmod, features, point, regs, score, spots
+from . import birds, charts, config as cfgmod, features, point, regs, score, spots
 from . import log as catchlog
 from .sources import SourceError
 
@@ -45,7 +45,10 @@ def build_grid(species: str, start: datetime, hours: int = 48,
 
     times: list[str] = []
     out_spots = []
-    for spot in spots.for_species(species):
+    targets = list(spots.for_species(species))
+    # One eBird query for the whole set rather than one per spot.
+    birds.prime([(s.lat, s.lon) for s in targets])
+    for spot in targets:
         try:
             rows = features.build(spot, start, hours, step_minutes, species=species)
         except SourceError as exc:

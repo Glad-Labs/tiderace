@@ -51,12 +51,17 @@ CATALOG_MAX_AGE_DAYS = 90
 NEAR_NM = 1.5
 FAR_NM = 3.0
 
-# Past this, the coordinate is not far -- it is wrong. A dropped minus sign on
-# the longitude puts you in the Yellow Sea, and every layer downstream will
-# still produce a number: a tide curve, a solunar peak, a score. Warnings do
-# not help, because the answer looks exactly like a real one. So this refuses.
-# Generous on purpose -- it is a typo detector, not a service area.
-ABSURD_NM = 300.0
+# Past this there is no NOAA station worth calling nearby, which in practice
+# means a dropped minus sign on the longitude -- but it might be someone
+# genuinely fishing somewhere else, so it is a loud warning and a "poor"
+# confidence rather than a refusal. What it must never be is silent: every
+# layer downstream still produces a number, and the answer looks exactly like
+# a real one. Generous on purpose -- a typo detector, not a service area.
+#
+# Note this is NOT the same question as "are we outside the chart layers".
+# NOAA's catalog is national, so San Francisco has stations 2 nm away and no
+# coastline data at all; Tokyo has neither. They need different warnings.
+NO_STATIONS_NM = 300.0
 
 
 class StationError(RuntimeError):
@@ -206,10 +211,15 @@ def current_candidates(lat: float, lon: float, limit: int = 8,
     # Distances are measured from the mark; land is measured from the water
     # beside it, which for a shore spot is not the same point.
     olat, olon = origin or (lat, lon)
+    # The land test walks the path sample by sample. From a mark the chart
+    # layers do not cover it can only ever answer "don't know", and the walk
+    # to a station on another continent is thousands of samples long -- ten
+    # seconds of work to reach that non-answer.
+    testable = charts.covers(olat, olon)
     out = []
     for s in _ranked(cat.get("current", []), lat, lon, limit):
         s = dict(s)
-        span = charts.land_span_nm(olat, olon, s["lat"], s["lon"])
+        span = charts.land_span_nm(olat, olon, s["lat"], s["lon"]) if testable else None
         s["land_span_nm"] = span
         s["crosses_land"] = (None if span is None
                              else span > charts.LAND_TOLERANCE_NM)
@@ -228,20 +238,32 @@ def resolve(lat: float, lon: float, cat: dict | None = None) -> dict:
     from . import charts
 
     # Cheapest possible first: a plain distance sort, before any land geometry.
-    # A coordinate this far out is a typo, and the land tests below cost real
-    # seconds -- there is no sense spending them to describe the wrong ocean.
+    # The chart layers cover one bay, so for a mark on another coast every
+    # land test below is seconds of work that can only return "don't know".
     probe = _ranked(list(cat.get("current", [])) + list(cat.get("tide", [])),
                     lat, lon, 1)
-    if probe and probe[0]["distance_nm"] > ABSURD_NM:
-        raise StationError(
-            f"{lat},{lon} is {probe[0]['distance_nm']:.0f} nm from the nearest "
-            "NOAA station — check the coordinate (longitude here is negative)")
+    stranded_far = bool(probe) and probe[0]["distance_nm"] > NO_STATIONS_NM
+    off_chart = not charts.covers(lat, lon)
 
     warnings: list[str] = []
-    land_known = bool(charts.land_index())
-    ashore = charts.on_land(lat, lon)
+    if stranded_far:
+        warnings.append(
+            f"nearest NOAA station is {probe[0]['distance_nm']:.0f} nm away — "
+            f"there is no tide or current data for this mark. If you meant "
+            f"{lat},{-abs(lon)}, the longitude is missing its minus sign")
 
-    if not land_known:
+    # The chart layers are one bay. Outside them every land test can only say
+    # "nothing here", which reads as "open water" and is not the same thing --
+    # so they are skipped and the gap is named. This is also what keeps a
+    # far-away mark cheap: the land geometry is the slow part.
+    land_known = bool(charts.land_index()) and not off_chart
+    ashore = charts.on_land(lat, lon) if land_known else None
+
+    if off_chart:
+        warnings.append(
+            "no coastline or depth data for this area, so the current station "
+            "was picked on distance alone and could be across land")
+    elif not land_known:
         warnings.append(
             "no coastline data cached, so the current station could be across "
             "land — run: tiderace charts")
@@ -294,6 +316,8 @@ def resolve(lat: float, lon: float, cat: dict | None = None) -> dict:
     if current is None:
         warnings.append("no current station found at all")
         confidence = "poor"
+    elif off_chart or stranded_far:
+        confidence = "poor"
     elif not clear or current["distance_nm"] > FAR_NM or stranded:
         confidence = "poor"
     elif not land_known or current["distance_nm"] > NEAR_NM:
@@ -301,7 +325,7 @@ def resolve(lat: float, lon: float, cat: dict | None = None) -> dict:
     else:
         confidence = "good"
 
-    if current and current["distance_nm"] > FAR_NM:
+    if current and not stranded_far and current["distance_nm"] > FAR_NM:
         warnings.append(
             f"nearest usable current station is {current['distance_nm']} nm away; "
             "the current here is an extrapolation, not a prediction")
@@ -315,6 +339,8 @@ def resolve(lat: float, lon: float, cat: dict | None = None) -> dict:
         "tide_alternates": tide_list[1:],
         "temp": temp,
         "on_land": ashore,
+        "off_chart": off_chart,
+        "no_stations_near": stranded_far,
         "water_point": water,
         "land_data": land_known,
         "confidence": confidence,
