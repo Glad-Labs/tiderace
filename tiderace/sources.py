@@ -71,6 +71,30 @@ def _fetch(url: str, ttl: int = CACHE_TTL) -> dict:
     return payload
 
 
+def _fetch_text(url: str, ttl: int = CACHE_TTL) -> str:
+    """Same caching as _fetch, for endpoints that are not JSON.
+
+    NDBC publishes fixed-width text, and several bay gauges report a water
+    temperature there that the CO-OPS JSON API does not serve at all.
+    """
+    path = _cache_path(url) + ".txt"
+    if ttl and os.path.exists(path) and time.time() - os.path.getmtime(path) < ttl:
+        with open(path) as fh:
+            return fh.read()
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8", "replace")
+    except Exception as exc:                                      # noqa: BLE001
+        if os.path.exists(path):
+            with open(path) as fh:
+                return fh.read()
+        raise SourceError(f"text fetch failed for {url}: {exc}") from exc
+    with open(path, "w") as fh:
+        fh.write(body)
+    return body
+
+
 def _coops(**params) -> dict:
     params.setdefault("units", "english")
     params.setdefault("time_zone", "lst_ldt")

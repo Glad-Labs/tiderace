@@ -21,7 +21,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 
-from .sources import _coops, _dt, _fetch
+from .sources import _coops, _dt, _fetch, _fetch_text
 
 USGS = "https://waterservices.usgs.gov/nwis/iv/"
 NWS = "https://api.weather.gov"
@@ -43,6 +43,65 @@ RIVERS = {
     "01117500": "Pawcatuck R. at Wood River Jct",
     "01111500": "Branch R. at Forestdale",
 }
+
+
+# Water temperature across the bay.
+#
+# The forecast binds every spot to one of two CO-OPS stations, which is
+# thinner than it needs to be: the bay runs a real thermal gradient, and
+# NDBC republishes several gauges whose temperature the CO-OPS API does not
+# serve at all. Fall River covers the Mount Hope and Sakonnet side, which was
+# previously reading Conimicut from the wrong side of the bay.
+TEMP_STATIONS = [
+    # (source, id, name, lat, lon)
+    ("coops", "8452660", "Newport (mouth)",        41.504, -71.326),
+    ("coops", "8452944", "Conimicut (upper bay)",  41.717, -71.343),
+    ("coops", "8447386", "Fall River (Mt Hope)",   41.704, -71.164),
+    ("ndbc",  "FOXR1",   "Providence (head)",      41.807, -71.401),
+    ("ndbc",  "44097",   "Block Island (outside)", 40.967, -71.124),
+    ("ndbc",  "44085",   "Buzzards Bay",           41.397, -71.030),
+]
+
+
+def _ndbc_water_f(station: str) -> float | None:
+    try:
+        raw = _fetch_text(f"https://www.ndbc.noaa.gov/data/realtime2/{station}.txt",
+                          ttl=1800)
+    except Exception:                                             # noqa: BLE001
+        return None
+    for line in raw.splitlines():
+        if line.startswith("#"):
+            continue
+        f = line.split()
+        try:
+            c = float(f[14])
+        except (ValueError, IndexError):
+            continue
+        if c > 90:                       # MM / 999 sentinels
+            continue
+        return round(c * 9 / 5 + 32, 1)
+    return None
+
+
+def water_temperatures() -> list[dict]:
+    """Water temperature everywhere in and around the bay that reports it."""
+    out = []
+    for src, sid, name, lat, lon in TEMP_STATIONS:
+        f = None
+        if src == "coops":
+            try:
+                d = _coops(product="water_temperature", station=sid, date="latest")
+                rows = d.get("data", [])
+                if rows:
+                    f = round(float(rows[0]["v"]), 1)
+            except Exception:                                     # noqa: BLE001
+                f = None
+        else:
+            f = _ndbc_water_f(sid)
+        if f is not None:
+            out.append({"source": src, "id": sid, "name": name,
+                        "lat": lat, "lon": lon, "water_f": f})
+    return sorted(out, key=lambda r: -r["lat"])
 
 
 def water_level_anomaly(station: str = "8452660",

@@ -424,6 +424,16 @@ def _cmd_conditions(args) -> int:
             print(f"  ! {a['severity'].upper()}  {a['event']} — {a['headline']}")
         print()
 
+    temps = C.water_temperatures()
+    if temps:
+        lo = min(t["water_f"] for t in temps)
+        hi = max(t["water_f"] for t in temps)
+        print(f"  water temperature — {hi-lo:.1f}°F spread, head of bay to outside")
+        for t in temps:
+            bar = "█" * max(0, int((t["water_f"] - lo) * 3))
+            print(f"    {t['water_f']:>5.1f}°F  {bar:<22} {t['name']}")
+        print()
+
     a = C.water_level_anomaly(args.station)
     if a:
         d = a["anomaly_ft"]
