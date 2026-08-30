@@ -1160,6 +1160,72 @@ class Birds(unittest.TestCase):
         self.assertIn("data/config.json", ignore)
 
 
+class BirdsFeedTheForecast(unittest.TestCase):
+    """Birds enter as bait observations, not as a new score term."""
+
+    def test_bird_species_imply_a_sensible_bait(self):
+        """Terns work small stuff, gannets bigger, shearwaters sand eels."""
+        m = birds.BIRD_IMPLIES_BAIT
+        self.assertEqual(m["Common Tern"], "silversides")
+        self.assertEqual(m["Northern Gannet"], "bunker")
+        self.assertEqual(m["Great Shearwater"], "sand eels")
+        # Robbers and slick-pickers imply activity but not a bait type.
+        self.assertIsNone(m["Parasitic Jaeger"])
+        self.assertIsNone(m["Wilson's Storm-Petrel"])
+
+    def test_implied_baits_exist_in_the_bait_model(self):
+        """A bait type the scorer has never heard of would silently score zero."""
+        for b in birds.BIRD_IMPLIES_BAIT.values():
+            if b is None:
+                continue
+            self.assertTrue(any(b in rel for rel in bait.RELEVANCE.values()),
+                            f"{b} is implied by a bird but unknown to the scorer")
+
+    def test_abundance_ladder_is_monotonic_and_uses_the_shared_vocabulary(self):
+        prev = -1
+        for w in (1, 20, 60, 400):
+            a = birds._abundance(w)
+            self.assertIn(a, bait.ABUNDANCE)
+            self.assertGreaterEqual(bait.ABUNDANCE[a], prev)
+            prev = bait.ABUNDANCE[a]
+
+    def test_derived_confidence_never_claims_certainty(self):
+        """A checklist location covers more water than standing there does."""
+        import inspect
+        src = inspect.getsource(birds.derived_sightings)
+        self.assertIn('"medium"', src)
+        self.assertNotIn('"high"', src)
+
+    def test_bait_can_be_scored_without_a_source(self):
+        """The only way to ask whether the model works because of the physics
+        or because of the birds."""
+        rows = [
+            {"bait": "silversides", "lat": 41.36, "lon": -71.64,
+             "when": "2026-08-29T12:00", "abundance": "loaded",
+             "confidence": "high", "source": "own"},
+            {"bait": "silversides", "lat": 41.36, "lon": -71.64,
+             "when": "2026-08-29T12:00", "abundance": "trace",
+             "confidence": "medium", "source": "ebird"},
+        ]
+        when = datetime(2026, 8, 29, 13, 0)
+        both = bait.bait_at(41.36, -71.64, when, "striped_bass", rows)
+        own = bait.bait_at(41.36, -71.64, when, "striped_bass", rows,
+                           exclude_sources={"ebird"})
+        self.assertEqual(both["sources"], ["ebird", "own"])
+        self.assertEqual(own["sources"], ["own"])
+        self.assertNotEqual(both["signal"], own["signal"])
+
+    def test_evaluate_reports_the_model_without_birds(self):
+        base = {"current_speed": 1.2, "light_phase": "night", "month": 9,
+                "water_temp_f": 62, "wind_kt": 8, "spring_strength": .6,
+                "pressure_trend_3h": -.5, "exposed": False,
+                "bait_signal": 0.8, "bait_sources": ["ebird"]}
+        rows = [{"species": "striped_bass", "count": n, "conditions": dict(base)}
+                for n in (0, 1, 2, 3, 4)]
+        r = evaluate.evaluate(rows)
+        self.assertIn("model_without_birds_rho", r)
+
+
 class SurfaceCurrent(unittest.TestCase):
     def test_offshore_uses_measured_radar_not_extrapolation(self):
         """The bay has measured current; offshore had none until HF radar.

@@ -143,6 +143,10 @@ def run(argv=None) -> int:
                     help="lat,lon (default: Charlestown Breachway)")
     bd.add_argument("--km", type=int, default=25)
     bd.add_argument("--days", type=int, default=3)
+    bd.add_argument("--sync", action="store_true",
+                    help="add the implied bait sightings to the bait log")
+    bd.add_argument("--dry-run", action="store_true",
+                    help="show what --sync would add, and add nothing")
 
     hm = sub.add_parser("hms", help="federal rules for tuna, marlin, swordfish")
     hm.add_argument("species", nargs="?", help="bluefin, yellowfin, white marlin…")
@@ -458,10 +462,26 @@ def _cmd_birds(args) -> int:
         w = birds.BAIT_BIRDS.get(name, 0)
         print(f"    {n:>6}  {name:<28} weight {w:.2f}")
 
+    if args.sync or args.dry_run:
+        res = birds.sync_to_bait_log(lat, lon, args.km, args.days,
+                                     apply=args.sync and not args.dry_run)
+        print()
+        print("  implied bait sightings")
+        for d in res["sightings"]:
+            print(f"    {d['abundance']:<10} {d['bait']:<13} "
+                  f"conf {d['confidence']:<7} {d['when'][:16]}")
+        print(f"\n    {res['found']} implied · {res['already_logged']} already logged"
+              f" · {res['applied']} added")
+        if args.dry_run:
+            print("    (dry run — nothing written)")
+
     print()
     print("  " + "─" * 74)
-    print("  Birds mean bait was up near a checklist location on some day.")
-    print("  That is a hint, not a forecast, and it is not scored.\n")
+    print("  Bait type is inferred from the bird, not observed: terns work small")
+    print("  stuff, gannets bigger, shearwaters sand eels offshore. Synced")
+    print("  sightings are tagged source=ebird so evaluation can tell them from")
+    print("  yours, and confidence is capped at medium — a checklist location")
+    print("  covers more water than standing there does.\n")
     return 0
 
 

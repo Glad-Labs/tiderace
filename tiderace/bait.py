@@ -118,7 +118,8 @@ CONFIDENCE = {"high": 1.0, "medium": 0.7, "low": 0.45}
 
 
 def bait_at(lat: float, lon: float, when: datetime, species: str,
-            sightings: list[dict] | None = None) -> dict:
+            sightings: list[dict] | None = None,
+            exclude_sources: set[str] | None = None) -> dict:
     """Weighted bait signal for a predator at a place and time.
 
     Returns `signal` in roughly -1..+1: positive means relevant bait has been
@@ -126,6 +127,11 @@ def bait_at(lat: float, lon: float, when: datetime, species: str,
     zero means nobody knows.
     """
     rows = sightings if sightings is not None else load()
+    # Lets the evaluation score the same trip with and without a source, which
+    # is the only way to ask whether the model works because of the physics or
+    # because of the birds.
+    if exclude_sources:
+        rows = [r for r in rows if r.get("source") not in exclude_sources]
     rel = RELEVANCE.get(species, {})
     if not rows or not rel:
         return {"signal": 0.0, "observations": 0, "top": None, "known": False}
@@ -185,6 +191,7 @@ def bait_at(lat: float, lon: float, when: datetime, species: str,
     top = best[1] if best else None
     return {
         "signal": round(max(-1.0, min(1.0, signal)), 3),
+        "sources": sorted({r.get("source", "own") for r in rows}),
         "observations": used,
         "known": True,
         "top": None if not top else {

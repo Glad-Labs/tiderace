@@ -103,7 +103,7 @@ def evaluate(entries: list[dict] | None = None) -> dict:
         return out
 
     counts = [float(e.get("count") or 0) for e in usable]
-    model, base, sol, rand = [], [], [], []
+    model, base, sol, rand, nobird = [], [], [], [], []
     rng = random.Random(0)
     for e in usable:
         c = e["conditions"]
@@ -111,6 +111,13 @@ def evaluate(entries: list[dict] | None = None) -> dict:
         if sp not in score.PROFILES:
             continue
         model.append(score.score(sp, c, exposed=bool(c.get("exposed")))["score"])
+        # Same conditions, with any bird-derived bait signal removed. If this
+        # tracks catch as well as the full model does, the birds are not
+        # earning their place.
+        c_nb = dict(c)
+        if "ebird" in (c.get("bait_sources") or []):
+            c_nb["bait_signal"] = 0.0
+        nobird.append(score.score(sp, c_nb, exposed=bool(c.get("exposed")))["score"])
         base.append(baseline(c))
         sol.append(solunar_baseline(c))
         rand.append(rng.random() * 100)
@@ -121,6 +128,8 @@ def evaluate(entries: list[dict] | None = None) -> dict:
     out["solunar_rho"] = (_spearman(sol, counts)
                           if any(v > 0 for v in sol) else None)
     out["random_rho"] = _spearman(rand, counts)
+    out["model_without_birds_rho"] = (_spearman(nobird, counts)
+                                      if nobird != model else None)
 
     # How much of the log came from the app's own recommendation?
     decided = sum(1 for e in usable if e.get("decided_by") == "app")
@@ -161,6 +170,7 @@ def report(res: dict) -> str:
     L.append("  rank correlation with catch (higher is better)")
     for k, label in (("model_rho", "tiderace"),
                      ("baseline_rho", "moving water + low light"),
+                     ("model_without_birds_rho", "tiderace, birds removed"),
                      ("solunar_rho", "solunar (moon periods)"),
                      ("random_rho", "random")):
         v = res.get(k)
