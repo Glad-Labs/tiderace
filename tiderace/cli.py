@@ -34,6 +34,8 @@ def _add_forecast_args(ap):
     ap.add_argument("--threshold", type=float, default=45.0,
                     help="minimum score to count as a window")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--why", action="store_true",
+                    help="show what each score is actually made of")
     ap.add_argument("--license", dest="license_mode",
                     choices=("recreational", "commercial"),
                     help="which rules apply (default: from config)")
@@ -952,6 +954,23 @@ def _cmd_forecast(args) -> int:
         if row.get("bait_note"):
             print(f"         bait: {row['bait_note']}")
         print(f"         → {score.explain(b)}")
+        if getattr(args, "why", False):
+            from . import provenance as prov
+            br = prov.breakdown(b, row)
+            ag = prov.agreement(row)
+            print(f"         made of: "
+                  + ", ".join(f"{n} {t}" for t, n in br["counts"].items()))
+            for tier in prov.TIER_ORDER:
+                for item in br["tiers"].get(tier, []):
+                    amt = ("" if item["amount"] is None
+                           else f"{item['amount']:+.3f}  ")
+                    print(f"           {tier:<11} {amt}{item['what']}")
+            print(f"         {len(br['independent_origins'])} independent origins: "
+                  + ", ".join(br["independent_origins"]))
+            if ag["count"]:
+                w = "; ".join(f"{txt} ({tier})" for txt, tier in ag["witnesses"])
+                mark = "corroborated" if ag["corroborated"] else "single witness"
+                print(f"         bait — {mark}: {w}")
 
     print()
     print("  " + "─" * 74)

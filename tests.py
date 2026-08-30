@@ -13,6 +13,7 @@ import unittest
 from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
+                      provenance,
                       llm, reconcile,
                       regs, ridem, score, solunar, spots)
 
@@ -1158,6 +1159,70 @@ class Birds(unittest.TestCase):
         root = os.path.dirname(os.path.abspath(__file__))
         ignore = open(os.path.join(root, ".gitignore")).read()
         self.assertIn("data/config.json", ignore)
+
+
+class Provenance(unittest.TestCase):
+    """A score is a measurement, a prediction, an inference and a guess
+    multiplied together. Those are worth different amounts and the number
+    hides that."""
+
+    FEAT = dict(month=8, water_temp_f=70, current_speed=1.3, light_phase="night",
+                wind_kt=7, pressure_trend_3h=-0.4, spring_strength=0.9)
+
+    def test_every_scoring_term_is_classified(self):
+        """An unclassified input silently becomes 'assumed', which would
+        understate the model rather than overstate it -- but still wrongly."""
+        r = score.score("striped_bass", self.FEAT)
+        for name in r["weighted"]:
+            self.assertIn(name, provenance.INPUTS, f"{name} has no provenance")
+
+    def test_every_modifier_is_classified(self):
+        seen = set()
+        for bait_sig, bird_sig in ((0, 0), (0.8, 0), (0, 0.8), (0.8, 0.8)):
+            r = score.score("striped_bass",
+                            dict(self.FEAT, bait_signal=bait_sig,
+                                 bird_signal=bird_sig))
+            seen |= set(r["modifiers"])
+        for name in seen:
+            self.assertIn(name, provenance.MODIFIERS, f"{name} has no provenance")
+
+    def test_tiers_are_ordered_strongest_first(self):
+        self.assertEqual(provenance.TIER_ORDER[0], provenance.OBSERVED)
+        self.assertEqual(provenance.TIER_ORDER[-1], provenance.ASSUMED)
+
+    def test_hand_set_curves_are_always_declared(self):
+        """They shape every term, so no score is ever free of them."""
+        b = provenance.breakdown(score.score("striped_bass", self.FEAT))
+        names = [i["name"] for i in b["tiers"][provenance.ASSUMED]]
+        self.assertIn("species_curve", names)
+
+    def test_lunar_inputs_share_one_origin(self):
+        """Tidal current and spring tide are both the moon. Counting them as
+        two agreeing sources is the error this exists to prevent."""
+        self.assertEqual(provenance.INPUTS["current"][2], "moon")
+        self.assertEqual(provenance.MODIFIERS["spring_tide"][2], "moon")
+
+    def test_birds_and_bait_share_the_bait_origin(self):
+        """Birds are over bait. They are not a second independent witness to
+        bait being present -- they are a proxy for the same fact."""
+        self.assertEqual(provenance.MODIFIERS["birds"][2], "bait")
+        self.assertEqual(provenance.MODIFIERS["bait"][2], "bait")
+
+    def test_agreement_counts_witnesses_by_kind(self):
+        none = provenance.agreement({})
+        self.assertEqual(none["count"], 0)
+        self.assertFalse(none["corroborated"])
+
+        both = provenance.agreement({"bait_sources": ["own", "report"],
+                                     "bird_signal": 0.5})
+        self.assertEqual(both["count"], 3)
+        self.assertTrue(both["corroborated"])
+        self.assertEqual(both["strongest"], provenance.OBSERVED)
+
+    def test_a_single_source_is_not_corroboration(self):
+        one = provenance.agreement({"bait_sources": ["own"]})
+        self.assertEqual(one["count"], 1)
+        self.assertFalse(one["corroborated"])
 
 
 class EvidenceRanking(unittest.TestCase):
