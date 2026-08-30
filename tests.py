@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       provenance,
-                      llm, reconcile, reports,
+                      llm, reconcile, reports, whales,
                       regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
@@ -1935,27 +1935,60 @@ class ReviewRegressions(unittest.TestCase):
         self.assertEqual(_depth_range({"min_ft": None, "max_ft": 2.1}),
                          "less than 2 ft")
 
-    def test_a_dropped_minus_sign_is_refused(self):
+    def test_a_dropped_minus_sign_is_said_out_loud(self):
         """71.42 instead of -71.42 parsed clean, bound to whichever NOAA
-        station was least far away, and produced a full confident forecast.
-        parse_coord's own docstring had promised to refuse it."""
-        with self.assertRaises(ValueError):
-            spots.parse_coord("41.4408,71.4228")
-        with self.assertRaises(ValueError):
-            spots.parse_coord("41 26.448 N, 71 25.368 E")
-
-    def test_an_absurd_binding_distance_is_an_error_not_a_warning(self):
-        """Belt and braces behind the parser: a coordinate that reaches
-        `resolve` from anywhere else must not get a forecast off a station in
-        another ocean."""
+        station was least far away, and produced a confident-looking forecast
+        with nothing marking it as nonsense. It still parses -- somebody may
+        really be somewhere else -- but it no longer passes quietly."""
         from tiderace import stations
-        self.assertLess(stations.FAR_NM, stations.ABSURD_NM)
         try:
             cat = stations.catalog()
         except stations.StationError:
             self.skipTest("station catalog not cached")
-        with self.assertRaises(stations.StationError):
-            stations.resolve(35.0, 139.0, cat)              # Tokyo Bay
+        lat, lon = spots.parse_coord("41.4408,71.4228")
+        self.assertEqual(lon, 71.4228)                  # parsed, not refused
+
+        res = stations.resolve(lat, lon, cat)
+        self.assertTrue(res["no_stations_near"])
+        self.assertEqual(res["confidence"], "poor")
+        self.assertTrue(any("minus sign" in w for w in res["warnings"]),
+                        res["warnings"])
+
+    def test_a_mark_on_another_coast_still_works(self):
+        """The bay is where the data is, not where the code stops. A mark
+        outside it gets the nearest real stations, a poor confidence and a
+        warning -- not an exception."""
+        from tiderace import stations
+        try:
+            cat = stations.catalog()
+        except stations.StationError:
+            self.skipTest("station catalog not cached")
+        res = stations.resolve(37.81, -122.45, cat)     # Golden Gate
+        # NOAA is national, so there are real stations here -- what is missing
+        # is the coastline, and only that should be complained about.
+        self.assertTrue(res["off_chart"])
+        self.assertFalse(res["no_stations_near"])
+        self.assertIsNotNone(res["current"])
+        self.assertLess(res["current"]["distance_nm"], 20)
+        self.assertEqual(res["confidence"], "poor")
+        # The RI-only land test must not claim knowledge it does not have.
+        self.assertIsNone(res["on_land"])
+        self.assertTrue(any("no coastline" in w for w in res["warnings"]),
+                        res["warnings"])
+
+    def test_off_chart_marks_skip_the_land_geometry(self):
+        """Not just for speed: the chart layers cover one bay, so out there
+        every land test can only return 'don't know' at a cost of seconds."""
+        from tiderace import stations
+        try:
+            cat = stations.catalog()
+        except stations.StationError:
+            self.skipTest("station catalog not cached")
+        self.assertLess(stations.FAR_NM, stations.NO_STATIONS_NM)
+        import time
+        t0 = time.monotonic()
+        stations.resolve(35.0, 139.0, cat)              # Tokyo Bay
+        self.assertLess(time.monotonic() - t0, 2.0)
 
     def test_a_success_clears_the_negative_cache(self):
         """One transient timeout wrote a .miss marker that was never removed,
@@ -1992,6 +2025,68 @@ class ReviewRegressions(unittest.TestCase):
         name = charts.available()[0]
         self.assertIs(charts.load(name), charts.load(name))
 
+    def test_one_ebird_query_serves_every_spot(self):
+        """Twenty-one spots meant twenty-one round trips describing the same
+        40 km of water. eBird answers for a 50 km radius in one request, so a
+        spot far enough inside an existing circle reuses it."""
+        calls = []
+        real = birds._get
+        birds._get = lambda path, **kw: (calls.append(kw), real(path, **kw))[1]
+        try:
+            birds.forget_regions()
+            targets = list(spots.for_species("striped_bass"))
+            self.assertGreater(len(targets), 10)
+            if not birds.prime([(s.lat, s.lon) for s in targets]):
+                self.skipTest("spots too spread out for one circle")
+            before = len(calls)
+            for sp in targets:
+                birds.sightings_near(sp.lat, sp.lon)
+            self.assertEqual(len(calls) - before, 0, "priming should have covered them")
+            self.assertLessEqual(len(calls), 1)
+        finally:
+            birds._get = real
+            birds.forget_regions()
+
+    def test_a_reused_query_still_reaches_every_relevant_sighting(self):
+        """The reuse margin is not a guess: bait stops counting past MAX_NM,
+        so a spot within (radius - MAX_NM) of the centre sees exactly what a
+        query centred on it would have."""
+        self.assertAlmostEqual(birds.region_reuse_km(),
+                               birds.REGION_KM - bait.MAX_NM * 1.852, places=6)
+        self.assertGreater(birds.region_reuse_km(), 0)
+        # A spot at the edge of the margin must not reuse a circle that would
+        # miss bait on its far side.
+        self.assertGreater(birds.REGION_KM - birds.region_reuse_km(),
+                           bait.MAX_NM * 1.852 - 0.001)
+
+    def test_a_wide_query_keeps_more_than_eight_hotspots(self):
+        """Eight was fine for one spot's 25 km circle. Across the whole bay it
+        would let a hotspot beside one spot be squeezed out by bigger ones
+        beside another."""
+        self.assertGreater(birds.REGION_LIMIT, 8)
+
+    def test_the_region_cache_expires(self):
+        """`tiderace serve` runs for days; a cache with no expiry would pin one
+        afternoon's birds to every forecast after it."""
+        import inspect
+        src = inspect.getsource(birds.sightings_near)
+        self.assertIn("CACHE_TTL", src)
+
+    def test_no_chart_data_is_not_reported_as_clear_water(self):
+        """'nothing charted within 500 yds' is a finding. Outside the cached
+        bay there is no chart to be empty, and printing the finding anyway
+        reads as clear water over a reef."""
+        from tiderace import charts
+        self.assertTrue(charts.covers(41.4408, -71.4228))
+        self.assertFalse(charts.covers(37.81, -122.45))
+        self.assertFalse(charts.covers(41.4408, 71.4228))
+        import inspect
+        from tiderace import cli
+        self.assertIn("no chart data for this area", inspect.getsource(cli))
+        with open(os.path.join(os.path.dirname(charts.__file__),
+                               "web", "index.html")) as fh:
+            self.assertIn("pl.charted === false", fh.read())
+
     def test_hms_staleness_honours_the_date_asked_about(self):
         """`when` was defaulted and then never used."""
         from tiderace import hms
@@ -2001,6 +2096,96 @@ class ReviewRegressions(unittest.TestCase):
         self.assertTrue(far["stale"])
         self.assertFalse(near["stale"])
         self.assertEqual(near["days_since_checked"], 1)
+
+
+class Whales(unittest.TestCase):
+    """Cetaceans as a bait proxy, one notch stronger than birds."""
+
+    def test_a_lunge_feeder_outranks_a_resident_dolphin(self):
+        # The whole argument for the layer: a humpback does not commit to thin
+        # bait, an inshore bottlenose eats scattered fish all day.
+        self.assertGreater(whales.BAIT_WHALES["Humpback Whale"],
+                           whales.BAIT_WHALES["Common Bottlenose Dolphin"])
+        self.assertGreater(whales.BAIT_WHALES["Humpback Whale"],
+                           whales.BAIT_WHALES["Common Minke Whale"])
+
+    def test_whales_imply_more_bait_than_birds(self):
+        self.assertGreater(whales.WHALE_DISCOUNT, birds.BIRD_DISCOUNT)
+        self.assertLess(whales.WHALE_DISCOUNT, 1.0,
+                        "still an inference, never a look at the bait")
+
+    def test_every_weighted_animal_has_an_implied_bait_entry(self):
+        for sp in whales.BAIT_WHALES:
+            self.assertIn(sp, whales.WHALE_IMPLIES_BAIT, f"{sp} has no diet entry")
+
+    def test_implied_baits_are_baits_the_model_knows(self):
+        known = set()
+        for d in bait.RELEVANCE.values():
+            known |= set(d)
+        for sp, b in whales.WHALE_IMPLIES_BAIT.items():
+            if b is not None:
+                self.assertIn(b, known, f"{sp} implies unknown bait {b}")
+
+    def test_sharks_are_deliberately_not_a_taxon_we_query(self):
+        # Checked, not assumed: the RI shark records are skates and rays.
+        # Guard the decision so it is not quietly reinstated.
+        for name in whales.BAIT_WHALES:
+            self.assertNotIn("Shark", name)
+        self.assertNotIn(47273, (whales.RORQUALS, whales.DOLPHINS))
+
+    def test_right_whales_are_not_a_fishing_signal(self):
+        self.assertNotIn("North Atlantic Right Whale", whales.BAIT_WHALES)
+        self.assertNotIn(whales.RIGHT_WHALE, (whales.RORQUALS, whales.DOLPHINS))
+
+    def test_proxies_rank_rather_than_add(self):
+        # Birds and whales are two readings of one inference. Adding them would
+        # manufacture confidence out of correlated evidence.
+        both, kind = bait.proxy_signal(0.6, 0.6)
+        self.assertLess(both, 1.2)
+        self.assertGreater(both, 0.6, "two predators beat one")
+        self.assertEqual(kind, "birds_and_whales")
+
+    def test_proxy_is_symmetric_and_led_by_the_stronger(self):
+        self.assertEqual(bait.proxy_signal(0.6, 0.2)[0],
+                         bait.proxy_signal(0.2, 0.6)[0])
+        self.assertEqual(bait.proxy_signal(0.0, 0.5)[1], "whales")
+        self.assertEqual(bait.proxy_signal(0.5, 0.0)[1], "birds")
+
+    def test_whales_share_the_bait_origin_with_birds(self):
+        # Independence check: agreement between them must not read as two
+        # separate witnesses converging.
+        self.assertEqual(provenance.MODIFIERS["whales"][2],
+                         provenance.MODIFIERS["birds"][2], "shared origin")
+        self.assertEqual(provenance.MODIFIERS["birds_and_whales"][2], "bait")
+
+    def test_obscured_records_are_dropped(self):
+        import unittest.mock as m
+        payload = {"results": [
+            {"id": 1, "location": "41.1,-71.5", "obscured": True,
+             "taxon": {"preferred_common_name": "Humpback Whale"},
+             "observed_on": "2026-08-24", "quality_grade": "research"},
+            {"id": 2, "location": "41.2,-71.6", "geoprivacy": "obscured",
+             "taxon": {"preferred_common_name": "Fin Whale"},
+             "observed_on": "2026-08-24", "quality_grade": "research"},
+            {"id": 3, "location": "41.3,-71.7",
+             "taxon": {"preferred_common_name": "Humpback Whale"},
+             "observed_on": "2026-08-24", "quality_grade": "research"},
+        ]}
+        with m.patch.object(whales, "_get", return_value=payload):
+            got = whales.sightings(41.2, -71.6, taxa=(whales.RORQUALS,))
+        self.assertEqual([o["url"].rsplit("/", 1)[1] for o in got], ["3"])
+
+    def test_unverified_records_are_low_confidence(self):
+        import unittest.mock as m
+        payload = {"results": [
+            {"id": 9, "location": "41.3,-71.7",
+             "taxon": {"preferred_common_name": "Humpback Whale"},
+             "observed_on": "2026-08-24", "quality_grade": "needs_id"},
+        ]}
+        with m.patch.object(whales, "_get", return_value=payload):
+            d = whales.derived_sightings(41.3, -71.7, taxa_days := 7)
+        self.assertEqual(d[0]["confidence"], "low")
+        self.assertEqual(d[0]["bait"], "sand eels")
 
 
 if __name__ == "__main__":

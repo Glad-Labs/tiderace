@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from . import astro, bait, birds as birdmod, gso, solunar, sources
+from . import astro, bait, birds as birdmod, gso, solunar, sources, whales as whalemod
 from .sources import SourceError
 from .spots import Spot
 
@@ -73,12 +73,12 @@ def build(spot: Spot, start: datetime, hours: int = 48,
     # observation ages against the hour being forecast, exactly as bait does.
     # Stamping one value on all 96 rows made a Tuesday forecast rest on
     # undiscounted Sunday birds.
-    _derived: list[dict] = []
-    if species:
-        try:
-            _derived = birdmod.derived_sightings(spot.lat, spot.lon)
-        except Exception:                                         # noqa: BLE001
-            _derived = []
+    # One eBird query serves every spot in range of it -- see birds.prime,
+    # which the multi-spot callers use to make that one query cover them all.
+    _derived = birdmod.sightings_near(spot.lat, spot.lon) if species else []
+    # Whales are the same kind of evidence as birds -- a predator standing in
+    # for a look at the bait -- fetched the same way, one query per region.
+    _whales = whalemod.sightings_near(spot.lat, spot.lon) if species else []
 
     # Lunar events are a per-day, per-place calculation, so they are computed
     # once here rather than 96 times in the loop. Recorded on every row even
@@ -117,6 +117,12 @@ def build(spot: Spot, start: datetime, hours: int = 48,
         bird = (birdmod.signal_at(spot.lat, spot.lon, species, when=t,
                                   derived=_derived)
                 if _derived else {"signal": 0.0, "known": False})
+        whale = (whalemod.signal_at(spot.lat, spot.lon, species, when=t,
+                                    derived=_whales)
+                 if _whales else {"signal": 0.0, "known": False})
+        # Ranked, not summed: both are "a predator is here, so bait is here",
+        # and treating them as independent would invent confidence.
+        proxy, proxy_kind = bait.proxy_signal(bird["signal"], whale["signal"])
 
         day = t.date()
         if day not in _lunar:
@@ -136,8 +142,11 @@ def build(spot: Spot, start: datetime, hours: int = 48,
             "solunar_kind": sol["kind"],
             "bait_signal": b["signal"],
             "bait_sources": b.get("sources"),
-            "bird_signal": bird["signal"],
-            "bird_note": birdmod.describe(bird) if bird.get("known") else None,
+            "bird_signal": proxy,
+            "bird_note": (birdmod.describe(bird) if bird.get("known") else None),
+            "whale_signal": whale["signal"],
+            "whale_note": whalemod.describe(whale) if whale.get("known") else None,
+            "proxy_kind": proxy_kind,
             "bait_known": b.get("known", False),
             "bait_note": bait.describe(b) if b.get("known") else None,
             "month": t.month,

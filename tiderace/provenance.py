@@ -48,6 +48,11 @@ INPUTS = {
 MODIFIERS = {
     "bait":                 (OBSERVED,   "bait seen",              "bait"),
     "birds":                (INFERRED,   "birds as a bait proxy",  "bait"),
+    # Whales share the "bait" origin with birds on purpose. Both are a predator
+    # standing in for a look at the bait, so agreement between them is one
+    # witness reinforced, not two witnesses converging.
+    "whales":               (INFERRED,   "whales as a bait proxy", "bait"),
+    "birds_and_whales":     (INFERRED,   "two predators on bait",  "bait"),
     "bait_worked_by_birds": (OBSERVED,   "bait seen, birds on it", "bait"),
     "spring_tide":          (PREDICTED,  "lunar phase",            "moon"),
     "tide_stage":           (ASSUMED,    "hand-set stage preference", "belief"),
@@ -112,7 +117,11 @@ def agreement(feat: dict) -> dict:
     if "report" in sources:
         witnesses.append(("a report said so", SECONDHAND))
     if (feat.get("bird_signal") or 0) > 0:
-        witnesses.append(("birds are on it", INFERRED))
+        kind = feat.get("proxy_kind") or "birds"
+        witnesses.append(({"birds": "birds are on it",
+                           "whales": "whales are on it",
+                           "birds_and_whales": "birds and whales are on it",
+                           }.get(kind, "birds are on it"), INFERRED))
 
     return {
         "witnesses": witnesses,

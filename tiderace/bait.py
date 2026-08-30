@@ -243,6 +243,40 @@ CONJUNCTION = 0.30
 COMBINED_CAP = 1.55
 
 
+# Birds and whales are both "a predator is here, therefore bait is here". They
+# are not independent witnesses of bait the way your eyes and a report are --
+# they are two readings of the same inference, and adding them would be the
+# averaging mistake in reverse: manufacturing confidence from correlated
+# evidence.
+#
+# So they rank. The stronger proxy sets the level and the weaker one adds a
+# capped corroboration bonus, exactly as bait_at ranks sightings of unequal
+# quality. Two different predators on the same water IS worth more than one --
+# a gannet and a humpback are not the same animal making the same mistake --
+# but it is worth a nudge, not a doubling.
+PROXY_CORROBORATION = 0.15
+
+
+def proxy_signal(bird_signal: float, whale_signal: float) -> tuple[float, str]:
+    """Fold the two predator proxies into one, and say which led.
+
+    Returns (signal, which). `which` is for the explanation line: "implied by
+    birds" and "implied by whales" are different claims and the reader deserves
+    to know which one is carrying the number.
+    """
+    b, w = bird_signal or 0.0, whale_signal or 0.0
+    if b <= 0 and w <= 0:
+        return 0.0, ""
+    if w > b:
+        lead, other, which = w, b, "whales"
+    else:
+        lead, other, which = b, w, "birds"
+    if other > 0:
+        lead = lead * (1.0 + PROXY_CORROBORATION * min(1.0, other / lead))
+        which = "birds_and_whales"
+    return round(min(1.0, lead), 3), which
+
+
 def combined_modifier(bait_signal: float, bird_signal: float) -> tuple[float, str]:
     """Fold bait and birds together, and say which case applied.
 

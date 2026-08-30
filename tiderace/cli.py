@@ -9,6 +9,7 @@ import sys
 from datetime import datetime, timedelta
 
 from . import bait as baitmod
+from . import birds as birdmod
 from . import config as cfgmod
 from . import features, fetch, gso, regs, score, spots
 from . import log as catchlog
@@ -140,6 +141,12 @@ def run(argv=None) -> int:
                     help="NWS marine zone (ANZ236 bay, ANZ237 RI/Block sounds)")
     cd.add_argument("--station", default="8452660", help="CO-OPS water level station")
 
+    wh = sub.add_parser("whales", help="whale and dolphin activity — bait, bigger")
+    wh.add_argument("coord", nargs="?", default="41.3720,-71.6390",
+                    help="lat,lon (default: Charlestown Breachway)")
+    wh.add_argument("--km", type=float, default=40)
+    wh.add_argument("--days", type=int, default=7)
+
     rp = sub.add_parser("reports", help="what third-party fishing reports say")
     rp.add_argument("--species", dest="rep_species", default=None,
                     choices=sorted(score.PROFILES),
@@ -193,6 +200,8 @@ def run(argv=None) -> int:
         return _cmd_scrape(args)
     if args.cmd == "review":
         return _cmd_review(args)
+    if args.cmd == "whales":
+        return _cmd_whales(args)
     if args.cmd == "reports":
         return _cmd_reports(args)
     if args.cmd == "birds":
@@ -429,6 +438,43 @@ def _cmd_review(args) -> int:
     print("  Regulations are NOT applied automatically. Check each against the")
     print("  source, then edit tiderace/regs.py by hand and bump CHECKED_ON.")
     print(f"  Queue: {extract.REVIEW_PATH}\n")
+    return 0
+
+
+def _cmd_whales(args) -> int:
+    from . import whales as W
+    lat, lon = spots.parse_coord(args.coord)
+    try:
+        a = W.activity(lat, lon, args.km, args.days)
+    except W.WhaleError as e:
+        print(f"iNaturalist unavailable: {e}")
+        return 1
+
+    print(f"\nCetaceans within {args.km:.0f} km of {lat:.4f},{lon:.4f}, "
+          f"last {args.days} days")
+    print(f"{a['observations']} observations, {a['cetacean_records']} of "
+          f"bait-implying species.\n")
+    if not a["by_species"]:
+        print("  Nothing on record. That is not evidence of absence — iNaturalist")
+        print("  is whoever happened to be out with a phone.")
+        return 0
+
+    for sp, n in a["by_species"].items():
+        w = W.BAIT_WHALES.get(sp, 0)
+        implied = W.WHALE_IMPLIES_BAIT.get(sp) or "—"
+        print(f"  {n:>3}x  {sp:32} weight {w:.2f}   implies {implied}")
+
+    print("\n  most recent:")
+    for o in a["sightings"][:6]:
+        print(f"    {o['when']}  {o['species']:30} {o['lat']:.3f},{o['lon']:.3f}"
+              f"  {o['place'][:26]}")
+
+    if a["other_species_ignored"]:
+        print(f"\n  seen but not bait-implying: "
+              f"{', '.join(a['other_species_ignored'][:6])}")
+    print("\n  A whale is a proxy, not a look at the bait. Never written to the")
+    print("  bait log, and ranked against birds rather than added to them.")
+    print("  Right whales: 500 yards is federal law for any vessel, any size.")
     return 0
 
 
@@ -929,6 +975,8 @@ def _cmd_forecast(args) -> int:
     all_windows = []
     failures = []
 
+    # One eBird query for the whole run rather than one per spot.
+    birdmod.prime([(s.lat, s.lon) for s in targets])
     for spot in targets:
         try:
             rows = features.build(spot, start, args.hours, species=args.species)
@@ -1177,6 +1225,10 @@ def _cmd_at(args) -> int:
     bits += [f"{n} {layer}" for layer, n in place["structure"].items()]
     if bits:
         print(f"\n  the place:  {' · '.join(bits)}")
+    elif not place.get("charted", True):
+        # Outside the cached bay there is no chart to be empty, and reporting
+        # "nothing within 500 yds" would read as clear water over a reef.
+        print("\n  the place:  no chart data for this area")
     else:
         from . import charts as _ch
         print("\n  the place:  nothing charted within 500 yds"
