@@ -494,7 +494,11 @@ const CHART_STYLE = {
   depth_area: {
     kind: 'fill',
     // DRVAL2 is the deep limit of the band. Anything at or below zero dries.
-    colour: ['step', ['coalesce', ['get','depth_max_m'], 0],
+    // Falling straight back to 0 painted the deepest area -- the one charted
+    // with a shallow limit and no deep one -- in the "dries" colour, which
+    // reads as the exact opposite of what it is. DRVAL1 is a lower bound on
+    // the depth, so it is the honest second choice.
+    colour: ['step', ['coalesce', ['get','depth_max_m'], ['get','depth_min_m'], 0],
       DEPTH_RAMP[0],
       0.5,  DEPTH_RAMP[1],
       2.5,  DEPTH_RAMP[2],
@@ -956,8 +960,14 @@ function renderMark(){
   const cur = st.current, tide = st.tide, temp = st.temp;
 
   const place = [];
-  if (pl.depth && pl.depth.min_ft != null)
-    place.push(`${Math.round(pl.depth.min_ft)}–${Math.round(pl.depth.max_ft)} ft`);
+  if (pl.depth){
+    // Either end of a charted depth area can be absent; showing the missing
+    // one rendered "30–0 ft".
+    const lo = pl.depth.min_ft, hi = pl.depth.max_ft;
+    if (lo != null && hi != null) place.push(`${Math.round(lo)}–${Math.round(hi)} ft`);
+    else if (lo != null)          place.push(`${Math.round(lo)}+ ft`);
+    else if (hi != null)          place.push(`less than ${Math.round(hi)} ft`);
+  }
   if (pl.bottom) place.push(pl.bottom.bottom);
   for (const [k, n] of Object.entries(pl.structure || {})) place.push(`${n} ${k}`);
 

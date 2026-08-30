@@ -140,6 +140,11 @@ def run(argv=None) -> int:
                     help="NWS marine zone (ANZ236 bay, ANZ237 RI/Block sounds)")
     cd.add_argument("--station", default="8452660", help="CO-OPS water level station")
 
+    rp = sub.add_parser("reports", help="what third-party fishing reports say")
+    rp.add_argument("--species", dest="rep_species", default=None,
+                    choices=sorted(score.PROFILES),
+                    help="limit to one species")
+
     bd = sub.add_parser("birds", help="seabird activity — where bait is being worked")
     bd.add_argument("coord", nargs="?", default="41.3720,-71.6390",
                     help="lat,lon (default: Charlestown Breachway)")
@@ -188,6 +193,8 @@ def run(argv=None) -> int:
         return _cmd_scrape(args)
     if args.cmd == "review":
         return _cmd_review(args)
+    if args.cmd == "reports":
+        return _cmd_reports(args)
     if args.cmd == "birds":
         return _cmd_birds(args)
     if args.cmd == "conditions":
@@ -422,6 +429,46 @@ def _cmd_review(args) -> int:
     print("  Regulations are NOT applied automatically. Check each against the")
     print("  source, then edit tiderace/regs.py by hand and bump CHECKED_ON.")
     print(f"  Queue: {extract.REVIEW_PATH}\n")
+    return 0
+
+
+def _cmd_reports(args) -> int:
+    from . import reports as R
+    rows = R.catch_reports()
+    if not rows:
+        print("No dated catch reports yet. Run: tiderace scrape <report-url>")
+        return 0
+
+    outlets = sorted({r["outlet"] for r in rows})
+    weeks = sorted({r["week"] for r in rows})
+    print(f"\n{len(rows)} dated observations from {len(outlets)} outlet(s) "
+          f"across {len(weeks)} week(s): {', '.join(outlets)}")
+    print("Reports corroborate. They never outrank what you saw yourself.\n")
+
+    want = [args.rep_species] if args.rep_species else sorted(score.PROFILES)
+    print(f"  {'species':16} {'recent':18} {'witnesses':>9}  where")
+    print("  " + "-" * 72)
+    for sp in want:
+        ev = R.corroborate(sp)
+        where = ", ".join(ev["places"][:3]) or "—"
+        print(f"  {sp:16} {ev['verdict']:18} {ev['witnesses']:>9}  {where[:34]}")
+
+    un = R.unmodelled()
+    if un:
+        print("\n  reported, not modelled: "
+              + ", ".join(f"{k} ({v})" for k, v in un.items()))
+
+    dis = R.disagreements()
+    if dis:
+        print("\n  ── the model and the reports disagree ──")
+        for d in dis:
+            print(f"  {d['species']}: model says absent this week "
+                  f"({d['model_presence']:.2f}), {d['witnesses']} outlet(s) say caught")
+            for q in d["quotes"]:
+                print(f"      “{q}”")
+            print("      Surface thermometers read warmer than the structure these "
+                  "fish hold on;\n      this may be a bad band or the wrong water. "
+                  "Not auto-corrected.")
     return 0
 
 
@@ -1038,6 +1085,26 @@ def _cmd_stations(args) -> int:
     return 0
 
 
+def _depth_range(d: dict | None) -> str | None:
+    """A charted depth area as text, tolerating a half-open range.
+
+    S-57 depth areas carry DRVAL1 and DRVAL2 independently, and plenty of them
+    have only one: the deepest area in a cell has no lower bound charted, and
+    a drying area has no upper one. Formatting the missing end raised
+    TypeError, which took out the whole `at` report over a cosmetic detail.
+    """
+    if not d:
+        return None
+    lo, hi = d.get("min_ft"), d.get("max_ft")
+    if lo is not None and hi is not None:
+        return f"{lo:.0f}\u2013{hi:.0f} ft"
+    if lo is not None:
+        return f"{lo:.0f}+ ft"
+    if hi is not None:
+        return f"less than {hi:.0f} ft"
+    return None
+
+
 def _cmd_at(args) -> int:
     """Everything the forecast knows about one coordinate.
 
@@ -1087,8 +1154,9 @@ def _cmd_at(args) -> int:
 
     bits = []
     d, b = place["depth"], place["bottom"]
-    if d and d.get("min_ft") is not None:
-        bits.append(f"charted {d['min_ft']:.0f}–{d['max_ft']:.0f} ft")
+    rng = _depth_range(d)
+    if rng:
+        bits.append(f"charted {rng}")
     if b:
         bits.append(f"bottom {b['bottom']} ({b['distance_nm']} nm)")
     bits += [f"{n} {layer}" for layer, n in place["structure"].items()]

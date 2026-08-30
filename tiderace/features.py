@@ -67,11 +67,18 @@ def build(spot: Spot, start: datetime, hours: int = 48,
     # loop is 96 iterations deep.
     sightings = bait.load() if species else []
 
-    # Computed once per spot, never stored. Birds are a live proxy, not a
+    # Fetched once per spot, never stored. Birds are a live proxy, not a
     # record of anything, and writing them down would let them accumulate into
-    # something that looks like evidence.
-    _bird = ({"signal": 0.0, "known": False} if not species else
-             birdmod.signal_at(spot.lat, spot.lon, species))
+    # something that looks like evidence. The *scoring* happens per row: an
+    # observation ages against the hour being forecast, exactly as bait does.
+    # Stamping one value on all 96 rows made a Tuesday forecast rest on
+    # undiscounted Sunday birds.
+    _derived: list[dict] = []
+    if species:
+        try:
+            _derived = birdmod.derived_sightings(spot.lat, spot.lon)
+        except Exception:                                         # noqa: BLE001
+            _derived = []
 
     # Lunar events are a per-day, per-place calculation, so they are computed
     # once here rather than 96 times in the loop. Recorded on every row even
@@ -107,6 +114,9 @@ def build(spot: Spot, start: datetime, hours: int = 48,
 
         b = (bait.bait_at(spot.lat, spot.lon, t, species, sightings)
              if species else {"signal": 0.0, "known": False})
+        bird = (birdmod.signal_at(spot.lat, spot.lon, species, when=t,
+                                  derived=_derived)
+                if _derived else {"signal": 0.0, "known": False})
 
         day = t.date()
         if day not in _lunar:
@@ -126,8 +136,8 @@ def build(spot: Spot, start: datetime, hours: int = 48,
             "solunar_kind": sol["kind"],
             "bait_signal": b["signal"],
             "bait_sources": b.get("sources"),
-            "bird_signal": _bird["signal"],
-            "bird_note": birdmod.describe(_bird) if _bird.get("known") else None,
+            "bird_signal": bird["signal"],
+            "bird_note": birdmod.describe(bird) if bird.get("known") else None,
             "bait_known": b.get("known", False),
             "bait_note": bait.describe(b) if b.get("known") else None,
             "month": t.month,

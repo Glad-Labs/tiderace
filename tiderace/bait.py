@@ -216,7 +216,7 @@ def bait_at(lat: float, lon: float, when: datetime, species: str,
         signal *= 1.0 + CORROBORATION * min(MAX_CORROBORATION, support)
     return {
         "signal": round(max(-1.0, min(1.0, signal)), 3),
-        "sources": sorted({r.get("source", "own") for r in rows}),
+        "sources": sorted({r.get("source", "own") for _, _, r in scored}),
         "observations": used,
         "known": True,
         "top": None if not top else {
@@ -234,7 +234,12 @@ def bait_at(lat: float, lon: float, when: datetime, species: str,
 # conjunction says more than either half. This is a hand-set number and a
 # hypothesis about magnitude, which is why `evaluate` keeps a birds-removed
 # column: if the interaction is not real, that column will say so.
-CORROBORATION = 0.30
+#
+# Deliberately NOT called CORROBORATION: that is bait agreeing with bait, a
+# different claim with its own weight above. The two must stay separately
+# tunable -- an earlier version reused the name and silently tripled the
+# within-bait weight to 0.30.
+CONJUNCTION = 0.30
 COMBINED_CAP = 1.55
 
 
@@ -257,7 +262,7 @@ def combined_modifier(bait_signal: float, bird_signal: float) -> tuple[float, st
     d = bird_signal or 0.0
 
     if b > 0 and d > 0:
-        m = modifier(b) * (1.0 + CORROBORATION * min(1.0, d))
+        m = modifier(b) * (1.0 + CONJUNCTION * min(1.0, d))
         return round(min(COMBINED_CAP, m), 3), "bait_worked_by_birds"
     if b:
         return round(modifier(b), 3), "bait"

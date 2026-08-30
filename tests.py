@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       provenance,
-                      llm, reconcile,
+                      llm, reconcile, reports,
                       regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
@@ -1753,6 +1753,69 @@ class DepthLayer(unittest.TestCase):
         lums = [lum(h) for h in ramp]
         self.assertEqual(lums, sorted(lums, reverse=True),
                          "depth ramp is not monotone light to dark")
+
+class Reports(unittest.TestCase):
+    """Third-party reports as seasonal evidence."""
+
+    URL = "https://onthewater.com/fishing-reports/2026/08/ri-report"
+    URL2 = "https://thefisherman.com/ri-report"
+
+    def _rows(self, specs):
+        """specs: (url, species_key, day) -> queue-shaped catch_report rows."""
+        return [{"kind": "catch_report", "species_key": k, "species_raw": k,
+                 "observed_on": d, "source_url": u, "place": "Point Judith",
+                 "quote": "q", "confidence": "high"} for u, k, d in specs]
+
+    def _load(self, specs):
+        import unittest.mock as m
+        with m.patch.object(reports.extract, "load_queue",
+                            return_value=self._rows(specs)):
+            return reports.catch_reports()
+
+    def test_one_article_is_one_witness(self):
+        # The invariant that matters. A weekly report naming a species in six
+        # places is ONE observation, not six -- counting rows would manufacture
+        # a consensus out of a single writer's week.
+        rows = self._load([(self.URL, "tautog", "2026-08-27")] * 6)
+        self.assertEqual(len(rows), 6, "all rows should load")
+        ev = reports.corroborate("tautog", date(2026, 8, 28), rows)
+        self.assertEqual(ev["witnesses"], 1, "six rows from one outlet is one witness")
+        self.assertEqual(ev["observations"], 6)
+
+    def test_separate_outlets_are_separate_witnesses(self):
+        rows = self._load([(self.URL, "tautog", "2026-08-27"),
+                           (self.URL2, "tautog", "2026-08-27")])
+        ev = reports.corroborate("tautog", date(2026, 8, 28), rows)
+        self.assertEqual(ev["witnesses"], 2)
+
+    def test_undated_rows_are_dropped_not_defaulted(self):
+        # Stamping an undated report with today would invent evidence about
+        # exactly the thing this module exists to measure.
+        rows = self._load([(self.URL, "tautog", None),
+                           (self.URL, "scup", "2026-08-27")])
+        self.assertEqual([r["species"] for r in rows], ["scup"])
+
+    def test_silence_is_not_absence(self):
+        rows = self._load([(self.URL, "scup", "2026-08-27")])
+        ev = reports.corroborate("tautog", date(2026, 8, 28), rows)
+        self.assertEqual(ev["witnesses"], 0)
+        self.assertEqual(ev["verdict"], "no recent report")
+
+    def test_stale_reports_do_not_describe_now(self):
+        rows = self._load([(self.URL, "tautog", "2026-06-01")])
+        ev = reports.corroborate("tautog", date(2026, 8, 28), rows)
+        self.assertEqual(ev["witnesses"], 0, "a June report is not evidence about August")
+
+    def test_species_normalization_maps_report_names(self):
+        for name, want in (("summer flounder", "fluke"), ("Striped Bass", "striped_bass"),
+                           ("porgies", "scup"), ("blackfish", "tautog"), ("tog", "tautog")):
+            self.assertEqual(extract.normalize_species(name)[0], want, name)
+
+    def test_unmodelled_species_are_kept_not_dropped(self):
+        # A bonito run is real information; the gap is in the scorer, not the report.
+        rows = self._load([(self.URL, None, "2026-08-27")])
+        rows[0]["species_raw"] = "bonito"
+        self.assertEqual(reports.unmodelled(rows), {"bonito": 1})
 
 
 if __name__ == "__main__":

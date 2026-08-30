@@ -495,7 +495,7 @@ def depth_index() -> list:
             if "depth_min_m" not in props and "depth_max_m" not in props:
                 continue
             for poly in _polygons(f.get("geometry") or {}):
-                if len(poly[0]) < 3:
+                if not poly or len(poly[0]) < 3:
                     continue
                 idx.append((_bbox(poly[0]), poly, props))
     _DEPTH_INDEX = idx

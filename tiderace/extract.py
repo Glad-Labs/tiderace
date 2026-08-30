@@ -296,7 +296,18 @@ def extract_report(url: str, force: bool = False,
                "Extract bait sightings and reported catches. For bait, judge "
                "abundance from the language used. If the text says bait or fish "
                "were absent, record that as abundance 'none' — absence is "
-               "useful information.", doc)
+               "useful information.\n\n"
+               "Set observed_on on EVERY record, formatted YYYY-MM-DD. This "
+               "field is what makes the record useful, so do not leave it out. "
+               "Use the date the fishing happened, not the date you are reading "
+               "it. Resolve relative language against Today given above: "
+               "'this past weekend' or 'over the weekend' means the most recent "
+               "Saturday, 'midweek' the most recent Wednesday. A weekly report "
+               "with no date at all describes the week ending on the report "
+               "date, so use that date. Only omit observed_on if the text gives "
+               "you nothing whatsoever to date it by.\n"
+               "For species, write the common name as the report writes it.",
+               doc)
 
     applied = 0
     for b in out.get("bait", []):
@@ -318,8 +329,9 @@ def extract_report(url: str, force: bool = False,
         _queue(b)
 
     for c in out.get("catches", []):
+        key, raw = normalize_species(c.get("species", ""))
         c.update(source_url=doc["url"], fetched_at=doc["fetched_at"],
-                 kind="catch_report",
+                 kind="catch_report", species_key=key, species_raw=raw,
                  queued_at=datetime.now().isoformat(timespec="seconds"),
                  status="pending")
         spot = _match_spot(c.get("place", ""))
@@ -328,6 +340,32 @@ def extract_report(url: str, force: bool = False,
 
     out["applied_bait"] = applied
     return out
+
+
+# Report writers use common names; the scorer uses profile keys. Anything not
+# in this map is kept verbatim rather than dropped -- "bonito" is a real
+# observation about a real run, it just is not a species we model, and losing
+# it would quietly understate what is happening out there.
+SPECIES_ALIASES = {
+    "striped bass": "striped_bass", "striper": "striped_bass",
+    "stripers": "striped_bass", "bass": "striped_bass",
+    "bluefish": "bluefish", "blues": "bluefish", "blue fish": "bluefish",
+    "summer flounder": "fluke", "fluke": "fluke", "flounder": "fluke",
+    "black sea bass": "black_sea_bass", "sea bass": "black_sea_bass",
+    "seabass": "black_sea_bass",
+    "scup": "scup", "porgy": "scup", "porgies": "scup",
+    "tautog": "tautog", "blackfish": "tautog", "tog": "tautog",
+}
+
+
+def normalize_species(name: str) -> tuple[str | None, str]:
+    """Map a report's common name onto a profile key.
+
+    Returns (key_or_None, raw). A None key means we recorded a real sighting of
+    something we do not model -- that is information, not an error.
+    """
+    raw = (name or "").strip()
+    return SPECIES_ALIASES.get(raw.lower().strip()), raw
 
 
 def _match_spot(place: str):

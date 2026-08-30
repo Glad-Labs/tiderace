@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 from collections import defaultdict
@@ -61,14 +62,41 @@ def api_key() -> str:
     return k
 
 
+# eBird "recent observations" move on the order of hours, and a forecast run
+# asks once per spot -- nineteen serial round trips on a cold map load. Cached
+# on disk like every other source, keyed on the URL only: the API key travels
+# in a header, so it never reaches the cache filename or the stored body.
+CACHE_TTL = 1800
+
+
 def _get(path: str, **params) -> list:
+    from . import sources
+
     url = f"{API}{path}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
+
+    cache = sources._cache_path(url)
+    if os.path.exists(cache) and time.time() - os.path.getmtime(cache) < CACHE_TTL:
+        with open(cache) as fh:
+            return json.load(fh)
+
     req = urllib.request.Request(url, headers={
         "X-eBirdApiToken": api_key(), "User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            payload = json.loads(r.read())
+    except Exception:                                             # noqa: BLE001
+        # Stale birds beat no birds: the layer is a proxy either way, and the
+        # age is carried on every observation so the decay still discounts it.
+        if os.path.exists(cache):
+            with open(cache) as fh:
+                return json.load(fh)
+        raise
+
+    with open(cache, "w") as fh:
+        json.dump(payload, fh)
+    return payload
 
 
 def nearby(lat: float, lon: float, radius_km: int = 25,
@@ -226,22 +254,30 @@ BIRD_DISCOUNT = 0.55
 
 
 def signal_at(lat: float, lon: float, species: str,
-              radius_km: int = 25, days_back: int = 3) -> dict:
+              radius_km: int = 25, days_back: int = 3,
+              when: datetime | None = None,
+              derived: list[dict] | None = None) -> dict:
     """A bait-like signal derived from birds, on the same -1..1 scale.
 
     Deliberately never written anywhere. It is recomputed from eBird when
     asked, so it cannot accumulate in a log and cannot be mistaken later for
     something anybody saw.
+
+    `when` is the time being forecast, not the time of asking -- a tern seen
+    this morning says much less about Tuesday than about this afternoon, and
+    the bait layer has always discounted for that. Pass `derived` to score
+    many hours against one fetch.
     """
     from .bait import RELEVANCE
     rel = RELEVANCE.get(species, {})
     if not rel:
         return {"signal": 0.0, "known": False}
 
-    try:
-        derived = derived_sightings(lat, lon, radius_km, days_back)
-    except Exception:                                             # noqa: BLE001
-        return {"signal": 0.0, "known": False}
+    if derived is None:
+        try:
+            derived = derived_sightings(lat, lon, radius_km, days_back)
+        except Exception:                                         # noqa: BLE001
+            return {"signal": 0.0, "known": False}
     if not derived:
         return {"signal": 0.0, "known": False}
 
@@ -249,7 +285,7 @@ def signal_at(lat: float, lon: float, species: str,
     import math
     from datetime import datetime
 
-    now = datetime.now()
+    now = when or datetime.now()
     best, top = 0.0, None
     for d in derived:
         r = rel.get(d["bait"])
