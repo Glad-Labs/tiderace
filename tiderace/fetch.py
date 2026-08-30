@@ -204,6 +204,16 @@ SOURCES = {
         "kind": "regulation",
         "note": "Minimum sizes and possession limits, recreational and commercial.",
     },
+    "eastbay_report": {
+        "url": "https://www.eastbayri.com/fishing/",
+        "kind": "report",
+        "note": "East Bay RI weekly column. Local, bay-focused. Facts only.",
+    },
+    "hooked_ri": {
+        "url": "https://hookedfisherman.com/reports/ri",
+        "kind": "report",
+        "note": "Aggregated RI reports. Facts only.",
+    },
     "otw_ri_report": {
         "url": "https://onthewater.com/fishing-reports",
         "kind": "report",

@@ -1160,6 +1160,70 @@ class Birds(unittest.TestCase):
         self.assertIn("data/config.json", ignore)
 
 
+class EvidenceRanking(unittest.TestCase):
+    """Evidence of unequal quality is ranked, never averaged.
+
+    Two people looking at the same water do not make the better look worse.
+    Averaging did exactly that -- twice, with two different sources -- before
+    the shape was fixed rather than the symptom.
+    """
+
+    NOW = datetime(2026, 8, 29, 20, 0)
+    OWN = {"bait": "silversides", "lat": 41.36, "lon": -71.64,
+           "when": "2026-08-29T18:00", "abundance": "loaded",
+           "confidence": "high", "source": "own"}
+
+    def _report(self, abundance="trace", confidence="medium"):
+        return {"bait": "silversides", "lat": 41.36, "lon": -71.64,
+                "when": "2026-08-29T12:00", "abundance": abundance,
+                "confidence": confidence, "source": "report"}
+
+    def _sig(self, rows):
+        return bait.bait_at(41.36, -71.64, self.NOW, "striped_bass", rows)["signal"]
+
+    def test_a_weak_report_never_dilutes_a_first_hand_sighting(self):
+        """Regression: a `trace` secondhand report pulled a `loaded` first-hand
+        sighting from 0.69 down to 0.47."""
+        alone = self._sig([self.OWN])
+        with_weak = self._sig([self.OWN, self._report()])
+        self.assertGreaterEqual(with_weak, alone)
+
+    def test_a_contradicting_weaker_report_cannot_override(self):
+        alone = self._sig([self.OWN])
+        with_denial = self._sig([self.OWN, self._report("none", "high")])
+        self.assertEqual(with_denial, alone)
+
+    def test_corroboration_scales_with_the_supporting_evidence(self):
+        base = self._sig([self.OWN])
+        weak = self._sig([self.OWN, self._report("trace", "low")])
+        strong = self._sig([self.OWN, self._report("loaded", "high")])
+        self.assertLess(base, weak)
+        self.assertLess(weak, strong)
+
+    def test_corroboration_is_capped(self):
+        many = [self.OWN] + [dict(self._report("loaded", "high"),
+                                  lat=41.36 + i * 0.001) for i in range(12)]
+        self.assertLessEqual(self._sig(many), 1.0)
+
+    def test_first_hand_outranks_secondhand_at_equal_strength(self):
+        """Same sighting, same freshness, different reporter."""
+        own_only = self._sig([self.OWN])
+        rep_only = self._sig([dict(self.OWN, source="report",
+                                   when="2026-08-29T18:00")])
+        self.assertGreater(own_only, rep_only)
+        self.assertLess(bait.SOURCE_TRUST["report"], bait.SOURCE_TRUST["own"])
+
+    def test_a_lone_report_of_no_bait_is_still_negative(self):
+        self.assertLess(self._sig([self._report("none", "high")]), 0)
+
+    def test_report_sources_are_declared_and_robots_checked(self):
+        report_sources = [k for k, v in fetch.SOURCES.items()
+                          if v["kind"] == "report"]
+        self.assertGreaterEqual(len(report_sources), 3)
+        for k in report_sources:
+            self.assertTrue(fetch.SOURCES[k]["url"].startswith("https://"), k)
+
+
 class BirdsAreNotBait(unittest.TestCase):
     """Seeing bait is an observation. Seeing birds is a guess about bait."""
 

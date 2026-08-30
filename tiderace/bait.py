@@ -116,6 +116,17 @@ def _nm(lat1, lon1, lat2, lon2) -> float:
 
 CONFIDENCE = {"high": 1.0, "medium": 0.7, "low": 0.45}
 
+# Not every observation is worth the same. You standing on the jetty looking at
+# silversides is the gold standard; a weekly column reporting the same thing is
+# a real observation but secondhand, vaguer about where, and older than it
+# reads. Birds never appear here at all -- they are inference, and they live in
+# their own layer.
+SOURCE_TRUST = {"own": 1.0, "voice": 1.0, "report": 0.75, "manual": 1.0}
+
+# How much extra a second, independent observation agreeing is worth.
+CORROBORATION = 0.10
+MAX_CORROBORATION = 2
+
 
 def bait_at(lat: float, lon: float, when: datetime, species: str,
             sightings: list[dict] | None = None,
@@ -136,10 +147,20 @@ def bait_at(lat: float, lon: float, when: datetime, species: str,
     if not rows or not rel:
         return {"signal": 0.0, "observations": 0, "top": None, "known": False}
 
-    num = 0.0
-    den = 0.0
-    strength = 0.0          # how much is actually known, 0..1
-    best = None
+    # Evidence is ranked, not averaged.
+    #
+    # The old version took a weighted mean and multiplied by the best weight,
+    # which meant a weak observation dragged a strong one down: a `trace`
+    # secondhand report pulled a `loaded` first-hand sighting from 0.69 to
+    # 0.47, and a stale tern record did the same thing before birds were moved
+    # out. Averaging is simply the wrong operation for evidence of unequal
+    # quality -- two people looking at the same water do not make the better
+    # look worse.
+    #
+    # So the strongest single piece of evidence sets the signal, and others
+    # that agree add a little for corroboration. Weaker evidence can never
+    # reduce a stronger observation; it can only fail to add.
+    scored: list[tuple[float, float, dict]] = []   # (weight, value, row)
     used = 0
 
     for r in rows:
@@ -164,7 +185,8 @@ def bait_at(lat: float, lon: float, when: datetime, species: str,
         near = math.exp(-(dist ** 2) / (2 * SIGMA_NM ** 2))
         conf = CONFIDENCE.get(r.get("confidence", "high"), 0.7)
 
-        weight = decay * near * conf * relevance
+        trust = SOURCE_TRUST.get(r.get("source", "own"), 0.7)
+        weight = decay * near * conf * relevance * trust
         if weight < 0.01:
             continue
 
@@ -172,23 +194,26 @@ def bait_at(lat: float, lon: float, when: datetime, species: str,
         # "none seen" is a genuine negative, not merely a zero.
         value = -0.6 if amount == 0.0 else amount
 
-        num += weight * value
-        den += weight
-        # The weighted *mean* says what was seen; it cannot say how much you
-        # know, because dividing by the same weights cancels the decay out
-        # entirely — a fortnight-old rumour two miles away scored identically
-        # to a wall of bunker on the mark this morning. Evidence strength is
-        # tracked separately, as the best single observation available.
-        strength = max(strength, weight)
+        scored.append((weight, value, r))
         used += 1
-        if best is None or weight > best[0]:
-            best = (weight, r)
 
-    if den == 0:
+    if not scored:
         return {"signal": 0.0, "observations": 0, "top": None, "known": False}
 
-    signal = (num / den) * strength
-    top = best[1] if best else None
+    # The dominant observation is whichever carries the most weight; it sets
+    # the signal outright rather than being averaged against weaker ones.
+    scored.sort(key=lambda x: -x[0])
+    w_best, v_best, top = scored[0]
+    signal = w_best * v_best
+
+    # Anything else pointing the same way corroborates, in proportion to how
+    # much weight it carries against the dominant observation. A passing
+    # mention in a weekly column is worth less than a second person standing
+    # there looking at the same bait -- but neither can ever subtract.
+    support = sum(min(1.0, w / w_best) for w, v, _ in scored[1:]
+                  if (v > 0) == (v_best > 0))
+    if support:
+        signal *= 1.0 + CORROBORATION * min(MAX_CORROBORATION, support)
     return {
         "signal": round(max(-1.0, min(1.0, signal)), 3),
         "sources": sorted({r.get("source", "own") for r in rows}),
