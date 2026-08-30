@@ -48,6 +48,10 @@ class Spot:
 
 
 NEWPORT, CONIMICUT, PROVIDENCE = "8452660", "8452944", "8454000"
+# Mount Hope Bay is its own arm. Conimicut sits around the corner in the
+# Providence River and reads about a degree cooler; Fall River is in the same
+# water as the bridge.
+FALL_RIVER = "8447386"
 
 SPOTS: list[Spot] = [
     Spot("whale_rock", "Whale Rock", 41.4408, -71.4228, "ACT2201", NEWPORT,
@@ -105,7 +109,7 @@ SPOTS: list[Spot] = [
          "bridge", "Pilings plus a narrow channel. Night bite under the lights.",
          ("striped_bass", "tautog", "scup"),
          {"striped_bass": 0.90, "tautog": 0.88, "scup": 0.74},
-         None, (41.6400, -71.2583)),
+         None, (41.6400, -71.2583), temp_station=FALL_RIVER),
     Spot("hog_island", "Hog Island", 41.6467, -71.2950, "ACT2171", CONIMICUT,
          "island", "Upper-bay structure that holds fish through summer.",
          ("striped_bass", "scup", "fluke"),

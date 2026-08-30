@@ -126,6 +126,34 @@ class Spots(unittest.TestCase):
                 self.assertTrue(0.0 <= v <= 1.0, f"{s.key}/{sp} prior out of range")
                 self.assertIn(sp, s.species, f"{s.key} rates {sp} it does not list")
 
+    def test_thermometers_are_in_the_same_water_as_the_spot(self):
+        # Nearest-by-distance is the WRONG test here. Wickford and Quonset are
+        # marginally closer to Newport, but they are shallow west-side spots
+        # that warm with the upper bay, so Conimicut is the better proxy.
+        # What matters is that the gauge sits in the same arm, because the arms
+        # do not mix freely. Mount Hope Bay is its own arm: Conimicut is around
+        # the corner in the Providence River and reads about a degree cooler.
+        ARM = {
+            "8452660": "east_passage_mouth",
+            "8452944": "upper_bay",
+            "8447386": "mount_hope",
+            "8454000": "providence_river",
+        }
+        EXPECTED = {"mount_hope": "mount_hope"}
+        for s in spots.SPOTS:
+            want = EXPECTED.get(s.key)
+            if want:
+                self.assertEqual(
+                    ARM.get(s.thermometer), want,
+                    f"{s.key} reads a gauge in another arm of the bay")
+
+    def test_temp_station_override_is_a_real_gauge(self):
+        KNOWN = {"8452660", "8452944", "8447386", "8454000"}
+        for s in spots.SPOTS:
+            if s.temp_station:
+                self.assertIn(s.temp_station, KNOWN,
+                              f"{s.key} overrides to unknown gauge {s.temp_station}")
+
 
 class Bait(unittest.TestCase):
     NOW = datetime(2026, 8, 28, 20, 0)
