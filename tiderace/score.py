@@ -7,8 +7,30 @@ scorer returns the total *and* the per-term contributions, for two reasons:
   2. The weights are data, not code. Once there is a catch log, these become
      the initial values of a fitted model instead of hand-tuned priors.
 
-Nothing here is magic. It is the conventional wisdom of Narragansett Bay
-saltwater fishing written down in a form a computer can rank.
+Nothing here is magic. Where a number has a published source it is cited on
+the line that uses it. Where it does not, it is conventional Narragansett Bay
+angling wisdom and should be read as a hypothesis, not a measurement.
+
+A caution that matters more than any single number: the literature answers
+"where is this fish and is it physiologically comfortable", which is NOT the
+question this file asks. This file asks "will it bite". Those diverge -- a
+tautog is alive and present all summer and still nearly uncatchable. So a
+published occurrence range is an upper bound on the band, never a substitute
+for it, and the two must not be silently swapped.
+
+Sources, all consulted 2026-08-29:
+  [BB-SB]  Buzzards Bay species account, striped bass (after Bigelow &
+           Schroeder; Setzler et al. 1980; Coutant 1986; Rogers & Westin 1978;
+           Hollis 1952).  buzzardsbay.org/.../striped-bass.pdf
+  [BB-TOG] Buzzards Bay species account, tautog (after Olla et al. 1974, 1975a,
+           1978; Cooper 1966; Arendt et al. 2001a; Pearce 1969; McCormack 1976).
+           buzzardsbay.org/.../tautog.pdf
+  [SCUP]   Steimle et al. 1999, EFH source doc NMFS-NE-149, via ASMFC scup
+           species profile.
+  [ASMFC-BSB] ASMFC black sea bass habitat fact sheet.
+  [NEFSC-SF]  NOAA Fisheries summer flounder science pages; EFH source doc
+           NMFS-NE-151.
+  [BSB-AS] Slesinger et al. 2019, aerobic scope of black sea bass (PMC6564031).
 """
 
 from __future__ import annotations
@@ -68,7 +90,10 @@ PROFILES: dict[str, Profile] = {
     "striped_bass": Profile(
         key="striped_bass", name="Striped Bass",
         months=(4, 5, 6, 7, 8, 9, 10, 11), peak_months=(5, 6, 9, 10),
-        temp=(44, 55, 68, 76),
+        # 43F = 6C and 70F = 21C are the bounds of the "active" range for adult
+        # bass; 78F ~ 26C is where feeding measurably declines in seawater. All
+        # three from [BB-SB]. Only the 55F plateau start is still hand-set.
+        temp=(43, 55, 70, 78),
         current=(1.40, 0.62, 1.15, 4.0),
         light={"golden": 1.0, "twilight": 0.96, "night": 0.88, "day": 0.40},
         weights={"season": 0.20, "temp": 0.15, "current": 0.28,
@@ -80,6 +105,9 @@ PROFILES: dict[str, Profile] = {
     "bluefish": Profile(
         key="bluefish", name="Bluefish",
         months=(6, 7, 8, 9, 10), peak_months=(7, 8, 9),
+        # Checked, unchanged: 58F lower matches the 14C tolerance floor and the
+        # 12-16C (54-60F) spring arrival [bluefish EFH / ASMFC]. The warm half
+        # is unsourced -- no published upper feeding limit was found.
         temp=(58, 64, 78, 84),
         current=(1.30, 0.75, 1.40, 4.5),
         light={"golden": 1.0, "twilight": 0.88, "day": 0.74, "night": 0.60},
@@ -91,6 +119,10 @@ PROFILES: dict[str, Profile] = {
     "fluke": Profile(
         key="fluke", name="Fluke (Summer Flounder)",
         months=(5, 6, 7, 8, 9), peak_months=(6, 7, 8),
+        # Checked, unchanged: 80F upper matches the 27C top of the inshore
+        # occurrence range [NEFSC-SF]. The 56F lower is deliberately warmer
+        # than the 9C (48F) occurrence floor -- they are present in cold water,
+        # they just are not a fishery yet.
         temp=(56, 62, 74, 80),
         current=(1.00, 0.42, 0.52, 2.6),   # drift speed -- too fast is as bad as slack
         light={"day": 1.0, "golden": 0.90, "twilight": 0.58, "night": 0.30},
@@ -104,7 +136,10 @@ PROFILES: dict[str, Profile] = {
     "black_sea_bass": Profile(
         key="black_sea_bass", name="Black Sea Bass",
         months=(6, 7, 8, 9, 10, 11), peak_months=(7, 8, 9),
-        temp=(55, 60, 74, 80),
+        # Aerobic scope peaks at 24.4C = 76F [BSB-AS]; inshore summer water
+        # reaches 27C = 81F [ASMFC-BSB]. Lower bound stays angling knowledge --
+        # the 7C migration threshold is presence, not catchability.
+        temp=(55, 60, 76, 81),
         current=(0.90, 0.48, 0.68, 3.0),
         light={"day": 1.0, "golden": 0.90, "twilight": 0.60, "night": 0.36},
         weights={"season": 0.20, "temp": 0.16, "current": 0.26,
@@ -117,7 +152,10 @@ PROFILES: dict[str, Profile] = {
     "scup": Profile(
         key="scup", name="Scup (Porgy)",
         months=(5, 6, 7, 8, 9, 10), peak_months=(6, 7, 8, 9),
-        temp=(56, 62, 76, 82),
+        # Adults are most commonly caught at 17-27C = 63-81F [SCUP]; the old
+        # plateau stopped at 76F and was clipping the warm half of their range.
+        # 56F lower is angling knowledge, not the 8-9C departure threshold.
+        temp=(56, 63, 79, 84),
         current=(0.90, 0.55, 0.90, 3.2),
         light={"day": 1.0, "golden": 0.85, "twilight": 0.50, "night": 0.28},
         weights={"season": 0.18, "temp": 0.14, "current": 0.24,
@@ -129,6 +167,13 @@ PROFILES: dict[str, Profile] = {
     "tautog": Profile(
         key="tautog", name="Tautog (Blackfish)",
         months=(4, 5, 6, 7, 8, 9, 10, 11, 12), peak_months=(10, 11),
+        # Cold half is well supported: adults off RI at 7.5C (46F) were torpid
+        # with empty guts, and fish are active again by 10C (50F) [BB-TOG].
+        # The WARM half is not. Upper lethal is 31-33C (88-91F), far above the
+        # 68F cutoff here; the literature only says feeding is "depressed at
+        # elevated temperatures" without giving a number. So 58/68 is angling
+        # knowledge doing real work, and it is the single least defensible pair
+        # in this file -- see the presence-vs-catchability caution up top.
         temp=(38, 47, 58, 68),
         current=(0.60, 0.38, 0.50, 2.4),
         light={"day": 1.0, "golden": 0.80, "twilight": 0.40, "night": 0.18},
