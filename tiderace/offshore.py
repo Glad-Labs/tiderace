@@ -252,6 +252,66 @@ def occurrences(lat: float, lon: float, radius_nm: float = 25,
     return out
 
 
+HFRADAR = "ucsdHfrE2"          # US East Coast, 2 km, near-real-time
+
+
+def surface_current(lat: float, lon: float, box: float = 0.08) -> dict | None:
+    """Measured surface current from the HF radar network.
+
+    This is the one thing the offshore report was missing that the bay report
+    has: current that was *observed* rather than extrapolated. Shore-based
+    radar reads the surface directly, so unlike a tide-station extrapolation
+    seventeen miles out, this is a measurement.
+
+    Coverage is genuinely patchy -- radar has gaps and bad hours -- so a null
+    here means "not measured now", never "no current".
+    """
+    try:
+        info = json.loads(_get(f"{ERDDAP.replace('griddap','info')}/{HFRADAR}/index.json",
+                               ttl=3600))
+    except OffshoreError:
+        return None
+    latest = None
+    for r in info["table"]["rows"]:
+        if r[2] == "time_coverage_end":
+            latest = r[4]
+            break
+    if not latest:
+        return None
+
+    q = (f"water_u%5B({latest})%5D%5B({lat-box}):({lat+box})%5D"
+         f"%5B({lon-box}):({lon+box})%5D,"
+         f"water_v%5B({latest})%5D%5B({lat-box}):({lat+box})%5D"
+         f"%5B({lon-box}):({lon+box})%5D")
+    try:
+        rows = json.loads(_get(f"{ERDDAP}/{HFRADAR}.json?{q}", ttl=1800))["table"]["rows"]
+    except Exception:                                             # noqa: BLE001
+        return None
+
+    cells = [(r[1], r[2], r[3], r[4]) for r in rows
+             if r[3] is not None and r[4] is not None]
+    if not cells:
+        return {"when": latest, "cells": 0, "of": len(rows), "measured": False}
+
+    us = [c[2] for c in cells]
+    vs = [c[3] for c in cells]
+    mu, mv = sum(us) / len(us), sum(vs) / len(vs)
+    speeds = [math.hypot(u, v) * 1.94384 for _, _, u, v in cells]
+
+    # Where neighbouring cells disagree the water is shearing, and a shear line
+    # is a convergence -- which is where anything floating ends up.
+    spread = max(speeds) - min(speeds)
+
+    return {
+        "when": latest, "cells": len(cells), "of": len(rows), "measured": True,
+        "mean_kt": round(math.hypot(mu, mv) * 1.94384, 2),
+        "toward_deg": round((math.degrees(math.atan2(mu, mv)) + 360) % 360),
+        "fastest_kt": round(max(speeds), 2),
+        "slowest_kt": round(min(speeds), 2),
+        "shear_kt": round(spread, 2),
+    }
+
+
 def nearest_turbine(lat: float, lon: float) -> tuple[str, float]:
     n, la, lo = min(TURBINES, key=lambda t: nm(lat, lon, t[1], t[2]))
     return n, round(nm(lat, lon, la, lo), 1)

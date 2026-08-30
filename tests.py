@@ -12,7 +12,7 @@ import re
 import unittest
 from datetime import date, datetime, timedelta
 
-from tiderace import (astro, bait, conditions, evaluate, extract, fetch, gso, hms,
+from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       llm, reconcile,
                       regs, ridem, score, solunar, spots)
 
@@ -1123,6 +1123,59 @@ class Conditions(unittest.TestCase):
         src = inspect.getsource(conditions.marine_forecast)
         self.assertIn("products/types/CWF", src)
         self.assertNotIn("zones/forecast", src)
+
+
+class Birds(unittest.TestCase):
+    """Seabirds as a bait sensor. No network in these -- the key is the user's."""
+
+    def test_bird_weights_rank_plunge_divers_above_loafers(self):
+        """A cormorant on a rock says nothing; a gannet diving says everything."""
+        w = birds.BAIT_BIRDS
+        self.assertGreater(w["Northern Gannet"], w["Herring Gull"])
+        self.assertGreater(w["Common Tern"], w["Double-crested Cormorant"])
+        self.assertGreater(w["Great Shearwater"], w["Great Black-backed Gull"])
+
+    def test_weights_are_bounded(self):
+        for name, w in birds.BAIT_BIRDS.items():
+            self.assertTrue(0 < w <= 1.0, name)
+
+    def test_missing_key_fails_loudly(self):
+        """Silence would look like 'no birds' rather than 'not configured'."""
+        import os
+        from tiderace import config as cfgmod
+        old_env = os.environ.pop("EBIRD_API_KEY", None)
+        try:
+            if not cfgmod.load().get("ebird_key"):
+                with self.assertRaises(birds.NoKey):
+                    birds.api_key()
+        finally:
+            if old_env:
+                os.environ["EBIRD_API_KEY"] = old_env
+
+    def test_key_lives_in_gitignored_config(self):
+        from tiderace import config as cfgmod
+        self.assertIn("ebird_key", cfgmod.DEFAULTS)
+        root = os.path.dirname(os.path.abspath(__file__))
+        ignore = open(os.path.join(root, ".gitignore")).read()
+        self.assertIn("data/config.json", ignore)
+
+
+class SurfaceCurrent(unittest.TestCase):
+    def test_offshore_uses_measured_radar_not_extrapolation(self):
+        """The bay has measured current; offshore had none until HF radar.
+        An extrapolated current seventeen miles out is a confident fiction."""
+        from tiderace import offshore
+        import inspect
+        src = inspect.getsource(offshore.surface_current)
+        self.assertIn("ucsdHfrE", offshore.HFRADAR)
+        self.assertIn("measured", src)
+
+    def test_no_data_is_reported_as_no_measurement(self):
+        """Radar has real gaps. A null must not read as 'no current'."""
+        from tiderace import offshore
+        import inspect
+        src = inspect.getsource(offshore.surface_current)
+        self.assertIn('"measured": False', src)
 
 
 class Privacy(unittest.TestCase):

@@ -30,7 +30,10 @@ DEFAULTS = {
     # needs no Python dependency at all -- the client is plain urllib.
     "llm_backend": "ollama",          # ollama | anthropic | none
     "llm_model": None,                # None -> qwen3.6:27b for ollama
-    "ollama_host": None,              # None -> http://localhost:11434
+    "ollama_host": None,
+    # Free key from https://ebird.org/api/keygen. Kept in the gitignored local
+    # config, never committed.
+    "ebird_key": None,              # None -> http://localhost:11434
 }
 
 

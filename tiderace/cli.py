@@ -97,6 +97,8 @@ def run(argv=None) -> int:
     cf.add_argument("--llm", dest="llm_backend",
                     choices=("ollama", "anthropic", "none"))
     cf.add_argument("--llm-model")
+    cf.add_argument("--ebird-key", dest="ebird_key",
+                    help="free key from https://ebird.org/api/keygen")
     cf.add_argument("--ollama-host")
 
     sc = sub.add_parser("scrape", help="extract facts from RIDEM and fishing reports")
@@ -135,6 +137,12 @@ def run(argv=None) -> int:
     cd.add_argument("--zone", default="ANZ236",
                     help="NWS marine zone (ANZ236 bay, ANZ237 RI/Block sounds)")
     cd.add_argument("--station", default="8452660", help="CO-OPS water level station")
+
+    bd = sub.add_parser("birds", help="seabird activity — where bait is being worked")
+    bd.add_argument("coord", nargs="?", default="41.3720,-71.6390",
+                    help="lat,lon (default: Charlestown Breachway)")
+    bd.add_argument("--km", type=int, default=25)
+    bd.add_argument("--days", type=int, default=3)
 
     hm = sub.add_parser("hms", help="federal rules for tuna, marlin, swordfish")
     hm.add_argument("species", nargs="?", help="bluefin, yellowfin, white marlin…")
@@ -175,6 +183,8 @@ def run(argv=None) -> int:
         return _cmd_scrape(args)
     if args.cmd == "review":
         return _cmd_review(args)
+    if args.cmd == "birds":
+        return _cmd_birds(args)
     if args.cmd == "conditions":
         return _cmd_conditions(args)
     if args.cmd == "hms":
@@ -410,6 +420,51 @@ def _cmd_review(args) -> int:
     return 0
 
 
+def _cmd_birds(args) -> int:
+    from . import birds
+    try:
+        lat, lon = (float(x) for x in args.coord.replace(" ", "").split(","))
+    except ValueError:
+        print(f"could not read a coordinate from {args.coord!r}", file=sys.stderr)
+        return 1
+    try:
+        r = birds.bait_activity(lat, lon, args.km, args.days)
+    except birds.NoKey as e:
+        print(f"\n  {e}\n", file=sys.stderr)
+        return 1
+    except Exception as e:                                        # noqa: BLE001
+        print(f"\n  eBird request failed: {e}\n", file=sys.stderr)
+        return 1
+
+    print()
+    print(f"  seabirds within {args.km} km, last {args.days} days")
+    print("  " + "─" * 74)
+    print(f"  {r['bait_bird_records']} records of bait-following species "
+          f"({r['other_species_ignored']} other species ignored)")
+    if not r["hotspots"]:
+        print("\n  nothing working nearby on the record.\n")
+        return 0
+
+    print()
+    for s in r["hotspots"]:
+        d = birds and 0
+        print(f"    {s['weighted']:>7.0f}  {s['birds']:>5} birds  "
+              f"{s['place'][:38]:<38} {s['last'][:16]}")
+        print(f"             {', '.join(s['species'])[:66]}")
+
+    print()
+    print("  by species")
+    for name, n in list(r["by_species"].items())[:8]:
+        w = birds.BAIT_BIRDS.get(name, 0)
+        print(f"    {n:>6}  {name:<28} weight {w:.2f}")
+
+    print()
+    print("  " + "─" * 74)
+    print("  Birds mean bait was up near a checklist location on some day.")
+    print("  That is a hint, not a forecast, and it is not scored.\n")
+    return 0
+
+
 def _cmd_conditions(args) -> int:
     """Facts a tide table cannot give you. Nothing here is ranked."""
     from . import conditions as C
@@ -557,6 +612,21 @@ def _cmd_offshore(args) -> int:
             bits.append(f"wind {b['wind_kt']:.0f} kt")
         print(f"  buoy {b['station']}      {' · '.join(bits)}   ({b['when']})")
 
+    sc = off.surface_current(lat, lon)
+    if sc and sc.get("measured"):
+        print()
+        print(f"  surface current — MEASURED by HF radar ({sc['when'][:16]}Z)")
+        print(f"    mean {sc['mean_kt']:.2f} kt toward {sc['toward_deg']:03d}°"
+              f"   ·  range {sc['slowest_kt']:.2f}–{sc['fastest_kt']:.2f} kt"
+              f"   ·  {sc['cells']}/{sc['of']} cells")
+        if sc["shear_kt"] >= 0.4:
+            print(f"    shear {sc['shear_kt']:.2f} kt across the box — water is"
+                  " tearing here, and a shear line")
+            print("    is a convergence, which is where anything drifting ends up")
+    elif sc:
+        print(f"\n  surface current — radar returned nothing this hour"
+              f" ({sc['of']} cells, none reporting)")
+
     try:
         grid = off.sst_grid(lat, lon, args.box)
     except off.OffshoreError as e:
@@ -633,7 +703,7 @@ def _cmd_config(args) -> int:
     if args.license_holder:
         changes["license_holder"] = args.license_holder
     for attr in ("llm_backend", "llm_model", "ollama_host", "aggregate_program",
-                 "sub_fishery"):
+                 "sub_fishery", "ebird_key"):
         if getattr(args, attr, None):
             changes[attr] = getattr(args, attr)
     cfg = cfgmod.save(changes) if changes else cfgmod.load()
