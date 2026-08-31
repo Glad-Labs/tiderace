@@ -2845,12 +2845,32 @@ class ViewportLies(unittest.TestCase):
         self.assertIn('name="viewport"', self.page)
         self.assertIn("width=device-width", self.page)
 
-    def test_every_touch_size_is_scalable(self):
-        import re
-        left = re.findall(r"(?:font-size|min-height):\s*[\d.]+px", self.touch)
-        self.assertEqual(left, [],
-                         f"unscaled sizes in the touch block: {left}")
-        self.assertIn("var(--ui, 1)", self.touch)
+    def test_the_whole_chrome_scales_together(self):
+        # Scaling font-size alone grew the text and left padding, gaps and radii
+        # where they were. zoom scales layout, which is what was wanted.
+        self.assertIn("zoom: var(--ui, 1)", self.page)
+        for sel in ("#sheet", "#bar", "#here"):
+            self.assertIn(sel, self.page.split("zoom: var(--ui, 1)")[0][-200:],
+                          f"{sel} should be in the zoomed set")
+
+    def test_zoomed_boxes_state_their_width_in_zoomed_units(self):
+        # A zoomed fixed element resolves left/right against the UNZOOMED
+        # viewport and then multiplies, so left:0;right:0 came out 586px wide
+        # inside a 375px screen.
+        self.assertIn("width:calc(100vw / var(--ui, 1))", self.page)
+        self.assertIn("right:auto", self.page)
+
+    def test_offsets_are_divided_by_the_zoom(self):
+        # Offsets are multiplied too: a 12px inset landed at 29px.
+        for rule in ("left:calc(12px / var(--ui, 1))",
+                     "right:calc(14px / var(--ui, 1))"):
+            self.assertIn(rule, self.page)
+
+    def test_the_map_is_not_zoomed(self):
+        # It works in its own pixel space; zooming it would break hit-testing
+        # and the label clamp.
+        zoomed = self.page.split("zoom: var(--ui, 1)")[0][-200:]
+        self.assertNotIn("#map", zoomed)
 
     def test_the_scale_is_derived_from_the_real_screen(self):
         fn = self.page.split("function uiScale()")[1].split("\n}")[0]
