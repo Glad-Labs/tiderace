@@ -2753,9 +2753,26 @@ class ResponsiveLayout(unittest.TestCase):
         # A third width-only query would reintroduce the same split-brain.
         import re
         qs = re.findall(r"@media ([^{]+)\{", self.page)
-        self.assertEqual([q.strip() for q in qs],
-                         ["(max-width:900px), (pointer:coarse)",
-                          "(min-width:901px) and (pointer:fine)"])
+        self.assertEqual(sorted(q.strip() for q in qs),
+                         sorted(["(max-width:900px), (pointer:coarse)",
+                                 "(min-width:901px) and (pointer:fine)"]))
+
+    def test_the_touch_block_is_last_in_the_stylesheet(self):
+        """Source order, not specificity, decides between `.srow .v` in the
+        base styles and `.srow .v` in the media query -- they are identical.
+
+        The touch block originally sat above the sheet's own styles, so every
+        sheet override in it lost silently. The text stayed small through a
+        round of "fixing" it, and nothing was wrong with the rules themselves.
+        """
+        css = self.page[self.page.index("<style>"):self.page.index("</style>")]
+        touch = css.index("@media (max-width:900px), (pointer:coarse)")
+        # Every base rule the touch block overrides must come before it.
+        for sel in (".srow{", ".srow .v{", ".sgroup{", "#sheethead b{",
+                    ".rank button{", ".ph{"):
+            self.assertLess(css.index(sel), touch,
+                            f"{sel} is defined after the touch block, so the "
+                            f"touch override for it cannot win")
 
 
 if __name__ == "__main__":

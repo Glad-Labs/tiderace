@@ -183,46 +183,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   color:var(--depth); letter-spacing:.1em; text-transform:uppercase;
 }
 #loading.hide{display:none}
-/* Width alone was the wrong test. This shipped keyed on max-width:900px and
-   the sidebar stayed put on an actual phone, because a device can report far
-   more than 900 CSS pixels and still be a thing you hold in one hand -- a
-   foldable, a tablet, or a browser set to "desktop site". What decides the
-   layout is whether you are pointing with a finger. */
-@media (max-width:900px), (pointer:coarse){
-  /* One surface, not two. The panel used to sit in a 300px strip under the
-     map while the conditions sheet slid over the top of it -- two scrolling
-     regions competing for a phone screen, with the map squeezed into what was
-     left. Now the map has the whole screen and the panel is moved bodily into
-     the sheet (see adoptPanel), so there is exactly one thing to read and it
-     is the thing you pulled up. */
-  #app{grid-template-columns:1fr; grid-template-rows:1fr}
-  #panel{display:none}
-  #sheet{max-height:92vh}
-  #sheet.peek{transform:translateY(calc(100% - 210px))}
-  /* Everything a thumb has to hit, sized for a thumb. */
-  .srow{padding:14px 16px}
-  .srow .k{font-size:13px; width:36%}
-  .srow .v{font-size:21px}
-  .srow .v small{font-size:12px}
-  .sgroup{font-size:11px; letter-spacing:.18em; padding:16px 16px 6px}
-  .srule{font-size:13px; line-height:1.55}
-  .sdim{font-size:12px; line-height:1.6}
-  #sheethead b{font-size:19px}
-  #adopted{padding:0 4px 8px}
-  #adopted .card, #adopted .box{font-size:14px}
-  #adopted h3{font-size:17px}
-  #adopted dt, #adopted dd{font-size:13px}
-  #adopted .row{min-height:52px}
-  /* The scrubber is absolutely positioned inside the map wrapper, not the
-     app grid, so it needs no offset for the panel here -- the panel is a
-     sibling below the map, already out of the way. Offsetting by the panel
-     height pushed it 314px up from the map's own bottom edge and parked it
-     in the middle of the chart. */
-  /* 44px, not 14px: the attribution sits in the bottom-right corner of the
-     map and occupies the last ~34px. Covering it would breach the ODbL terms
-     the basemap ships under. */
-  #timebar{right:12px; bottom:44px}
-}
+
 
 /* ---- conditions sheet -------------------------------------------------
    Built for a phone held in one hand on a moving boat. Everything that
@@ -336,6 +297,81 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 #slogmsg{margin-top:10px; font:12px/1.4 var(--mono); color:var(--muted)}
 #slogmsg.ok{color:var(--good)} #slogmsg.err{color:var(--crit)}
 #slognote{margin-top:10px; font:11px/1.5 var(--mono); color:var(--muted)}
+
+/* Placed last on purpose. These rules override base styles of equal
+   specificity -- .srow .v against .srow .v -- so the cascade decides by source
+   order, and this block used to sit ABOVE the sheet's own styles. Every sheet
+   override in it was silently losing, which is why the text stayed small after
+   a round of "fixing" it. Anything added below this will win over it. */
+/* Width alone was the wrong test. This shipped keyed on max-width:900px and
+   the sidebar stayed put on an actual phone, because a device can report far
+   more than 900 CSS pixels and still be a thing you hold in one hand -- a
+   foldable, a tablet, or a browser set to "desktop site". What decides the
+   layout is whether you are pointing with a finger. */
+@media (max-width:900px), (pointer:coarse){
+  /* One surface, not two. The panel used to sit in a 300px strip under the
+     map while the conditions sheet slid over the top of it -- two scrolling
+     regions competing for a phone screen, with the map squeezed into what was
+     left. Now the map has the whole screen and the panel is moved bodily into
+     the sheet (see adoptPanel), so there is exactly one thing to read and it
+     is the thing you pulled up. */
+  #app{grid-template-columns:1fr; grid-template-rows:1fr}
+  #panel{display:none}
+  #sheet{max-height:92vh}
+  #sheet.peek{transform:translateY(calc(100% - 210px))}
+  /* Everything a thumb has to hit, sized for a thumb. */
+  .srow{padding:14px 16px}
+  .srow .k{font-size:14px; width:36%}
+  .srow .v{font-size:22px}
+  .srow .v small{font-size:13px}
+  .sgroup{font-size:12px; letter-spacing:.18em; padding:16px 16px 6px}
+  .srule{font-size:14px; line-height:1.6}
+  .sdim{font-size:13px; line-height:1.65}
+  #sheethead b{font-size:20px}
+  /* Type, sized for reading at arm's length in sunlight with salt on the
+     screen. The first attempt at this guessed selectors that do not exist
+     (.box, .row) and changed nothing; these are the real ones, taken from the
+     stylesheet above. Everything roughly +3px, and nothing left under 12. */
+  #adopted{padding:0 2px 8px}
+  #adopted .ph{font-size:12px; letter-spacing:.16em; padding-top:4px}
+  #adopted .card{padding:14px}
+  #adopted .card h3{font-size:19px}
+  #adopted .card .sub{font-size:12px}
+  #adopted .big{font-size:42px}
+  #adopted .kv{font-size:14px; gap:6px 14px}
+  #adopted .why{font-size:14px; line-height:1.55}
+  #adopted .regs, #adopted #regs, #adopted #regsbox{font-size:14px; line-height:1.6}
+  /* The ranked list is the thing you actually read on the water. */
+  #adopted .rank button{min-height:58px; padding:10px 12px; font-size:16px}
+  #adopted .rank .s{font-size:19px}
+  #adopted .rank .m{font-size:13px}
+  #adopted .empty{font-size:15px; line-height:1.6}
+  #adopted .note{font-size:13px; line-height:1.55}
+  #adopted .conf{font-size:12px; padding:3px 7px}
+  #adopted .markwarn{font-size:13px; line-height:1.55}
+  #adopted .markwin{font-size:14px; min-height:44px; align-items:center}
+  #adopted #layers h4{font-size:12px}
+  #adopted #layers label{font-size:15px; min-height:44px; gap:10px}
+  #adopted #layers .cnt{font-size:12px}
+  #adopted .ok, #adopted .err{font-size:13px}
+  /* 16px or Safari zooms the page on focus and takes the map with it. */
+  #adopted input, #adopted select, #adopted button{font-size:16px}
+  #adopted input, #adopted select{min-height:46px; padding:10px 12px}
+  /* The top bar is a control strip, not text: it needs tap targets. */
+  #bar{font-size:15px}
+  #bar select{font-size:16px; min-height:40px}
+  label.chk{font-size:14px; gap:8px}
+  #tlabel{font-size:15px} #tsub{font-size:13px}
+  /* The scrubber is absolutely positioned inside the map wrapper, not the
+     app grid, so it needs no offset for the panel here -- the panel is a
+     sibling below the map, already out of the way. Offsetting by the panel
+     height pushed it 314px up from the map's own bottom edge and parked it
+     in the middle of the chart. */
+  /* 44px, not 14px: the attribution sits in the bottom-right corner of the
+     map and occupies the last ~34px. Covering it would breach the ODbL terms
+     the basemap ships under. */
+  #timebar{right:12px; bottom:44px}
+}
 </style>
 </head>
 <body>
