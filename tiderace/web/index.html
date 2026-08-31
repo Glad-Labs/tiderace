@@ -274,6 +274,40 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   #sheet{left:auto; right:0; width:420px; max-height:92vh; border-radius:16px 0 0 0}
   #here{display:none}
 }
+
+/* ---- log a trip from the sheet ---------------------------------------
+   The tap that opens the sheet is the same tap that means "here". Making
+   you close it, find the spot in a list and log there would lose the one
+   thing you actually knew: the coordinate. */
+#slog{border-top:1px solid var(--hair); margin-top:6px; padding:14px 16px 22px}
+#slog .sgroup{padding:0 0 10px}
+#slogtoggle{
+  width:100%; min-height:52px; border-radius:12px; border:1px solid var(--hair);
+  background:var(--panel-2); color:var(--ink);
+  font:600 15px/1 var(--display); cursor:pointer;
+}
+#slogtoggle:active{transform:scale(.99)}
+#slogform{display:none; margin-top:12px}
+#slogform.open{display:block}
+#slogform .two{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+#slogform input, #slogform select{
+  width:100%; margin-top:8px; padding:13px 12px; border-radius:10px;
+  border:1px solid var(--hair); background:var(--ground); color:var(--ink);
+  font:15px/1.2 var(--mono);
+  /* 16px is the iOS zoom threshold; below it Safari zooms the whole page on
+     focus and you lose the map behind the sheet. */
+  font-size:16px;
+}
+#slogform .two input{margin-top:0}
+#slogsave{
+  width:100%; min-height:54px; margin-top:12px; border:none; border-radius:12px;
+  background:var(--accent); color:#fff; font:600 16px/1 var(--display);
+  cursor:pointer;
+}
+#slogsave:active{transform:scale(.99)}
+#slogmsg{margin-top:10px; font:12px/1.4 var(--mono); color:var(--muted)}
+#slogmsg.ok{color:var(--good)} #slogmsg.err{color:var(--crit)}
+#slognote{margin-top:10px; font:11px/1.5 var(--mono); color:var(--muted)}
 </style>
 </head>
 <body>
@@ -1395,7 +1429,100 @@ window.surveyURL = (lat, lon) =>
     if ((d.binding_warnings || []).length)
       h += `<div class="sdim">${d.binding_warnings.map(esc).join('<br>')}</div>`;
 
+    h += logSection(d);
     body.innerHTML = h;
+    wireLog(d);
+  }
+
+
+  /* The whole point: the tap that opened this sheet already said where. The
+     coordinate is the scarce part of a log entry -- a spot name drifts ("the
+     reef" is four rocks over a season) but 41.4587,-71.3914 does not -- so it
+     is carried straight through to the entry rather than being re-derived from
+     whatever was selected in a list somewhere else. */
+  function logSection(d) {
+    const sel = document.getElementById('species');
+    const species = sel ? sel.value : 'striped_bass';
+    const name = (sel && sel.selectedOptions[0]) ? sel.selectedOptions[0].text : species;
+    const now = new Date();
+    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+                    .toISOString().slice(0, 16);
+    return `
+      <div id="slog">
+        <div class="sgroup">log a trip</div>
+        <button id="slogtoggle" type="button">
+          Log ${esc(name)} here &nbsp;·&nbsp; ${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}
+        </button>
+        <form id="slogform" novalidate>
+          <div class="two">
+            <input type="number" name="count" min="0" value="0" inputmode="numeric"
+                   placeholder="fish" required>
+            <input type="number" name="biggest_in" min="0" step="0.5"
+                   inputmode="decimal" placeholder="biggest (in)">
+          </div>
+          <input type="datetime-local" name="started_at" value="${local}">
+          <input type="text" name="method" placeholder="method — live eel, bucktail…">
+          <input type="text" name="bait_observed" placeholder="bait seen — silversides…">
+          <input type="text" name="notes" placeholder="notes">
+          <button id="slogsave" type="submit">Save this trip</button>
+          <div id="slogmsg"></div>
+          <div id="slognote">Blanks count. A model trained only on good days
+            learns that every day is good. Saved on the phone first — a trip you
+            did not record is gone, one that has not synced yet is fine.</div>
+        </form>
+      </div>`;
+  }
+
+  function wireLog(d) {
+    const btn = document.getElementById('slogtoggle');
+    const form = document.getElementById('slogform');
+    if (!btn || !form) return;
+    btn.onclick = () => {
+      form.classList.toggle('open');
+      if (form.classList.contains('open')) {
+        sheet.classList.remove('peek');
+        form.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      }
+    };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const sel = document.getElementById('species');
+      const f = new FormData(form);
+      const body = {
+        // No spot key: the server mints "at:lat,lon" for a bare coordinate, and
+        // snapshot() resolves it to stations exactly as a named spot would, so
+        // this trip is as complete a training example as any other.
+        lat: d.lat, lon: d.lon,
+        species: sel ? sel.value : 'striped_bass',
+        client_id: (crypto.randomUUID?.() || String(Date.now()) + Math.random()),
+      };
+      for (const [k, v] of f.entries()) if (v !== '') body[k] = v;
+
+      const msg = document.getElementById('slogmsg');
+      msg.className = ''; msg.textContent = 'saving…';
+      try { await queueAdd(body); }
+      catch (err) {
+        msg.className = 'err';
+        msg.textContent = 'could not save: ' + err.message;
+        return;
+      }
+      form.reset();
+      const res = await flushQueue();
+      if (res.sent) {
+        const s = res.summary;
+        msg.className = 'ok';
+        msg.textContent = s
+          ? `saved · ${s.trips} trips, ${s.fish} fish, ${s.blanks} blanks`
+          : 'saved';
+      } else {
+        const n = await pendingCount();
+        msg.className = '';
+        msg.innerHTML = `<span style="color:var(--warn)">held on this phone` +
+                        ` · ${n} waiting to sync</span>`;
+      }
+      if (typeof refreshNetState === 'function') refreshNetState();
+      if (typeof loadBait === 'function' && MAP_READY) loadBait();
+    };
   }
 
   async function show(lat, lon, label){

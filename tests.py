@@ -2502,5 +2502,70 @@ class SurveyRendering(unittest.TestCase):
         self.assertIn("distance_nm", self.cli.split('L.get("bottom")')[1][:400])
 
 
+class CoordinateLogging(unittest.TestCase):
+    """Logging a trip at a tapped coordinate, not just at a named spot.
+
+    The coordinate is the scarce half of a log entry. A spot name drifts --
+    "the reef" is four different rocks over a season -- but 41.4587,-71.3914
+    does not, and a fitted model can only group on the number.
+    """
+
+    def test_a_bare_coordinate_becomes_a_stable_spot_key(self):
+        from tiderace.server import Handler
+        e = Handler._entry({"lat": 41.4587, "lon": -71.3914,
+                            "species": "striped_bass", "count": 2})
+        self.assertEqual(e.spot, "at:41.45870,-71.39140")
+        self.assertEqual((e.lat, e.lon), (41.4587, -71.3914))
+
+    def test_the_key_is_rounded_so_the_same_tap_groups_together(self):
+        # Five decimal places is about a metre. Without rounding, two taps on
+        # the same rock would be two different "spots" forever.
+        from tiderace.server import Handler
+        a = Handler._entry({"lat": 41.45870001, "lon": -71.39140002,
+                            "species": "scup", "count": 0})
+        b = Handler._entry({"lat": 41.4587, "lon": -71.3914,
+                            "species": "scup", "count": 0})
+        self.assertEqual(a.spot, b.spot)
+
+    def test_a_named_spot_still_wins_over_the_coordinate(self):
+        from tiderace.server import Handler
+        e = Handler._entry({"spot": "whale_rock", "lat": 41.44, "lon": -71.42,
+                            "species": "striped_bass", "count": 1})
+        self.assertEqual(e.spot, "whale_rock")
+
+    def test_an_entry_with_neither_is_refused(self):
+        from tiderace.server import Handler
+        with self.assertRaises(ValueError):
+            Handler._entry({"species": "striped_bass", "count": 1})
+
+    def test_the_sheet_posts_a_coordinate_not_a_spot_key(self):
+        import pathlib as _p
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        body = page.split("function wireLog")[1][:1800]
+        self.assertIn("lat: d.lat", body)
+        self.assertIn("lon: d.lon", body)
+        self.assertNotIn("spot:", body,
+                         "the sheet must not invent a spot key — the server mints it")
+
+    def test_the_form_survives_being_offline(self):
+        # A trip you did not record is gone; one that has not synced is fine.
+        import pathlib as _p
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        body = page.split("function wireLog")[1][:2200]
+        self.assertLess(body.index("queueAdd"), body.index("flushQueue"),
+                        "must write to the phone before trying the network")
+
+    def test_inputs_do_not_trigger_ios_zoom(self):
+        # Below 16px Safari zooms the page on focus and the map goes with it.
+        import pathlib as _p, re
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        # Wide enough to clear the comment explaining the rule; the browser
+        # reports 16px, so a miss here is the window being too small.
+        css = page.split("#slogform input")[1].split("}")[0]
+        m = re.search(r"font-size:\s*(\d+)px", css)
+        self.assertTrue(m, "log inputs need an explicit font-size")
+        self.assertGreaterEqual(int(m.group(1)), 16)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
