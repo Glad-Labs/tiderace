@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       provenance,
                       bathy, cache as cachemod, llm, reconcile, reports, protected, survey, whales,
-                      regs, ridem, score, solunar, spots)
+                      madmf, regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
 from tiderace.features import _local_tz, _wind_against_tide
@@ -3088,6 +3088,204 @@ class Bathymetry(unittest.TestCase):
         blk = page.split("  bathy: {")[1].split("},")[0]
         self.assertIn("dash", blk, "must be visually distinct from a survey")
         self.assertIn("model: true", blk)
+
+
+# --------------------------------------------------------------------------
+# Massachusetts: does the reconciler travel?
+#
+# `reconcile.py` was written against RIDEM and claims to be format-agnostic
+# because it consumes parsed dicts, not text. `madmf.py` is a second
+# extractor built to test that claim against real DMF advisories. Two of
+# these tests are expected failures: they describe what a correct reconciler
+# would say, and they will start passing the day `reconcile` learns that a
+# later notice can retire an earlier one without saying so.
+# --------------------------------------------------------------------------
+
+BSB_JULY = """
+June 18, 2026
+MarineFisheries Advisory
+Summertime Commercial Black Sea Bass Fishery to Open on July 1
+The summertime commercial fishery for black sea bass opens on Wednesday, July 1.
+Commercial fishers who hold a black sea bass pot endorsement and are taking fish by
+black sea bass pot are subject to a 500-pound daily trip limit that increases to 600
+pounds on September 1 if at least 15% of the quota remains. For black sea bass
+endorsement holders who are fishing with rod and reel gear or retaining fish caught as
+bycatch in other pot gear, the daily trip limit begins at 250 pounds and similarly
+increases to 300 pounds on September 1 if at least 15% of the quota remains. The
+commercial minimum size is 12 inches as measured on the fish with its mouth closed.
+"""
+
+BSB_SEPT = """
+August 28, 2026
+MarineFisheries Advisory
+Adjustments to Commercial Black Sea Bass Limits Effective September 1
+Effective Tuesday, September 1, 2026, the commercial black sea bass possession and
+landing limit and open fishing day schedule will change. The trip limit increases from
+500 pounds to 600 pounds for pot fishers and from 250 pounds to 300 pounds for hook and
+line fishers (and other non-trawl gear).
+The Consecutive Daily Trip Limit Program remains in effect for the black sea bass pot
+fishery throughout the remainder of the 2026 season. Consistent with this September 1
+trip limit adjustment, potters with a valid Letter of Authorization will be able to
+possess and land up to 1,200 pounds of black sea bass on any trip spanning two
+consecutive calendar days provided no more than 600 pounds of black sea bass is retained
+during any single calendar day.
+"""
+
+FLUKE_SEPT = """
+August 28, 2026
+MarineFisheries Advisory
+Commercial Summer Flounder Limits to Increase on September 1
+Effective Tuesday, September 1, 2026, the commercial summer flounder possession and
+landing limit for all gear types will increase to 1,000 pounds. Unless otherwise
+notified, the 1,000-pound trip limit will remain in effect from September 1 until the
+start of the fall fishery on October 1. At that time, the trip limit may increase to
+5,000 pounds if at least 10% of the quota remains available.
+"""
+
+BASS_CLOSE = """
+August 4, 2026
+MarineFisheries Advisory
+2026 Commercial Striped Bass Fishery to Close Effective August 5
+The Division of Marine Fisheries (DMF) is projecting that 100% of Massachusetts' 2026
+commercial striped bass quota will be taken on Tuesday, August 4. Accordingly, DMF is
+closing the 2026 commercial striped bass fishery effective at 0001 hours on Wednesday,
+August 5 (Closure Notice). Unless otherwise notified, the commercial striped bass
+fishery will remain closed until it is scheduled to reopen in 2027.
+"""
+
+BASS_OPEN = """
+June 11, 2026
+MarineFisheries Advisory
+2026 Commercial Striped Bass Fishery to Open on June 16
+Massachusetts' 2026 commercial striped bass fishery will open on Tuesday, June 16 with a
+683,773-pound quota. The commercial minimum size is 35" total length. The daily limit is
+15-fish for boat-based permit holders fishing onboard the vessel named on the permit, and
+2-fish for all other commercial fishing activity.
+"""
+
+
+def _ma_corpus():
+    out = []
+    for doc in (BASS_OPEN, BSB_JULY, BASS_CLOSE, BSB_SEPT, FLUKE_SEPT):
+        out += madmf.parse_advisory(doc)["notices"]
+    return out
+
+
+class MassachusettsExtractor(unittest.TestCase):
+    def test_the_year_comes_from_the_dateline(self):
+        """DMF writes "effective ... August 5" with no year. Guessing the
+        current year works for ten months and is wrong every January."""
+        self.assertEqual(madmf.dateline_year(BASS_CLOSE), 2026)
+        n = madmf.parse_advisory(BASS_CLOSE)["notices"]
+        self.assertEqual(n[0]["effective_date"], "2026-08-05")
+
+    def test_one_sentence_two_gears_two_limits(self):
+        """The pot and hook-and-line limits are set in one sentence. An
+        earlier version consumed the "and from" joining them and recorded
+        only the first."""
+        got = {n["sub_fishery"]: n["amount"]["value"]
+               for n in madmf.parse_advisory(BSB_SEPT)["notices"]
+               if n["period"] != "per two days"}
+        self.assertEqual(got.get("pot"), 600)
+        self.assertEqual(got.get("hook_and_line"), 300)
+
+    def test_non_trawl_is_not_trawl(self):
+        """"hook and line fishers (and other non-trawl gear)" matched the
+        bare `trawl` hint and reported 600 lb for trawlers, who get 100 lb
+        incidental. Wrong by 6x in the direction that earns a citation."""
+        for n in madmf.parse_advisory(BSB_SEPT)["notices"]:
+            if n["sub_fishery"] == "trawl":
+                self.fail(f"attributed to trawlers: {n['quote'][:80]}")
+
+    def test_the_annual_quota_is_not_a_trip_limit(self):
+        """"a 683,773-pound quota" is the size of the fishery."""
+        for n in madmf.parse_advisory(BASS_OPEN)["notices"]:
+            if n["amount"]:
+                self.assertLess(n["amount"]["value"], 1000, n["quote"][:80])
+
+    def test_a_conditional_future_change_is_not_a_current_limit(self):
+        """"may increase to 5,000 pounds if at least 10% of the quota
+        remains" is a forecast. Recording it as in force puts a 5x limit on
+        the boat before anyone has decided it applies."""
+        r = madmf.parse_advisory(FLUKE_SEPT)
+        self.assertEqual([c["amount"]["value"] for c in r["conditional_changes"]], [5000])
+        for n in r["notices"]:
+            self.assertNotEqual(n["amount"]["value"], 5000)
+
+    def test_no_amount_carries_a_cross_check(self):
+        """The RI parser's best property -- "four hundred (400)" checking
+        itself -- does not survive the border. DMF writes numbers once."""
+        for n in _ma_corpus():
+            if n["amount"]:
+                self.assertFalse(n["amount"]["cross_checked"])
+
+    def test_unmodelled_species_are_not_parse_failures(self):
+        """DMF publishes menhaden, squid and scallop advisories. Not
+        modelling a species is scope, not breakage, and filing it as
+        `unparsed` buries the real failures."""
+        r = madmf.parse_advisory(
+            "June 5, 2026\nThe commercial limited access trip limit will be "
+            "reduced from 120,000 pounds to 25,000 pounds effective Tuesday, June 9.")
+        self.assertEqual(r["unparsed"], [])
+        self.assertTrue(r["unmodelled_species"])
+
+
+class MassachusettsReconcilePortability(unittest.TestCase):
+    """What the RI reconciler does and does not survive."""
+
+    def test_gear_keys_keep_separate_limits_apart(self):
+        """`_key` already carries sub_fishery, so MA's gear dimension needs
+        no reconciler change -- pot, hook-and-line and all-gear coexist."""
+        st = reconcile.effective_state(_ma_corpus(), date(2026, 9, 15))
+        gears = {k[5] for k in st if k[0] == "black_sea_bass"}
+        self.assertIn("pot", gears)
+        self.assertIn("hook_and_line", gears)
+
+    def test_the_consecutive_daily_limit_coexists_with_the_daily_one(self):
+        """1,200 lb over two days and 600 lb in one day are both real and
+        both in force. Keying on period is what keeps them distinct."""
+        st = reconcile.effective_state(_ma_corpus(), date(2026, 9, 15))
+        periods = {k[3] for k in st if k[0] == "black_sea_bass" and k[5] == "pot"}
+        self.assertIn("per two days", periods)
+
+    def test_upcoming_surfaces_changes_before_they_land(self):
+        up = reconcile.upcoming(_ma_corpus(), date(2026, 8, 15))
+        self.assertTrue(any(u["effective_date"] == "2026-09-01" for u in up))
+
+    def test_promote_never_fires_because_ma_declares_no_successors(self):
+        """The crux of the RI reconciler -- reconstructing the rule in force
+        from a spent notice's tail -- is inert here. RIDEM buries the current
+        rule inside a superseded notice; DMF gives every change its own
+        advisory. That logic is a RIDEM house-style adaptation, not a
+        universal pattern."""
+        self.assertEqual(
+            [n for n in _ma_corpus() if n.get("superseded_on") or n.get("successor")],
+            [])
+
+    @unittest.expectedFailure
+    def test_a_later_notice_retires_the_limit_it_replaces(self):
+        """FAILS TODAY. The 9/1 advisory raises pot from 500 to 600. Because
+        supersession is never declared -- MA simply states the new number --
+        `effective_state` keeps both, and reports two contradictory pot
+        limits as simultaneously in force. RIDEM never exposed this because
+        every RIDEM notice carries its own expiry."""
+        st = reconcile.effective_state(_ma_corpus(), date(2026, 9, 15))
+        daily = [n["amount"]["value"] for k, n in st.items()
+                 if k[0] == "black_sea_bass" and k[5] == "pot"
+                 and k[3] != "per two days"]
+        self.assertEqual(sorted(daily), [600])
+
+    @unittest.expectedFailure
+    def test_a_closure_retires_the_opening_it_ends(self):
+        """FAILS TODAY. `change_type` is part of the key, so a season_open
+        and a season_close never compete and striped bass is reported open
+        and closed at once. In RI closures carry a dated `reopens_on` and
+        `compare` pairs them; the 8/5 MA closure runs "until it is scheduled
+        to reopen in 2027" and has no date to pair on."""
+        st = reconcile.effective_state(_ma_corpus(), date(2026, 9, 15))
+        seasons = {k[2] for k in st if k[0] == "striped_bass"
+                   and k[2].startswith("season")}
+        self.assertEqual(seasons, {"season_close"})
 
 
 if __name__ == "__main__":

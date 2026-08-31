@@ -981,9 +981,18 @@ const CHART_ON = {depth_area:false, rocks:false, wrecks:true, obstructions:false
                   // Soundings are the same information as contours at ten times
                   // the weight, so they stay on demand.
                   contours:true, soundings:false, buoys:true, lights:false,
-                  // Generated on demand, about ten seconds a cell the
-                  // first time, so it is opt-in rather than automatic.
-                  bathy:false};
+                  // On by default now. It is the layer that actually answers
+                  // "why is it blank out there": in mid Rhode Island Sound the
+                  // ENC general band draws 16 contour lines and this draws 92.
+                  // Parallel block fetching took a cell from ten seconds to
+                  // about three, which is what makes it reasonable to have on.
+                  //
+                  // Defaulting a MODEL on is a real decision. It is safe here
+                  // because it cannot be mistaken for a survey: dashed, dimmer,
+                  // its own layer, labelled "not for navigation", and every
+                  // feature flagged. The honesty lives in the rendering rather
+                  // than in the layer being hidden.
+                  bathy:true};
 const CHART_DATA = {};
 
 fetch('/api/meta').then(r=>r.json()).then(m => {
@@ -1235,43 +1244,61 @@ async function loadStructure(){
 const CELL_LAYERS = ['soundings', 'contours', 'bathy'];
 const CELL_MIN_ZOOM = 11;     // below this they are a smear, and not worth the data
 const CELLS_LOADED = new Set();
-let cellBusy = false;
+let cellBusy = false, cellPending = false;
 
 async function loadCellsForView(){
-  if (!MAP_READY || cellBusy) return;
+  if (!MAP_READY) return;
   if (map.getZoom() < CELL_MIN_ZOOM) return;
   const want = CELL_LAYERS.filter(n => CHART_ON[n]);
   if (!want.length) return;
 
-  const b = map.getBounds();
-  const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(',');
+  // A pan while cells are in flight used to be dropped outright, so whatever
+  // you moved to simply never loaded. Now it is remembered and run at the end.
+  if (cellBusy) { cellPending = true; return; }
   cellBusy = true;
+
   try {
-    const meta = await (await fetch(`/api/chartcells?bbox=${bbox}&limit=6`)).json();
-    for (const c of (meta.cells || [])){
+    const b = map.getBounds();
+    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(',');
+    // Enough to cover a viewport rather than a token six. The server still
+    // orders them centre-first, so if the cap does bite it bites at the edges.
+    const meta = await (await fetch(`/api/chartcells?bbox=${bbox}&limit=20`)).json();
+
+    const jobs = [];
+    for (const c of (meta.cells || []))
       for (const name of want){
         const key = `${name}/${c.iy}/${c.ix}`;
-        // bathy lives under its own path: it is generated here rather
-        // than fetched from NOAA, and costs about ten seconds a cell
-        // the first time anyone looks at it.
-        const url = name === 'bathy'
-          ? `/charts/bathy/${c.iy}/${c.ix}.geojson`
-          : `/charts/cell/${key}.geojson`;
         if (CELLS_LOADED.has(key)) continue;
-        CELLS_LOADED.add(key);          // claim it before awaiting, or a second
-                                        // pan starts the same fetch again
+        CELLS_LOADED.add(key);      // claim before awaiting, or a second pan
+                                    // starts the same fetch again
+        jobs.push({name, key, iy: c.iy, ix: c.ix});
+      }
+
+    // Cells are independent, and awaiting them one at a time meant the last of
+    // six modelled cells landed a minute after the first. Four at a time keeps
+    // the map filling in visibly without opening twenty sockets on a phone.
+    const CONCURRENCY = 4;
+    let next = 0;
+    const worker = async () => {
+      while (next < jobs.length){
+        const job = jobs[next++];
+        const url = job.name === 'bathy'
+          ? `/charts/bathy/${job.iy}/${job.ix}.geojson`
+          : `/charts/cell/${job.key}.geojson`;
         try {
           const gj = await (await fetch(url)).json();
-          if (gj.features && gj.features.length) mergeCell(name, gj);
+          if (gj.features && gj.features.length) mergeCell(job.name, gj);
         } catch (_) {
-          CELLS_LOADED.delete(key);     // offline or a bad cell: let it retry
+          CELLS_LOADED.delete(job.key);   // offline or a bad cell: let it retry
         }
       }
-    }
+    };
+    await Promise.all(Array.from({length: CONCURRENCY}, worker));
   } catch (_) {
     /* no network: the bundled layers still draw */
   } finally {
     cellBusy = false;
+    if (cellPending){ cellPending = false; loadCellsForView(); }
   }
 }
 

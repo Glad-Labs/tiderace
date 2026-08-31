@@ -39,6 +39,7 @@ import math
 import os
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import cache
 
@@ -138,10 +139,9 @@ def sample_grid(bbox, n: int = GRID) -> list[list[float | None]]:
         return _sample_block(bbox, n)
 
     w, s, e, nn = bbox
-    # How many blocks per side, and how many samples each contributes.
     nb = math.ceil((n - 1) / (BLOCK - 1))
-    step = (BLOCK - 1)
-    grid: list[list[float | None]] = [[None] * n for _ in range(n)]
+    step = BLOCK - 1
+    jobs = []
     for bj in range(nb):
         for bi in range(nb):
             i0, j0 = bi * step, bj * step
@@ -150,8 +150,26 @@ def sample_grid(bbox, n: int = GRID) -> list[list[float | None]]:
                 continue
             sub = (w + (e - w) * i0 / (n - 1), s + (nn - s) * j0 / (n - 1),
                    w + (e - w) * i1 / (n - 1), s + (nn - s) * j1 / (n - 1))
-            side = max(i1 - i0, j1 - j0) + 1
-            block = _sample_block(sub, side)
+            jobs.append((i0, j0, i1, j1, sub))
+
+    # Sixteen sequential round trips is ten seconds of mostly waiting. They are
+    # independent, so they go together -- four at a time, which is polite to a
+    # public service while still turning ten seconds into about three.
+    grid: list[list[float | None]] = [[None] * n for _ in range(n)]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {
+            pool.submit(_sample_block, sub, max(i1 - i0, j1 - j0) + 1):
+                (i0, j0, i1, j1)
+            for i0, j0, i1, j1, sub in jobs
+        }
+        for fut in as_completed(futures):
+            i0, j0, i1, j1 = futures[fut]
+            try:
+                block = fut.result()
+            except BathyError:
+                continue                  # one bad block leaves a hole, not a
+                                          # failed cell -- gaps are handled
+            side = len(block)
             for jj in range(min(side, j1 - j0 + 1)):
                 for ii in range(min(side, i1 - i0 + 1)):
                     grid[j0 + jj][i0 + ii] = block[jj][ii]
