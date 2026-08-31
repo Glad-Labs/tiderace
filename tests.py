@@ -2355,5 +2355,50 @@ class AtomicCache(unittest.TestCase):
         self.assertEqual(offenders, [], "non-atomic cache write reintroduced")
 
 
+class TilePolicy(unittest.TestCase):
+    """The OSM tile usage policy, enforced in the repo rather than remembered.
+
+    It forbids "any pre-emptive fetching of tiles other than those a user is
+    actively viewing" and says violators are blocked without notice. A block
+    would remove the basemap entirely, on the water -- far worse than having no
+    offline tiles. So caching what was viewed is fine and pre-seeding is not,
+    and that line is easy to erase later with one well-meaning loop.
+    """
+
+    def setUp(self):
+        import pathlib
+        self.sw = (pathlib.Path(__file__).parent
+                   / "tiderace" / "web" / "sw.js").read_text()
+        self.page = (pathlib.Path(__file__).parent
+                     / "tiderace" / "web" / "index.html").read_text()
+
+    def test_tiles_are_cached_but_never_prefetched(self):
+        self.assertIn("TILES", self.sw, "tile cache should exist")
+        self.assertIn("async function tile(", self.sw)
+        # The offline bundle must not contain a tile URL template. If one ever
+        # appears there, something is generating tile requests ahead of use.
+        for marker in ("{z}/{x}/{y}", "tile.openstreetmap.org/", "tiles.openseamap.org/"):
+            self.assertNotIn(
+                marker, self.page.split("function saveForOffline")[-1][:4000],
+                f"the dock bundle must not build tile URLs ({marker})")
+
+    def test_the_policy_reason_is_written_down_not_just_obeyed(self):
+        # A silent constraint gets removed by whoever does not know why.
+        low = self.sw.lower()
+        self.assertTrue("policy" in low and "pre-emptive" in low,
+                        "sw.js should say why tiles are not pre-fetched")
+
+    def test_tile_cache_is_bounded(self):
+        import re
+        m = re.search(r"TILE_MAX = (\d+)", self.sw)
+        self.assertTrue(m, "tile cache must have a cap")
+        self.assertLessEqual(int(m.group(1)), 8000, "cap too large for a phone")
+        z = re.search(r"TILE_MAX_ZOOM = (\d+)", self.sw)
+        self.assertTrue(z, "tile cache must have a zoom ceiling")
+        # z16 over this bay is ~570 MB; the ceiling exists to make that
+        # unreachable by accident.
+        self.assertLessEqual(int(z.group(1)), 15)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
