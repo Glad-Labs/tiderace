@@ -373,6 +373,21 @@ class Handler(BaseHTTPRequestHandler):
                         {"error": "not cached — run: python3 -m tiderace charts"}, 404)
                 with open(path, "rb") as fh:
                     return self._send(fh.read(), "application/geo+json")
+            if url.path == "/api/structure":
+                # Fixed offshore structure we know about that the ENC harbour
+                # band does not carry. Its Offshore_Platform layer has eight
+                # features in this box and all eight are up in the bay -- the
+                # Block Island turbines are simply not in it, and they are the
+                # most obvious landmark in the water Matt fishes for tuna.
+                from . import offshore as _off
+                feats = [{
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                    "properties": {"name": name, "kind": "turbine",
+                                   "note": "Block Island Wind Farm"},
+                } for name, lat, lon in _off.TURBINES]
+                return self._send_json({"type": "FeatureCollection",
+                                        "features": feats})
             if url.path == "/api/bait":
                 rows = baitmod.load()
                 now = datetime.now()

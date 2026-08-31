@@ -453,7 +453,7 @@ $('#labels').onchange = e =>
 
 // ------------------------------------------------------------------ markers
 let MAP_READY = false;
-map.on('load', () => { MAP_READY = true; syncMarkers(); loadCharts(); loadBait(); });
+map.on('load', () => { MAP_READY = true; syncMarkers(); loadCharts(); loadBait(); loadStructure(); });
 map.on('error', e => console.warn('map:', e && e.error && e.error.message));
 
 // The map is a view onto the data, not a prerequisite for it. If WebGL is
@@ -678,6 +678,35 @@ const CHART_STYLE = {
     swatch: `linear-gradient(90deg, ${DEPTH_RAMP[0]}, ${DEPTH_RAMP[3]}, ${DEPTH_RAMP[7]})`,
     minzoom: 0
   },
+  // Contours are the shape of the bottom -- the edge fish sit on, which depth
+  // shading can only imply. Drawn under the point layers so a rock on a drop-off
+  // still reads as a rock.
+  contours: {
+    kind: 'line',
+    colour: 'rgba(79,179,199,.55)',
+    width: ['interpolate', ['linear'], ['zoom'], 11, 0.4, 14, 1.1],
+    label: ['case', ['has','depth_ft'],
+            ['concat', ['to-string', ['round', ['get','depth_ft']]], ''], ''],
+    minzoom: 11,
+    swatch: 'rgba(79,179,199,.55)'
+  },
+  // The numbers on a paper chart. 26k of them over this box, so they only
+  // appear once you are close enough for them to mean something -- at bay-wide
+  // zoom they would be a grey smear and would hide everything under them.
+  soundings: {
+    kind: 'symbol', lazy: true,
+    label: ['case', ['has','depth_ft'],
+            ['to-string', ['round', ['get','depth_ft']]], ''],
+    colour: '#9FB6BB',
+    minzoom: 13,
+    swatch: '#9FB6BB'
+  },
+  buoys: {
+    colour: '#F04FA0', radius: 3.2, minzoom: 11, swatch: '#F04FA0'
+  },
+  lights: {
+    colour: '#D9A521', radius: 3.4, minzoom: 11, swatch: '#D9A521'
+  },
   rocks: {
     colour: ['match', ['get','water_level'],
       'covers and uncovers', '#D9A521',
@@ -722,7 +751,11 @@ const CHART_STYLE = {
   }
 };
 const CHART_ON = {depth_area:true, rocks:false, wrecks:true, obstructions:false,
-                  turbulence:true, kelp:false, seabed:false};
+                  turbulence:true, kelp:false, seabed:false,
+                  // Contours are the shape of the bottom and the reason depth
+                  // shading alone was not enough, so they are on. Soundings are
+                  // the same information at ten times the weight: on demand.
+                  contours:true, soundings:false, buoys:true, lights:false};
 const CHART_DATA = {};
 
 fetch('/api/meta').then(r=>r.json()).then(m => {
@@ -779,6 +812,11 @@ async function loadCharts(){
     const st = CHART_STYLE[l.name];
     if (!st) continue;
     if (MAP_READY && map.getSource('c-' + l.name)) continue;
+      // Soundings are 26,000 points and 4 MB. Downloading them on boot to draw
+      // nothing -- they are off by default and only render past zoom 13 -- is
+      // four megabytes of somebody's cell data for no picture. Heavy layers
+      // wait until they are actually switched on.
+      if (st.lazy && !CHART_ON[l.name] && !CHART_DATA[l.name]) continue;
 
     // loadCharts() runs on boot (to populate the menu) and again when the map
     // becomes ready. Cache the GeoJSON so a slow map load does not re-pull
@@ -811,6 +849,45 @@ async function loadCharts(){
       continue;         // ground is not clickable -- see the map click handler
     }
 
+    if (st.kind === 'line'){
+      map.addLayer({
+        id: 'c-' + l.name, type:'line', source:'c-' + l.name,
+        minzoom: st.minzoom || 0,
+        layout:{visibility: CHART_ON[l.name] ? 'visible' : 'none',
+                'line-join':'round', 'line-cap':'round'},
+        paint:{'line-color': st.colour, 'line-width': st.width || 0.8}
+      }, ABOVE_BASEMAP());
+      // A contour with no number on it is a squiggle. The value is the whole
+      // point, so it rides along as a symbol layer on the same source.
+      if (st.label) {
+        map.addLayer({
+          id: 'c-' + l.name + '-lbl', type:'symbol', source:'c-' + l.name,
+          minzoom: (st.minzoom || 0) + 1,
+          layout:{visibility: CHART_ON[l.name] ? 'visible' : 'none',
+                  'symbol-placement':'line', 'text-field': st.label,
+                  'text-font':['Noto Sans Regular'], 'text-size':10,
+                  'text-max-angle':30, 'symbol-spacing':180},
+          paint:{'text-color': st.colour, 'text-halo-color':'rgba(11,21,24,.9)',
+                 'text-halo-width':1.2}
+        }, ABOVE_BASEMAP());
+      }
+      continue;
+    }
+
+    if (st.kind === 'symbol'){
+      map.addLayer({
+        id: 'c-' + l.name, type:'symbol', source:'c-' + l.name,
+        minzoom: st.minzoom || 13,
+        layout:{visibility: CHART_ON[l.name] ? 'visible' : 'none',
+                'text-field': st.label, 'text-font':['Noto Sans Regular'],
+                'text-size':10, 'text-allow-overlap':false},
+        paint:{'text-color': st.colour, 'text-halo-color':'rgba(11,21,24,.9)',
+               'text-halo-width':1.1}
+      }, ABOVE_BASEMAP());
+      continue;
+    }
+
+
     map.addLayer({
       id: 'c-' + l.name, type:'circle', source:'c-' + l.name,
       minzoom: st.minzoom || 9,
@@ -829,11 +906,24 @@ async function loadCharts(){
   }
 
   box.querySelectorAll('input[data-layer]').forEach(cb => cb.onchange = () => {
-    const id = 'c-' + cb.dataset.layer;
-    CHART_ON[cb.dataset.layer] = cb.checked;
-    if (MAP_READY && map.getLayer(id))
-      map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none');
-  });
+      const name = cb.dataset.layer;
+      const id = 'c-' + name;
+      CHART_ON[name] = cb.checked;
+      // A lazy layer has no source until now, so switching it on is what
+      // fetches it. Show that something is happening: 4 MB on a boat is not
+      // instant, and a checkbox that does nothing for ten seconds reads broken.
+      if (cb.checked && MAP_READY && !map.getSource(id)) {
+        const cnt = document.querySelector('#cnt-' + name);
+        if (cnt) cnt.textContent = '…';
+        loadCharts().catch(() => { if (cnt) cnt.textContent = '!'; });
+        return;
+      }
+      // Contours carry a separate label layer; toggling only the line would
+      // leave the numbers floating over an invisible curve.
+      for (const lid of [id, id + '-lbl'])
+        if (MAP_READY && map.getLayer(lid))
+          map.setLayoutProperty(lid, 'visibility', cb.checked ? 'visible' : 'none');
+    });
 }
 
 function depthLegend(){
@@ -860,6 +950,33 @@ function chartPopup(e, layer){
 
 // Bait sightings fade as they age -- a three-day-old report should look like
 // what it is, not like something you saw this morning.
+/* The wind farm. Five towers seventeen miles out, and the most obvious
+   landmark in the water Matt fishes for tuna -- but the ENC harbour band's
+   Offshore_Platform layer has eight features in this box and every one of
+   them is up in the bay, so the turbines simply are not in the chart data.
+   They come from the coordinates in offshore.py instead, drawn as labelled
+   marks so the farm can be found rather than hunted for. */
+async function loadStructure(){
+  if (!MAP_READY || map.getSource('structure')) return;
+  let gj;
+  try { gj = await (await fetch('/api/structure')).json(); }
+  catch (_) { return; }                       // offline: the map still works
+  map.addSource('structure', {type:'geojson', data:gj});
+  map.addLayer({
+    id:'structure', type:'circle', source:'structure',
+    paint:{'circle-color':'#E4ECEE', 'circle-radius':4,
+           'circle-stroke-width':1.4, 'circle-stroke-color':'#0B1518'}
+  });
+  map.addLayer({
+    id:'structure-lbl', type:'symbol', source:'structure',
+    minzoom:10,
+    layout:{'text-field':['get','name'], 'text-font':['Noto Sans Regular'],
+            'text-size':10, 'text-offset':[0,1.1], 'text-anchor':'top'},
+    paint:{'text-color':'#E4ECEE', 'text-halo-color':'rgba(11,21,24,.9)',
+           'text-halo-width':1.2}
+  });
+}
+
 async function loadBait(){
   if (!MAP_READY) return;
   let gj;

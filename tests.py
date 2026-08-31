@@ -1580,13 +1580,40 @@ class StationResolution(unittest.TestCase):
     def test_reproduces_the_hand_verified_bindings(self):
         """Nineteen spots were bound to their current stations by hand and
         checked live against CO-OPS. The resolver has to agree with all of
-        them, or it is not trustworthy anywhere else."""
+        them, or it is not trustworthy anywhere else.
+
+        Scoped to those nineteen. `spots.SPOTS` also carries whatever is in
+        my_spots.json, and those marks were never part of the hand check -- a
+        test that silently graded the resolver against a station the user typed
+        would be measuring the wrong thing, and would break for anyone who
+        cloned this and added a mark of their own.
+        """
         wrong = []
         for sp in spots.SPOTS:
+            if sp.private:
+                continue
             got = self.stations.resolve(sp.lat, sp.lon)["current"]["id"]
             if got != sp.current_station:
                 wrong.append(f"{sp.key}: hand={sp.current_station} got={got}")
         self.assertEqual(wrong, [], "; ".join(wrong))
+
+    def test_a_mark_behind_a_barrier_beach_is_flagged_not_guessed(self):
+        """Widening the chart box to include Charlestown gave the resolver
+        coastline data it never had there, and it immediately said something
+        true: the inside mark sits on charted land, and every current station
+        is more than half a mile of barrier beach away. Ninigret Pond really is
+        behind a barrier -- the only water connection is the breachway, narrower
+        than the coastline layer resolves. The right behaviour is to say so.
+        """
+        from tiderace import charts, spots as spotsmod
+        sp = spotsmod.get("charlestown_inside")
+        if not charts.covers(sp.lat, sp.lon) or not charts.land_index():
+            self.skipTest("land layer not cached for this area")
+        r = self.stations.resolve(sp.lat, sp.lon)
+        self.assertTrue(r["on_land"], "the pond mark reads as land on the chart")
+        self.assertEqual(r["confidence"], "poor")
+        self.assertTrue(any("land" in w.lower() for w in r["warnings"]),
+                        "must say the current came from water elsewhere")
 
     def test_the_sakonnet_is_not_bound_across_aquidneck(self):
         """Nearest-by-distance picks a mid-bay station 0.1 nm closer, with a
@@ -2565,6 +2592,48 @@ class CoordinateLogging(unittest.TestCase):
         m = re.search(r"font-size:\s*(\d+)px", css)
         self.assertTrue(m, "log inputs need an explicit font-size")
         self.assertGreaterEqual(int(m.group(1)), 16)
+
+
+class ChartCoverage(unittest.TestCase):
+    """The box the chart layers are cut to, and the fields that survive."""
+
+    def test_the_box_covers_the_water_actually_fished(self):
+        from tiderace import charts
+        x0, y0, x1, y1 = charts.BAY_BBOX
+        for name, lat, lon in (("Charlestown Breachway", 41.372, -71.639),
+                               ("Block Island wind farm", 41.12, -71.50),
+                               ("Block Island", 41.17, -71.58),
+                               ("Whale Rock", 41.44, -71.42),
+                               ("Conimicut", 41.72, -71.34)):
+            self.assertTrue(x0 <= lon <= x1 and y0 <= lat <= y1,
+                            f"{name} falls outside the charted box")
+
+    def test_soundings_carry_their_depth(self):
+        # 25,895 soundings with no depth on any of them is what shipped:
+        # _clean only read VALSOU, and the soundings layer uses Z.
+        from tiderace import charts
+        for field in ("VALSOU", "Z", "VALDCO"):
+            # _clean returns a whole feature, not a bare property bag.
+            props = charts._clean({"properties": {field: 10.0}})["properties"]
+            self.assertEqual(props.get("depth_m"), 10.0, f"{field} not read")
+            self.assertAlmostEqual(props.get("depth_ft"), 32.8, places=1)
+
+    def test_line_geometry_is_thinned_like_polygons(self):
+        # Contours were 6.4 MB because _thin knew about polygons and points
+        # only, so line coordinates were never even rounded.
+        from tiderace import charts
+        gj = {"features": [{"geometry": {"type": "LineString",
+              "coordinates": [[-71.123456789, 41.123456789],
+                              [-71.223456789, 41.223456789]]}}]}
+        out = charts._thin(gj, None)
+        for x, y in out["features"][0]["geometry"]["coordinates"]:
+            self.assertLessEqual(len(str(x).split(".")[1]), charts.COORD_PLACES)
+
+    def test_the_heaviest_layer_is_not_fetched_on_boot(self):
+        import pathlib as _p
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        self.assertIn("lazy: true", page, "soundings must be deferred")
+        self.assertIn("st.lazy && !CHART_ON[l.name]", page)
 
 
 if __name__ == "__main__":

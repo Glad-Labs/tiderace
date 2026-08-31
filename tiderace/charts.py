@@ -35,8 +35,16 @@ PAGE = 1000                     # service maxRecordCount
 
 CHART_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "charts")
 
-# Narragansett Bay plus Point Judith and the Sakonnet.
-BAY_BBOX = (-71.60, 41.28, -71.10, 41.88)
+# The water actually fished, which is wider than "the bay". The old box was
+# (-71.60, 41.28, -71.10, 41.88) and quietly excluded Charlestown Breachway --
+# the most-fished spot in the log -- along with Block Island and the wind farm,
+# because they sit west and south of it. A mark outside the box reported "no
+# chart data here", which reads as a fact about the area rather than about our
+# cache, and that is exactly the wrong way round.
+#
+# Coverage was never the constraint: the harbour band has 2,024 soundings
+# around the turbines and 473 around Charlestown. We were simply not asking.
+BAY_BBOX = (-71.95, 40.95, -71.10, 41.88)
 
 # name -> (layer id, what it is)
 LAYERS: dict[str, tuple[int, str]] = {
@@ -50,6 +58,16 @@ LAYERS: dict[str, tuple[int, str]] = {
     # over, which is why they are excluded from `available()` below.
     "land":         (233, "Land areas — the coastline as polygons"),
     "depth_area":   (227, "Charted depth ranges"),
+    # Depth shading tells you "somewhere between 18 and 30 feet". These two say
+    # which, and where the edge is -- the edge being the part fish actually sit
+    # on. Soundings are the single densest layer we pull (~26k points over this
+    # box) so the map only draws them close in.
+    "soundings":    (76,  "Spot soundings — individual charted depths"),
+    "contours":     (104, "Depth contours — the shape of the bottom"),
+    # Lateral buoys and lights. Not decoration: they are how you say where you
+    # are to somebody else, and how you find a mark again in the dark.
+    "buoys":        (6,   "Lateral buoys"),
+    "lights":       (11,  "Lights and beacons"),
 }
 
 # Layers fetched for computation rather than display. Land polygons as a map
@@ -108,7 +126,12 @@ def fetch(name: str, bbox=BAY_BBOX) -> dict:
 # what any zoom level renders. Simplified on write, not on read, so the phone
 # pays nothing for it. Land is deliberately left alone -- it never goes to the
 # browser, and the crossing test should reason over the real coastline.
-SIMPLIFY_DEG = {"depth_area": 1.2e-4}   # ~13 m
+# Contours were the largest layer on the wire at 6.4 MB, and not because there
+# is 6.4 MB of information in them: _thin only knew about polygons and points,
+# so line coordinates were never even rounded, let alone simplified. A depth
+# contour is a smooth curve -- 13 m of positional slop is invisible at any zoom
+# this map offers and is far inside the accuracy of the survey behind it.
+SIMPLIFY_DEG = {"depth_area": 1.2e-4, "contours": 1.2e-4}   # ~13 m
 COORD_PLACES = 5                        # ~1.1 m
 
 # Sub-hectare slivers of depth area are shoreline noise: invisible at any zoom
@@ -182,6 +205,10 @@ def _thin(gj: dict, tol: float | None, min_area: float | None = None) -> dict:
                                     if _ring_area(poly[0]) >= min_area]
                 if not g["coordinates"]:
                     continue
+        elif t == "LineString":
+            g["coordinates"] = ring(g["coordinates"])
+        elif t == "MultiLineString":
+            g["coordinates"] = [ring(r) for r in g["coordinates"]]
         elif t == "Point":
             c = g["coordinates"]
             g["coordinates"] = [round(c[0], COORD_PLACES), round(c[1], COORD_PLACES)]
@@ -217,11 +244,18 @@ def _clean(f: dict) -> dict:
     if p.get("CATOBS"):
         out["type"] = str(p["CATOBS"])
 
-    # VALSOU is the sounding over the feature, in metres.
-    v = p.get("VALSOU")
-    if isinstance(v, (int, float)):
-        out["depth_m"] = round(float(v), 1)
-        out["depth_ft"] = round(float(v) * 3.28084, 1)
+    # The depth over a feature, in metres. Three different S-57 fields carry it
+    # depending on the layer, and using only VALSOU is why the soundings layer
+    # came back with 25,895 points and not one depth on any of them:
+    #   VALSOU  depth over a rock, wreck or obstruction
+    #   Z       a spot sounding, which is the whole content of that layer
+    #   VALDCO  the value of a depth contour
+    for src in ("VALSOU", "Z", "VALDCO"):
+        v = p.get(src)
+        if isinstance(v, (int, float)):
+            out["depth_m"] = round(float(v), 1)
+            out["depth_ft"] = round(float(v) * 3.28084, 1)
+            break
 
     # DRVAL1/DRVAL2 are the shallow and deep limits of a charted depth area,
     # in metres. They are the only reason to keep a depth polygon at all.
