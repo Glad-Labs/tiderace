@@ -833,7 +833,9 @@ const DEPTH_LABELS = ['dries','0–2 m','2–5 m','5–10 m',
 
 const CHART_STYLE = {
   depth_area: {
-    kind: 'fill',
+    // Off by default now, and 2.8 MB, so it waits to be asked for -- otherwise
+    // every boot pays for a layer nobody is looking at.
+    kind: 'fill', lazy: true,
     // DRVAL2 is the deep limit of the band. Anything at or below zero dries.
     // Falling straight back to 0 painted the deepest area -- the one charted
     // with a shallow limit and no deep one -- in the "dries" colour, which
@@ -928,11 +930,19 @@ const CHART_STYLE = {
     swatch: '#E08A3C', minzoom: 11
   }
 };
-const CHART_ON = {depth_area:true, rocks:false, wrecks:true, obstructions:false,
+// Contours are the default, not the shading. Depth areas paint a band -- "18
+// to 30 feet somewhere in here" -- and tile every square metre of water, which
+// hides the basemap and the very edges that matter. A contour IS the edge, and
+// it carries its own number. Shading stays available for a quick read of where
+// the deep water is, but off by default.
+//
+// Depth areas are also the one layer bounded to the original bay box; contours
+// come from the on-demand grid and follow you to Montauk and the shelf, so
+// making them the default is what makes the wider water look charted at all.
+const CHART_ON = {depth_area:false, rocks:false, wrecks:true, obstructions:false,
                   turbulence:true, kelp:false, seabed:false,
-                  // Contours are the shape of the bottom and the reason depth
-                  // shading alone was not enough, so they are on. Soundings are
-                  // the same information at ten times the weight: on demand.
+                  // Soundings are the same information as contours at ten times
+                  // the weight, so they stay on demand.
                   contours:true, soundings:false, buoys:true, lights:false};
 const CHART_DATA = {};
 

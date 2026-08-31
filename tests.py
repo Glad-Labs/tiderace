@@ -2632,11 +2632,26 @@ class ChartCoverage(unittest.TestCase):
         for x, y in out["features"][0]["geometry"]["coordinates"]:
             self.assertLessEqual(len(str(x).split(".")[1]), charts.COORD_PLACES)
 
-    def test_the_heaviest_layer_is_not_fetched_on_boot(self):
-        import pathlib as _p
+    def test_the_heaviest_layers_are_not_fetched_on_boot(self):
+        import pathlib as _p, re
         page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
-        self.assertIn("lazy: true", page, "soundings must be deferred")
         self.assertIn("st.lazy && !CHART_ON[l.name]", page)
+        # Both the ones that are off by default and large.
+        for layer in ("soundings", "depth_area"):
+            blk = page.split(f"  {layer}: {{")[1][:200]
+            self.assertIn("lazy: true", blk, f"{layer} should be deferred")
+
+    def test_contours_are_the_default_not_the_shading(self):
+        """Depth areas paint a band -- "18 to 30 feet somewhere in here" -- and
+        tile every square metre, hiding the basemap and the edges that matter.
+        A contour is the edge, and carries its own number. Shading is also
+        bounded to the original bay box, while contours come from the on-demand
+        grid and follow you offshore."""
+        import pathlib as _p, re
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        on = page.split("const CHART_ON = {")[1].split("};")[0]
+        self.assertRegex(on, r"contours\s*:\s*true")
+        self.assertRegex(on, r"depth_area\s*:\s*false")
 
 
 class DoubleTap(unittest.TestCase):
