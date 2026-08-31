@@ -437,6 +437,31 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 #slogheard.show{display:block}
 #slogheard b{color:var(--ink); font-weight:600}
 #slogheard .conf{color:var(--warn)}
+
+/* ---- trip recording -------------------------------------------------
+   Nobody forgets to log four keepers; everybody forgets to log the blank,
+   and blanks are half the signal. So this is one tap at the ramp and then
+   it is passive. It sits beside HERE rather than in the sheet, because it
+   has to be reachable without opening anything. */
+#trip{
+  position:fixed; right:calc(14px / var(--ui, 1)); z-index:35;
+  bottom:calc((92px + env(safe-area-inset-bottom)) / var(--ui, 1));
+  width:60px; height:60px; border-radius:50%;
+  background:var(--panel-2); color:var(--ink-2);
+  border:1px solid var(--hair);
+  font:600 10px/1.15 var(--mono); letter-spacing:.04em;
+  box-shadow:0 6px 18px rgba(0,0,0,.45); cursor:pointer;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+}
+#trip:active{transform:scale(.94)}
+#trip.rec{
+  background:var(--crit); color:#fff; border-color:transparent;
+  animation:trippulse 2s ease-in-out infinite;
+}
+@keyframes trippulse{50%{opacity:.7}}
+@media (prefers-reduced-motion:reduce){#trip.rec{animation:none}}
+#trip b{font-size:14px; font-weight:700; display:block}
+@media (min-width:901px) and (pointer:fine){ #trip{display:none} }
 </style>
 </head>
 <body>
@@ -1350,6 +1375,126 @@ function mergeCell(name, gj){
 
 map.on('moveend', loadCellsForView);
 
+
+/* ---- trip recording ---------------------------------------------------
+ * One tap at the ramp, one at the dock. In between the phone keeps a
+ * breadcrumb, so a trip exists whether or not anybody remembered to log it --
+ * which is the whole point, because the trips people forget are the blanks,
+ * and blanks are half of what the evaluation harness has to work with.
+ *
+ * Everything is written to the phone first. A track that only lives in a
+ * variable is lost to a backgrounded tab, a dead battery, or a browser
+ * deciding to reclaim memory, and losing a day on the water is not
+ * recoverable the way a failed upload is.
+ */
+const TRIP_KEY = 'tiderace:trip';
+let tripWatch = null;
+
+function tripState(){
+  try { return JSON.parse(localStorage.getItem(TRIP_KEY) || 'null'); }
+  catch (_) { return null; }
+}
+function tripSave(st){
+  try { localStorage.setItem(TRIP_KEY, JSON.stringify(st)); } catch (_) {}
+}
+
+function paintTrip(){
+  const btn = document.getElementById('trip');
+  if (!btn) return;
+  const st = tripState();
+  if (st){
+    const mins = Math.round((Date.now() - st.startedAt) / 60000);
+    btn.classList.add('rec');
+    btn.innerHTML = `<b>${mins}m</b>${st.points.length} fix`;
+    btn.setAttribute('aria-label', 'Stop recording this trip');
+  } else {
+    btn.classList.remove('rec');
+    btn.innerHTML = '<b>REC</b>trip';
+    btn.setAttribute('aria-label', 'Record this trip');
+  }
+}
+
+function tripStart(){
+  if (!navigator.geolocation) return;
+  tripSave({startedAt: Date.now(), points: []});
+  // High accuracy because the question is which side of a breachway you were
+  // on, not which town. maximumAge lets the OS reuse a recent fix instead of
+  // waking the GPS for every sample, which is most of the battery cost.
+  tripWatch = navigator.geolocation.watchPosition(pos => {
+    const st = tripState();
+    if (!st) return;
+    const p = {lat: +pos.coords.latitude.toFixed(6),
+               lon: +pos.coords.longitude.toFixed(6),
+               t: new Date().toISOString().slice(0, 19)};
+    const last = st.points[st.points.length - 1];
+    // One fix a minute is plenty to find a dwell and keeps the file small; a
+    // boat holding station does not need six a minute to prove it.
+    if (last && (Date.now() - Date.parse(last.t + 'Z')) < 55000) return;
+    st.points.push(p);
+    tripSave(st);
+    paintTrip();
+  }, () => {}, {enableHighAccuracy: true, maximumAge: 30000, timeout: 60000});
+  paintTrip();
+}
+
+async function tripStop(){
+  const st = tripState();
+  if (tripWatch !== null){ navigator.geolocation.clearWatch(tripWatch); tripWatch = null; }
+  localStorage.removeItem(TRIP_KEY);
+  paintTrip();
+  if (!st || st.points.length < 2){
+    if (typeof toast === 'function') toast('Too short to keep');
+    return;
+  }
+  try {
+    const r = await fetch('/api/track', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({points: st.points})
+    });
+    const d = await r.json();
+    if (d.summary) showTripSummary(d.summary);
+  } catch (_) {
+    // Out of signal at the dock. Put it back and it goes up next time the
+    // button is used; a day on the water is not worth losing to a dead bar.
+    tripSave(st);
+    paintTrip();
+  }
+}
+
+/* The end of a trip is the one moment you will actually log it: you are
+   stopped, the rod is down, and you still remember. So the summary opens the
+   sheet at the spot you spent longest on, with the log form already open. */
+function showTripSummary(s){
+  const d = s.best;
+  if (!d){ return; }
+  if (window.showConditions) showConditions(d.lat, d.lon, 'Where you fished longest');
+  setTimeout(() => {
+    const t = document.getElementById('slogtoggle');
+    const form = document.getElementById('slogform');
+    if (t && form && !form.classList.contains('open')) t.click();
+    const heard = document.getElementById('slogheard');
+    if (heard){
+      heard.className = 'show';
+      heard.innerHTML =
+        `<b>${s.minutes.toFixed(0)} min on the water</b> · ${s.distance_nm} nm · ` +
+        `${s.dwells.length} spot${s.dwells.length === 1 ? '' : 's'} worked<br>` +
+        `Longest stop was ${d.minutes.toFixed(0)} min here. ` +
+        `Log it — a blank counts.`;
+    }
+  }, 900);
+}
+
+(function initTrip(){
+  const btn = document.getElementById('trip');
+  if (!btn) return;
+  btn.onclick = () => { tripState() ? tripStop() : tripStart(); };
+  // Survive a reload mid-trip: the points are on the phone, so pick the watch
+  // back up rather than silently recording nothing for the rest of the day.
+  if (tripState()) tripStart();
+  paintTrip();
+  setInterval(paintTrip, 30000);
+})();
+
 async function loadBait(){
   if (!MAP_READY) return;
   let gj;
@@ -1813,6 +1958,7 @@ map.on('click', e => {
 </script>
 
 <button id="here" aria-label="Conditions at my location">HERE</button>
+<button id="trip" aria-label="Record this trip"><b>REC</b>trip</button>
 <div id="sheet" aria-live="polite">
   <div id="sheetgrip"><div></div></div>
   <div id="sheethead">

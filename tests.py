@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       provenance,
-                      bathy, cache as cachemod, voicelog, llm, reconcile, reports, protected, survey, whales,
+                      bathy, cache as cachemod, track, voicelog, llm, reconcile, reports, protected, survey, whales,
                       madmf, regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
@@ -2771,7 +2771,10 @@ class ResponsiveLayout(unittest.TestCase):
         # Accessibility queries are not layout breakpoints. A
         # prefers-reduced-motion rule is not a third way for the page to lay
         # itself out, and counting it here would forbid honouring the setting.
-        layout = [q for q in qs if "width" in q or "pointer" in q]
+        # Distinct queries, not distinct blocks. Repeating a breakpoint to keep
+        # a rule beside the thing it styles is fine; what would reintroduce the
+        # split brain is a THIRD way for the page to lay itself out.
+        layout = {q for q in qs if "width" in q or "pointer" in q}
         self.assertEqual(sorted(layout),
                          sorted(["(max-width:900px), (pointer:coarse)",
                                  "(min-width:901px) and (pointer:fine)"]))
@@ -3412,6 +3415,108 @@ class VoiceLog(unittest.TestCase):
         self.assertIn("SpeechRecognition", fn)
         for banned in ("MediaRecorder", "getUserMedia", "audio/", "blob"):
             self.assertNotIn(banned, fn, f"no audio should be captured ({banned})")
+
+
+class TripTracks(unittest.TestCase):
+    """A trip recorded whether or not anybody remembered to log it.
+
+    Nobody forgets to log four keepers. Everybody forgets the blank -- and
+    blanks are half of what the evaluation harness has to work with, because a
+    model trained only on good days learns every day is good.
+    """
+
+    def _trip(self):
+        """Charlestown 40 min, run east 35, Whale Rock 55, run home."""
+        from datetime import datetime, timedelta
+        t = datetime(2026, 8, 31, 5, 0)
+        pts = []
+        def add(lat, lon, mins):
+            nonlocal t
+            for _ in range(mins):
+                pts.append({"lat": lat, "lon": lon, "t": t.isoformat()})
+                t += timedelta(minutes=1)
+        def run(a, b, mins):
+            nonlocal t
+            for k in range(mins):
+                f = k / mins
+                pts.append({"lat": a[0] + (b[0]-a[0])*f,
+                            "lon": a[1] + (b[1]-a[1])*f, "t": t.isoformat()})
+                t += timedelta(minutes=1)
+        A, B = (41.3745, -71.6390), (41.4408, -71.4228)
+        add(*A, 40); run(A, B, 35); add(*B, 55); run(B, A, 35)
+        return pts, A, B
+
+    def test_dwells_are_where_you_stopped_not_where_you_drove(self):
+        pts, A, B = self._trip()
+        d = track.dwells(pts)
+        self.assertEqual(len(d), 2, "two spots worked, two dwells")
+        found = sorted((round(x["lat"], 3), round(x["lon"], 3)) for x in d)
+        self.assertEqual(found, sorted([(round(A[0],3), round(A[1],3)),
+                                        (round(B[0],3), round(B[1],3))]))
+
+    def test_the_best_dwell_is_not_the_midpoint_of_the_track(self):
+        """The midpoint of a Charlestown-to-Whale-Rock trip is somewhere in
+        open water halfway along, which is where you drove."""
+        pts, A, B = self._trip()
+        s = track.summarise(pts)
+        self.assertAlmostEqual(s["best"]["lat"], B[0], places=2)
+        self.assertGreater(s["best"]["minutes"], 50)
+        mid_lat = (A[0] + B[0]) / 2
+        self.assertNotAlmostEqual(s["best"]["lat"], mid_lat, places=2)
+
+    def test_transit_never_becomes_a_dwell(self):
+        from datetime import datetime, timedelta
+        t = datetime(2026, 8, 31, 5, 0)
+        pts = [{"lat": 41.30 + k*0.004, "lon": -71.50,
+                "t": (t + timedelta(minutes=k)).isoformat()} for k in range(60)]
+        self.assertEqual(track.dwells(pts), [], "a straight run is not a spot")
+
+    def test_a_wild_gps_fix_is_discarded_not_averaged(self):
+        """Phone GPS throws the occasional fix a mile inland. Left in, one of
+        those splits a session in two and hides the spot; averaged in, it drags
+        the position off the piece."""
+        from datetime import datetime, timedelta
+        t = datetime(2026, 8, 31, 5, 0)
+        pts = [{"lat": 41.4408, "lon": -71.4228,
+                "t": (t + timedelta(minutes=k)).isoformat()} for k in range(20)]
+        pts.insert(10, {"lat": 41.55, "lon": -71.55,
+                        "t": (t + timedelta(minutes=10, seconds=30)).isoformat()})
+        self.assertEqual(len(track.clean(pts)), 20)
+        self.assertEqual(len(track.dwells(pts)), 1)
+
+    def test_two_spots_close_together_do_not_merge(self):
+        # Half a mile apart is two pieces of structure, not one long average.
+        from datetime import datetime, timedelta
+        t = datetime(2026, 8, 31, 5, 0)
+        pts = []
+        for lat in (41.4408, 41.4498):
+            for k in range(20):
+                pts.append({"lat": lat, "lon": -71.4228, "t": t.isoformat()})
+                t += timedelta(minutes=1)
+        self.assertEqual(len(track.dwells(pts)), 2)
+
+    def test_a_glance_is_not_a_session(self):
+        from datetime import datetime, timedelta
+        t = datetime(2026, 8, 31, 5, 0)
+        pts = [{"lat": 41.44, "lon": -71.42,
+                "t": (t + timedelta(minutes=k)).isoformat()} for k in range(3)]
+        self.assertEqual(track.dwells(pts), [])
+
+    def test_the_track_is_written_to_the_phone_before_the_network(self):
+        """A track that only lives in a variable is lost to a backgrounded tab
+        or a dead battery, and a day on the water is not recoverable the way a
+        failed upload is."""
+        import pathlib as _p
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        fn = page.split("function tripStart()")[1].split("\n}")[0]
+        self.assertIn("tripSave", fn)
+        stop = page.split("async function tripStop()")[1].split("\n}")[0]
+        self.assertIn("tripSave(st)", stop, "a failed upload must not lose the day")
+
+    def test_tracks_are_gitignored(self):
+        import pathlib as _p
+        ig = (_p.Path(__file__).parent / ".gitignore").read_text()
+        self.assertIn("data/tracks.jsonl", ig)
 
 
 if __name__ == "__main__":

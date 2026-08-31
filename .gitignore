@@ -13,6 +13,12 @@ data/bait_log.jsonl
 # Committing them bloats history on every refresh and goes stale silently.
 data/charts/
 
+# Trip tracks. The most sensitive file in the project by a distance: a track is
+# not "a spot you saved", it is every spot you actually fished, in order, with
+# how long you sat on each one. Never committed, never transmitted anywhere but
+# your own machine over the tailnet.
+data/tracks.jsonl
+
 # Your own marks. Never committed, never transmitted, never exported.
 data/my_spots.json
 
