@@ -2716,5 +2716,47 @@ class DoubleTap(unittest.TestCase):
         self.assertIn("if (submitting) return;", body)
 
 
+class ResponsiveLayout(unittest.TestCase):
+    """Which layout you get is decided by what you point with, not by width.
+
+    Keyed on max-width:900px alone, the sidebar stayed on a real phone and the
+    conditions sheet rendered as a 420px panel beside it -- two surfaces
+    fighting over the screen, which is exactly what the mobile layout existed
+    to remove. A device can report well over 900 CSS pixels and still be held
+    in one hand: a foldable, a tablet, a browser set to "desktop site".
+    """
+
+    def setUp(self):
+        import pathlib
+        self.page = (pathlib.Path(__file__).parent
+                     / "tiderace" / "web" / "index.html").read_text()
+
+    def test_touch_gets_the_touch_layout_at_any_width(self):
+        self.assertIn("@media (max-width:900px), (pointer:coarse){", self.page)
+
+    def test_the_desktop_rule_requires_a_real_pointer(self):
+        # Without the pointer clause these two overlap on a wide touch screen
+        # and both apply, which is how the sheet became a sidebar.
+        self.assertIn("@media (min-width:901px) and (pointer:fine){", self.page)
+
+    def test_the_script_and_the_stylesheet_agree(self):
+        # If CSS hides the panel while JS declines to move it into the sheet,
+        # its contents disappear from the app entirely rather than relocating.
+        import re
+        js = re.search(r"matchMedia\(\s*'([^']*)'\s*\)\s*\.matches", 
+                       self.page.split("const MOBILE")[1])
+        self.assertTrue(js, "MOBILE() must test a media query")
+        self.assertEqual(js.group(1), "(max-width:900px), (pointer:coarse)",
+                         "MOBILE() must match the CSS breakpoint exactly")
+
+    def test_there_are_only_the_two_breakpoints(self):
+        # A third width-only query would reintroduce the same split-brain.
+        import re
+        qs = re.findall(r"@media ([^{]+)\{", self.page)
+        self.assertEqual([q.strip() for q in qs],
+                         ["(max-width:900px), (pointer:coarse)",
+                          "(min-width:901px) and (pointer:fine)"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

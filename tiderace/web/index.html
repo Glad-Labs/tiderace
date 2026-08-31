@@ -183,7 +183,12 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   color:var(--depth); letter-spacing:.1em; text-transform:uppercase;
 }
 #loading.hide{display:none}
-@media (max-width:900px){
+/* Width alone was the wrong test. This shipped keyed on max-width:900px and
+   the sidebar stayed put on an actual phone, because a device can report far
+   more than 900 CSS pixels and still be a thing you hold in one hand -- a
+   foldable, a tablet, or a browser set to "desktop site". What decides the
+   layout is whether you are pointing with a finger. */
+@media (max-width:900px), (pointer:coarse){
   /* One surface, not two. The panel used to sit in a 300px strip under the
      map while the conditions sheet slid over the top of it -- two scrolling
      regions competing for a phone screen, with the map squeezed into what was
@@ -292,7 +297,8 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 }
 #here:active{transform:scale(.94)}
 #here.busy{opacity:.55}
-@media (min-width:901px){
+/* The desktop side of the same rule: a wide window AND a real pointer. */
+@media (min-width:901px) and (pointer:fine){
   #sheet{left:auto; right:0; width:420px; max-height:92vh; border-radius:16px 0 0 0}
   #here{display:none}
 }
@@ -1752,7 +1758,10 @@ window.surveyURL = (lat, lon) =>
      there is one copy of the ranked list, the rules and the mark card, and
      every handler already bound to them keeps working. Duplicating the markup
      would have meant two of everything drifting apart. */
-  const MOBILE = () => window.matchMedia('(max-width:900px)').matches;
+  // Must match the media query above exactly, or the CSS hides the panel while
+// the JS declines to move it into the sheet and its contents vanish entirely.
+const MOBILE = () =>
+  window.matchMedia('(max-width:900px), (pointer:coarse)').matches;
   let adopted = null;
 
   function adoptPanel(){
