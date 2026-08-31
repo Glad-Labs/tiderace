@@ -702,27 +702,60 @@ BAND_LAYERS = {
 BAND_ORDER = ("enc_harbour", "enc_approach", "enc_coastal", "enc_general")
 
 
+def _band_count(name: str, bbox, band: str, layer_id: int) -> int:
+    """How many features this band has here, without downloading them.
+
+    returnCountOnly is a cheap query, which is what makes picking the right
+    band affordable: four counts and one real fetch beats four real fetches.
+    """
+    xmin, ymin, xmax, ymax = bbox
+    geom = json.dumps({"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax,
+                       "spatialReference": {"wkid": 4326}})
+    q = urllib.parse.urlencode({
+        "geometry": geom, "geometryType": "esriGeometryEnvelope",
+        "inSR": "4326", "spatialRel": "esriSpatialRelIntersects",
+        "returnCountOnly": "true", "f": "json",
+    })
+    try:
+        d = _get(f"{ENC}/{band}/MapServer/{layer_id}/query?{q}")
+        return int(d.get("count") or 0)
+    except Exception:                                             # noqa: BLE001
+        return 0
+
+
 def fetch_banded(name: str, bbox, bands=BAND_ORDER) -> dict:
-    """Fetch a layer from the finest band that actually has anything here.
+    """Fetch a layer from whichever band actually has the most here.
+
+    The first cut took the finest band with ANY features, which is wrong in the
+    middle distance: off Block Island the harbour band has 13 contours in a
+    cell where general has 16, and "first non-empty" quietly picked the 13.
+    Bands overlap, and which one is richest is a property of the cell, not of
+    the distance from shore.
+
+    Ties go to the finer band -- same feature count from harbour and coastal
+    means the harbour version is the better surveyed one.
 
     Only the depth layers are banded. Rocks, wrecks and kelp are inshore
-    features by nature, and the harbour band is where they live.
+    features by nature and the harbour band is where they live.
     """
     if name not in BAND_LAYERS["enc_harbour"]:
         gj = fetch(name, bbox)
         gj["band"] = BAND
         return gj
 
+    best_band, best_lid, best_n = None, None, 0
     for band in bands:
         lid = BAND_LAYERS.get(band, {}).get(name)
         if lid is None:
             continue
-        try:
-            gj = fetch(name, bbox, band=band, layer_id=lid)
-        except Exception:                                         # noqa: BLE001
-            continue
-        if gj.get("features"):
-            gj["band"] = band
-            return gj
-    # Genuinely nothing charted here, which is itself worth caching.
-    return {"type": "FeatureCollection", "features": [], "band": None}
+        n = _band_count(name, bbox, band, lid)
+        if n > best_n:                       # strict: ties keep the finer band
+            best_band, best_lid, best_n = band, lid, n
+
+    if not best_band:
+        # Genuinely nothing charted here, which is itself worth caching.
+        return {"type": "FeatureCollection", "features": [], "band": None}
+
+    gj = fetch(name, bbox, band=best_band, layer_id=best_lid)
+    gj["band"] = best_band
+    return gj
