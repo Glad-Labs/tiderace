@@ -34,7 +34,7 @@
 // is genuinely confusing during development -- a browser check against a
 // stale cache proves nothing, which is how a debug probe survived one round
 // of "verification" here.
-const SHELL = 'tiderace-shell-v17';
+const SHELL = 'tiderace-shell-v19';
 const TILES = 'tiderace-tiles-v1';
 
 // About 55 MB of raster tiles: enough for the bay at working zoom plus wherever
@@ -128,6 +128,13 @@ self.addEventListener('fetch', e => {
 
 // The page asks for a bundle to be pulled down before leaving the dock.
 self.addEventListener('message', e => {
+  // The page asks which build is actually serving it. Answered from the worker
+  // itself, so a stale worker reports its own old version rather than the one
+  // the server would like it to be.
+  if (e.data?.type === 'version') {
+    e.source?.postMessage({type: 'version', shell: SHELL});
+    return;
+  }
   if (e.data?.type !== 'prefetch') return;
   e.waitUntil((async () => {
     const c = await caches.open(DATA);

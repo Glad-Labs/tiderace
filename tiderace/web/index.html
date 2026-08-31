@@ -372,6 +372,18 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
      the basemap ships under. */
   #timebar{right:12px; bottom:44px}
 }
+
+/* ---- what am I actually running -------------------------------------
+   A line you can read on the boat instead of opening devtools, which is
+   not a thing you can do on a phone. It answers the two questions that
+   have cost the most time here: is this the build I just deployed, and is
+   the touch layout actually on. */
+#diag{
+  padding:12px 16px 20px; font:11px/1.7 var(--mono); color:var(--muted);
+  border-top:1px solid var(--hair);
+}
+#diag b{color:var(--ink-2); font-weight:600}
+#diag .warn{color:var(--warn)}
 </style>
 </head>
 <body>
@@ -1238,6 +1250,15 @@ addEventListener('offline', refreshNetState);
 
 if ('serviceWorker' in navigator) {
   addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(()=>{}));
+  // Ask the worker which build is actually serving this page. A stale worker
+  // answers with its own old version, which is the point: the page cannot tell
+  // you it is stale by reading itself.
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data && e.data.type === 'version') window.__SHELL = e.data.shell;
+  });
+  navigator.serviceWorker.ready
+    .then(r => r.active && r.active.postMessage({type: 'version'}))
+    .catch(function(){});
 }
 
 // -------------------------------------------------------------------- boot
@@ -1638,6 +1659,7 @@ window.surveyURL = (lat, lon) =>
       h += `<div class="sdim">${d.binding_warnings.map(esc).join('<br>')}</div>`;
 
     h += logSection(d);
+    h += diagBlock();
     // render() replaces the sheet's contents, which would strand the adopted
     // panel. Detach it first, rebuild, then put it back at the bottom.
     if (adopted && adopted.parentNode === body) adopted.remove();
@@ -1645,6 +1667,7 @@ window.surveyURL = (lat, lon) =>
     wireLog(d);
     if (adopted) body.appendChild(adopted);
     adoptPanel();
+    fillDiag();
   }
 
 
@@ -1822,6 +1845,42 @@ const MOBILE = () =>
   if (MOBILE()){
     adoptPanel();
     sheet.classList.add('up', 'peek');
+  }
+
+
+  /* Read this off the screen rather than asking for devtools. Every number is
+     measured live, so a stale shell shows its own old values and gives itself
+     away. */
+  /* Read this off the screen rather than asking for devtools, which is not a
+     thing you can do on a phone.
+
+     Filled in AFTER the sheet is in the DOM, not while its HTML is being built
+     -- the first version measured `.srow .v` before any row existed, fell back
+     to <body>, and confidently reported 14px and "panel in sidebar" when both
+     were wrong. A diagnostic that lies is worse than none. */
+  function diagBlock(){ return '<div id="diag">reading…</div>'; }
+
+  function fillDiag(){
+    const el = document.getElementById('diag');
+    if (!el) return;
+    const v = document.querySelector('.srow .v');
+    const size = v ? getComputedStyle(v).fontSize : null;
+    const coarse = matchMedia('(pointer:coarse)').matches;
+    const mob = MOBILE();
+    const inSheet = !!document.querySelector('#sheet #adopted');
+    const build = window.__SHELL || (('serviceWorker' in navigator)
+      ? 'not registered' : 'unsupported');
+    // Only claim staleness on evidence: a measured size that the current CSS
+    // would never produce, or a touch device that did not get the touch layout.
+    const stale = (size && parseFloat(size) < 20) || (coarse && !mob);
+    el.innerHTML =
+      `build <b>${build}</b> · viewport <b>${innerWidth}×${innerHeight}</b>` +
+      ` · pointer <b>${coarse ? 'coarse' : 'fine'}</b><br>` +
+      `layout <b>${mob ? 'touch' : 'desktop'}</b>` +
+      ` · panel <b>${inSheet ? 'in sheet' : 'in sidebar'}</b>` +
+      ` · value text <b>${size || '—'}</b>` +
+      (stale ? '<br><span class="warn">This looks like an old cached build — '
+             + 'close the app completely and reopen it.</span>' : '');
   }
 
   async function show(lat, lon, label){
