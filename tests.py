@@ -2995,7 +2995,22 @@ class ChartCells(unittest.TestCase):
         from tiderace import charts
         src = inspect.getsource(charts.fetch_banded)
         self.assertNotIn("global BAND", src)
-        self.assertIn("band=band", src)
+        # The band travels as an argument. Asserting the intent rather than a
+        # literal: the previous version of this test pinned "band=band" and
+        # went red when the variable was renamed, while the property it cared
+        # about never changed.
+        self.assertRegex(src, r"fetch\([^)]*band=\w+")
+        self.assertNotRegex(src, r"^\s*BAND\s*=", "must not assign to BAND")
+
+    def test_the_richest_band_wins_not_the_first(self):
+        """Bands overlap. Off Block Island the harbour band has 13 contours in
+        a cell where general has 16, and taking the first non-empty band picked
+        the 13."""
+        import inspect
+        from tiderace import charts
+        src = inspect.getsource(charts.fetch_banded)
+        self.assertIn("best_n", src)
+        self.assertIn("> best_n", src, "strict compare keeps ties on the finer band")
 
     def test_the_cell_route_precedes_the_generic_one(self):
         # startswith("/charts/") is a prefix match and swallowed
