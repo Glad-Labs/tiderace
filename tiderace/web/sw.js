@@ -17,7 +17,7 @@
 // is genuinely confusing during development -- a browser check against a
 // stale cache proves nothing, which is how a debug probe survived one round
 // of "verification" here.
-const SHELL = 'tiderace-shell-v4';
+const SHELL = 'tiderace-shell-v6';
 const DATA  = 'tiderace-data-v1';
 
 const SHELL_URLS = [

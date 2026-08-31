@@ -1,0 +1,20 @@
+[Unit]
+Description=Tiderace — Narragansett Bay conditions and forecast
+Documentation=https://github.com/Glad-Labs/tiderace
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/mattm/Glad Labs Products/tiderace
+# Port 8765 is what `tailscale serve` proxies to. Changing it here without
+# changing the serve config takes the app off the tailnet.
+ExecStart=/usr/bin/python3 -m tiderace serve --port 8765
+Restart=on-failure
+RestartSec=5
+# The bay does not care if a NOAA feed times out; the process should come back
+# rather than stay dead until someone notices from a boat.
+StartLimitBurst=0
+
+[Install]
+WantedBy=default.target

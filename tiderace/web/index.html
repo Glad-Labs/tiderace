@@ -910,11 +910,45 @@ async function saveForOffline() {
     for (const l of (await (await fetch('/api/charts')).json()).layers || [])
       urls.push(l.url);
 
+    // The conditions sheet is what you actually open on the water, and
+    // /api/survey is per-coordinate so it cannot be cached exhaustively. But
+    // the places you fish are a short known list, and your own marks are
+    // already in GRID.spots beside the curated ones. Anywhere else still says
+    // "nothing saved for this" offshore, which is honest: a real gap beats a
+    // silently stale answer about the wrong piece of water.
+    const seen = new Set();
+    for (const sp of ((GRID && GRID.spots) || [])) {
+      const u = window.surveyURL(sp.lat, sp.lon);
+      if (!seen.has(u)) { seen.add(u); urls.push(u); }
+    }
+
     // Fetch through the page so the service worker's DATA cache fills, then
     // ask it to confirm.
-    await Promise.allSettled(urls.map(u => fetch(u)));
-    const reg = await navigator.serviceWorker?.ready;
-    reg?.active?.postMessage({type: 'prefetch', urls});
+    btn.textContent = `saving 0/${urls.length}`;
+    let done = 0;
+    await Promise.allSettled(urls.map(u => fetch(u).finally(() => {
+      btn.textContent = `saving ${++done}/${urls.length}`;
+    })));
+
+    // navigator.serviceWorker.ready NEVER settles when registration failed --
+    // private browsing, storage full, a webview with workers switched off.
+    // Awaiting it bare pinned the button on "saving..." for good, which is
+    // worse than an error: it looks like it worked and you find out offshore.
+    const reg = await Promise.race([
+      navigator.serviceWorker?.ready ?? Promise.resolve(null),
+      new Promise(r => setTimeout(() => r(null), 4000)),
+    ]).catch(() => null);
+
+    if (!reg || !reg.active) {
+      // The fetches did populate the HTTP cache, but nothing here can promise
+      // they survive losing signal. Say exactly that rather than tick.
+      btn.textContent = 'no offline store';
+      btn.title = 'Fetched, but the service worker is not running, so this is '
+                + 'not guaranteed to survive losing signal.';
+      setTimeout(() => { btn.textContent = was; btn.disabled = false; }, 3500);
+      return;
+    }
+    reg.active.postMessage({type: 'prefetch', urls});
 
     localStorage.setItem('tiderace:saved', new Date().toISOString());
     btn.textContent = 'saved ✓';
@@ -1178,6 +1212,12 @@ map.on('click', e => {
 </div>
 
 <script>
+/* The prefetched cache key and the live request must be identical to the byte
+   or the Cache API misses and the boat gets nothing back. One builder, used by
+   the dock bundle and by the live tap alike. */
+window.surveyURL = (lat, lon) =>
+  `/api/survey?lat=${(+lat).toFixed(4)}&lon=${(+lon).toFixed(4)}&fast=1`;
+
 /* ---- conditions sheet -------------------------------------------------
    Renders /api/survey. Deliberately dumb: the server already decided what
    is worth asking at this zone and what each value's footprint is, and
@@ -1305,7 +1345,7 @@ map.on('click', e => {
     body.innerHTML = '<div class="sdim">reading conditions…</div>';
     sheet.classList.add('up'); sheet.classList.remove('peek');
     try{
-      const r = await fetch(`/api/survey?lat=${lat}&lon=${lon}&fast=1`);
+      const r = await fetch(window.surveyURL(lat, lon));
       const d = await r.json();
       if (d.error){ body.innerHTML = `<div class="sdim">${esc(d.error)}</div>`; return; }
       zoneE.textContent = d.zone || '';
