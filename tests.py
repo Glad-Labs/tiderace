@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       provenance,
-                      cache as cachemod, llm, reconcile, reports, protected, survey, whales,
+                      bathy, cache as cachemod, llm, reconcile, reports, protected, survey, whales,
                       regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
@@ -3019,6 +3019,75 @@ class ChartCells(unittest.TestCase):
         src = (_p.Path(__file__).parent / "tiderace" / "server.py").read_text()
         self.assertLess(src.index('startswith("/charts/cell/")'),
                         src.index('url.path.startswith("/charts/"):'))
+
+
+class Bathymetry(unittest.TestCase):
+    """Contours generated from an elevation model, for water charts generalise.
+
+    ENC carries 475 depth contours in a mid-bay cell and 5 on the shelf --
+    not because the detail was lost, but because no chart-maker draws a canyon
+    edge for a ship passing over it in 200 m. An angler needs exactly that edge.
+    """
+
+    def test_a_sloping_plane_contours_to_a_straight_line(self):
+        n = 40
+        grid = [[-100.0 * i / (n - 1) for i in range(n)] for _ in range(n)]
+        gj = bathy.contours((-71.0, 40.0, -70.0, 41.0), levels=(50,), n=n, grid=grid)
+        self.assertEqual(len(gj["features"]), 1)
+        xs = [x for f in gj["features"] for x, _ in f["geometry"]["coordinates"]]
+        # Halfway down a linear slope, to within a grid step.
+        self.assertAlmostEqual(min(xs), -70.5, places=3)
+        self.assertAlmostEqual(max(xs), -70.5, places=3)
+
+    def test_a_cone_contours_to_a_closed_ring(self):
+        import math
+        n, mid = 40, 19.5
+        grid = [[-(math.hypot(i - mid, j - mid) / mid) * 100 for i in range(n)]
+                for j in range(n)]
+        gj = bathy.contours((-71.0, 40.0, -70.0, 41.0), levels=(50,), n=n, grid=grid)
+        pts = gj["features"][0]["geometry"]["coordinates"]
+        self.assertEqual(pts[0], pts[-1], "a closed depression must close")
+        self.assertGreater(len(pts), 20)
+
+    def test_flat_bottom_produces_nothing(self):
+        grid = [[-40.0] * 20 for _ in range(20)]
+        gj = bathy.contours((-71.0, 40.0, -70.9, 40.1), levels=(50,), n=20, grid=grid)
+        self.assertEqual(gj["features"], [])
+
+    def test_gaps_in_the_model_are_not_treated_as_flat(self):
+        # A None is "no data", not "sea level" -- interpolating through one
+        # would draw a contour across a hole in the survey.
+        self.assertEqual(bathy._cell_segments(0, 0, 1, 1, -10, None, -80, -40, -50), [])
+
+    def test_the_saddle_case_is_resolved(self):
+        # A col between two deeps. Getting it backwards joins separate holes.
+        segs = bathy._cell_segments(0, 0, 1, 1, -10, -90, -10, -90, -50)
+        self.assertEqual(len(segs), 2, "a saddle emits two segments, not one")
+
+    def test_every_feature_is_flagged_as_a_model(self):
+        """A charted sounding is a survey somebody signed for; this is an
+        interpolation. Whatever consumes it must not be able to mistake one for
+        the other, so the flag is on each feature, not just in a header."""
+        n = 20
+        grid = [[-100.0 * i / (n - 1) for i in range(n)] for _ in range(n)]
+        gj = bathy.contours((-71.0, 40.0, -70.9, 40.1), levels=(20, 50), n=n, grid=grid)
+        self.assertTrue(gj["model"])
+        self.assertIn("Not for navigation", gj["note"])
+        for f in gj["features"]:
+            self.assertTrue(f["properties"]["model"])
+            self.assertIn("NCEI", f["properties"]["source"])
+
+    def test_the_request_block_stays_under_the_service_cap(self):
+        # getSamples truncates silently past 1000, which would drop the tail of
+        # a grid rather than raising -- so blocks are sized to fit.
+        self.assertLessEqual(bathy.BLOCK * bathy.BLOCK, bathy.MAX_SAMPLES)
+
+    def test_it_is_drawn_differently_from_charted_contours(self):
+        import pathlib as _p
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        blk = page.split("  bathy: {")[1].split("},")[0]
+        self.assertIn("dash", blk, "must be visually distinct from a survey")
+        self.assertIn("model: true", blk)
 
 
 if __name__ == "__main__":

@@ -362,7 +362,35 @@ class Handler(BaseHTTPRequestHandler):
                     "layers": [{"name": n, "label": charts.LAYERS[n][1],
                                 "url": f"/charts/{n}.geojson"}
                                for n in charts.available()]
+                    # Modelled bathymetry is not an ENC layer and has no
+                    # bundled file -- it exists only as generated cells -- so
+                    # it is listed here rather than discovered from the cache.
+                    + [{"name": "bathy",
+                        "label": "Modelled bottom contours — not for navigation",
+                        "url": None, "model": True}]
                 })
+            if url.path.startswith("/charts/bathy/"):
+                # /charts/bathy/{iy}/{ix}.geojson -- modelled contours, not
+                # charted soundings. Same grid as the ENC cells so the two
+                # line up and share a cache-key shape.
+                try:
+                    rest = url.path[len("/charts/bathy/"):].replace(".geojson", "")
+                    iy, ix = (int(v) for v in rest.split("/"))
+                except ValueError:
+                    return self._send_json({"error": "bad cell path"}, 400)
+                from . import bathy as bathymod
+                try:
+                    gj = bathymod.cell(iy, ix)
+                except Exception as exc:                          # noqa: BLE001
+                    return self._send_json({"error": str(exc)}, 502)
+                body = json.dumps(gj).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/geo+json")
+                self.send_header("Content-Length", str(len(body)))
+                # The elevation model does not change; this is worth keeping.
+                self.send_header("Cache-Control", "public, max-age=31536000")
+                self.end_headers()
+                return self.wfile.write(body)
             # Must precede the generic /charts/ route: that one is a
             # prefix match and swallows /charts/cell/... as a layer name.
             if url.path.startswith("/charts/cell/"):

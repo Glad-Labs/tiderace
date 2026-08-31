@@ -882,6 +882,22 @@ const CHART_STYLE = {
   // Contours are the shape of the bottom -- the edge fish sit on, which depth
   // shading can only imply. Drawn under the point layers so a rock on a drop-off
   // still reads as a rock.
+  /* Modelled bottom, not charted soundings. Drawn dashed and dimmer than the
+     ENC contours on purpose: the difference has to be visible at a glance,
+     because one of these is a survey somebody signed for and the other is an
+     interpolation between soundings that may be decades old. Mixing them into
+     one indistinguishable set of blue lines is how a model ends up being read
+     as a chart. */
+  bathy: {
+    kind: 'line', lazy: true, model: true,
+    colour: 'rgba(140,163,168,.75)',
+    width: ['interpolate', ['linear'], ['zoom'], 9, 0.5, 13, 1.0],
+    dash: [2, 2],
+    label: ['case', ['has','depth_ft'],
+            ['concat', ['to-string', ['get','depth_ft']], "'"], ''],
+    minzoom: 9,
+    swatch: 'repeating-linear-gradient(90deg,#8CA3A8 0 3px,transparent 3px 6px)'
+  },
   contours: {
     kind: 'line',
     colour: 'rgba(79,179,199,.55)',
@@ -964,7 +980,10 @@ const CHART_ON = {depth_area:false, rocks:false, wrecks:true, obstructions:false
                   turbulence:true, kelp:false, seabed:false,
                   // Soundings are the same information as contours at ten times
                   // the weight, so they stay on demand.
-                  contours:true, soundings:false, buoys:true, lights:false};
+                  contours:true, soundings:false, buoys:true, lights:false,
+                  // Generated on demand, about ten seconds a cell the
+                  // first time, so it is opt-in rather than automatic.
+                  bathy:false};
 const CHART_DATA = {};
 
 fetch('/api/meta').then(r=>r.json()).then(m => {
@@ -1030,7 +1049,13 @@ async function loadCharts(){
     // loadCharts() runs on boot (to populate the menu) and again when the map
     // becomes ready. Cache the GeoJSON so a slow map load does not re-pull
     // three quarters of a megabyte.
-    if (!CHART_DATA[l.name]) CHART_DATA[l.name] = await (await fetch(l.url)).json();
+      // A model layer has no bundled file: it is built from cells on demand,
+      // so it starts empty and fills in as you look around.
+      if (!CHART_DATA[l.name]) {
+        CHART_DATA[l.name] = l.url
+          ? await (await fetch(l.url)).json()
+          : {type:'FeatureCollection', features:[]};
+      }
     const gj = CHART_DATA[l.name];
     const cnt = document.querySelector('#cnt-' + l.name);
     if (cnt) cnt.textContent = gj.features.length;
@@ -1064,7 +1089,9 @@ async function loadCharts(){
         minzoom: st.minzoom || 0,
         layout:{visibility: CHART_ON[l.name] ? 'visible' : 'none',
                 'line-join':'round', 'line-cap':'round'},
-        paint:{'line-color': st.colour, 'line-width': st.width || 0.8}
+        paint:Object.assign({'line-color': st.colour,
+                             'line-width': st.width || 0.8},
+                            st.dash ? {'line-dasharray': st.dash} : {})
       }, ABOVE_BASEMAP());
       // A contour with no number on it is a squiggle. The value is the whole
       // point, so it rides along as a symbol layer on the same source.
@@ -1205,7 +1232,7 @@ async function loadStructure(){
  * Only the depth layers work this way. Rocks and wrecks are inshore features
  * and the bundled files already cover the water they exist in.
  */
-const CELL_LAYERS = ['soundings', 'contours'];
+const CELL_LAYERS = ['soundings', 'contours', 'bathy'];
 const CELL_MIN_ZOOM = 11;     // below this they are a smear, and not worth the data
 const CELLS_LOADED = new Set();
 let cellBusy = false;
@@ -1224,11 +1251,17 @@ async function loadCellsForView(){
     for (const c of (meta.cells || [])){
       for (const name of want){
         const key = `${name}/${c.iy}/${c.ix}`;
+        // bathy lives under its own path: it is generated here rather
+        // than fetched from NOAA, and costs about ten seconds a cell
+        // the first time anyone looks at it.
+        const url = name === 'bathy'
+          ? `/charts/bathy/${c.iy}/${c.ix}.geojson`
+          : `/charts/cell/${key}.geojson`;
         if (CELLS_LOADED.has(key)) continue;
         CELLS_LOADED.add(key);          // claim it before awaiting, or a second
                                         // pan starts the same fetch again
         try {
-          const gj = await (await fetch(`/charts/cell/${key}.geojson`)).json();
+          const gj = await (await fetch(url)).json();
           if (gj.features && gj.features.length) mergeCell(name, gj);
         } catch (_) {
           CELLS_LOADED.delete(key);     // offline or a bad cell: let it retry
