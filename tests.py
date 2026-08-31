@@ -2775,5 +2775,53 @@ class ResponsiveLayout(unittest.TestCase):
                             f"touch override for it cannot win")
 
 
+class MapLabels(unittest.TestCase):
+    """Spot labels are DOM and land wherever the marker does -- including
+    under the control bar and behind the conditions sheet, where they stack
+    into each other and read as noise."""
+
+    def setUp(self):
+        import pathlib
+        self.page = (pathlib.Path(__file__).parent
+                     / "tiderace" / "web" / "index.html").read_text()
+
+    def test_labels_are_clamped_to_the_visible_map(self):
+        self.assertIn("function clampLabels()", self.page)
+        fn = self.page.split("function clampLabels()")[1].split("\n}")[0]
+        self.assertIn("barBottom", fn)
+        self.assertIn("sheetTop", fn)
+
+    def test_the_sheet_only_counts_when_it_is_up(self):
+        # Its rect still has a top when translated off the bottom; using that
+        # unconditionally would blank labels across half the map.
+        fn = self.page.split("function clampLabels()")[1].split("\n}")[0]
+        self.assertIn("classList.contains('up')", fn)
+
+    def test_the_dot_survives_when_the_label_is_hidden(self):
+        # Knowing a spot is up there is useful; it is the text that collides.
+        fn = self.page.split("function clampLabels()")[1].split("\n}")[0]
+        self.assertIn("visibility", fn)
+        self.assertNotIn("m.el.style.display", fn)
+
+    def test_user_toggle_and_chrome_test_use_different_properties(self):
+        # display for the checkbox, visibility for the clamp -- otherwise one
+        # silently undoes the other.
+        h = self.page.split("$('#labels').onchange")[1].split("};")[0]
+        self.assertIn("style.display", h)
+        self.assertIn("clampLabels()", h)
+
+    def test_the_labels_handler_has_a_block_body(self):
+        # A concise arrow body plus a second statement runs that statement once
+        # at parse time and never on toggle, which is what shipped for a minute.
+        head = self.page.split("$('#labels').onchange")[1][:40]
+        self.assertIn("=> {", head, "handler must be a block, not a concise arrow")
+
+    def test_it_reruns_when_the_view_changes(self):
+        for hook in ("map.on('move', clampLabels)",
+                     "map.on('moveend', clampLabels)",
+                     "addEventListener('resize', clampLabels)"):
+            self.assertIn(hook, self.page, hook)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

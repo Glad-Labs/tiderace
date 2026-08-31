@@ -524,12 +524,23 @@ $('#marks').onchange = e => {
   if (!MAP_READY) return;
   map.setLayoutProperty('seamark', 'visibility', e.target.checked ? 'visible' : 'none');
 };
-$('#labels').onchange = e =>
-  Object.values(MARKERS).forEach(m => m.el.querySelector('.lbl').style.display = e.target.checked?'':'none');
+$('#labels').onchange = e => {
+  // display carries the user's on/off; visibility carries the chrome test.
+  // Two properties so neither decision clobbers the other.
+  Object.values(MARKERS).forEach(
+    m => m.el.querySelector('.lbl').style.display = e.target.checked ? '' : 'none');
+  clampLabels();
+};
 
 // ------------------------------------------------------------------ markers
 let MAP_READY = false;
-map.on('load', () => { MAP_READY = true; syncMarkers(); loadCharts(); loadBait(); loadStructure(); });
+map.on('load', () => {
+  MAP_READY = true; syncMarkers(); loadCharts(); loadBait(); loadStructure();
+  clampLabels();
+});
+map.on('move', clampLabels);
+map.on('moveend', clampLabels);
+addEventListener('resize', clampLabels);
 map.on('error', e => console.warn('map:', e && e.error && e.error.message));
 
 // The map is a view onto the data, not a prerequisite for it. If WebGL is
@@ -542,6 +553,8 @@ function syncMarkers(){
   MARKERS = {};
   GRID.spots.forEach(s => MARKERS[s.key] = makeMarker(s));
   paint();
+  // Fresh markers start with their labels shown; re-apply the chrome test.
+  clampLabels();
 }
 
 function makeMarker(sp){
@@ -560,6 +573,39 @@ function makeMarker(sp){
       .setLngLat([sp.lon, sp.lat]).addTo(map);
   m.el = el;
   return m;
+}
+
+/* Spot labels are DOM, drawn wherever the marker lands -- including under the
+   control bar at the top and behind the conditions sheet at the bottom, where
+   they pile into each other and read as garbage. Rather than fight the
+   stacking order, hide the label when its marker is inside a strip the UI
+   occupies. The dot stays: knowing a spot is up there is useful, and it is the
+   text that collides.
+
+   Runs on move and on resize because the sheet's height changes when it is
+   dragged between peek and full. */
+function clampLabels(){
+  // MARKERS is replaced, not mutated, when the grid reloads -- read the
+  // live binding rather than a captured alias.
+  if (!MAP_READY || !MARKERS) return;
+  const bar = document.getElementById('bar');
+  const sheet = document.getElementById('sheet');
+  const showLabels = document.getElementById('labels');
+  if (showLabels && !showLabels.checked) return;   // user turned them off
+
+  const barBottom = bar ? bar.getBoundingClientRect().bottom : 0;
+  const r = sheet ? sheet.getBoundingClientRect() : null;
+  // Only counts when the sheet is actually up; when it is translated off the
+  // bottom its rect still has a top, and using it would blank half the map.
+  const sheetTop = (r && sheet.classList.contains('up')) ? r.top : Infinity;
+
+  for (const m of Object.values(MARKERS)){
+    const lbl = m.el && m.el.querySelector('.lbl');
+    if (!lbl) continue;
+    const box = m.el.getBoundingClientRect();
+    const hidden = box.top < barBottom + 4 || box.bottom > sheetTop - 4;
+    lbl.style.visibility = hidden ? 'hidden' : '';
+  }
 }
 
 function paint(){
@@ -1890,6 +1936,7 @@ const MOBILE = () =>
     zoneE.textContent = '';
     body.innerHTML = '<div class="sdim">reading conditions…</div>';
     sheet.classList.add('up'); sheet.classList.remove('peek');
+    if (typeof clampLabels === 'function') setTimeout(clampLabels, 240);
     try{
       const r = await fetch(window.surveyURL(lat, lon));
       const d = await r.json();
@@ -1913,6 +1960,9 @@ const MOBILE = () =>
   grip.addEventListener('pointerdown', e => {
     y0 = e.clientY; t0 = Date.now(); grip.setPointerCapture(e.pointerId);
   });
+  // The sheet's top edge moves when it is dragged, so what it covers changes.
+  const reclamp = () => { if (typeof clampLabels === 'function') setTimeout(clampLabels, 240); };
+
   grip.addEventListener('pointerup', e => {
     if (y0 == null) return;
     const dy = e.clientY - y0, dt = Date.now() - t0;
@@ -1923,6 +1973,7 @@ const MOBILE = () =>
       sheet.classList.remove('peek');
     }
     y0 = null;
+    reclamp();
   });
 
   const here = document.getElementById('here');
