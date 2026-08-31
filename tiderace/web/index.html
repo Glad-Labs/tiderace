@@ -321,47 +321,47 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   #sheet.peek{transform:translateY(calc(100% - 210px))}
   /* Everything a thumb has to hit, sized for a thumb. */
   .srow{padding:14px 16px}
-  .srow .k{font-size:calc(14px * var(--ui, 1)); width:36%}
-  .srow .v{font-size:calc(22px * var(--ui, 1))}
-  .srow .v small{font-size:calc(13px * var(--ui, 1))}
-  .sgroup{font-size:calc(12px * var(--ui, 1)); letter-spacing:.18em; padding:16px 16px 6px}
-  .srule{font-size:calc(14px * var(--ui, 1)); line-height:1.6}
-  .sdim{font-size:calc(13px * var(--ui, 1)); line-height:1.65}
-  #sheethead b{font-size:calc(20px * var(--ui, 1))}
+  .srow .k{font-size:14px; width:36%}
+  .srow .v{font-size:22px}
+  .srow .v small{font-size:13px}
+  .sgroup{font-size:12px; letter-spacing:.18em; padding:16px 16px 6px}
+  .srule{font-size:14px; line-height:1.6}
+  .sdim{font-size:13px; line-height:1.65}
+  #sheethead b{font-size:20px}
   /* Type, sized for reading at arm's length in sunlight with salt on the
      screen. The first attempt at this guessed selectors that do not exist
      (.box, .row) and changed nothing; these are the real ones, taken from the
      stylesheet above. Everything roughly +3px, and nothing left under 12. */
   #adopted{padding:0 2px 8px}
-  #adopted .ph{font-size:calc(12px * var(--ui, 1)); letter-spacing:.16em; padding-top:4px}
+  #adopted .ph{font-size:12px; letter-spacing:.16em; padding-top:4px}
   #adopted .card{padding:14px}
-  #adopted .card h3{font-size:calc(19px * var(--ui, 1))}
-  #adopted .card .sub{font-size:calc(12px * var(--ui, 1))}
-  #adopted .big{font-size:calc(42px * var(--ui, 1))}
-  #adopted .kv{font-size:calc(14px * var(--ui, 1)); gap:6px 14px}
-  #adopted .why{font-size:calc(14px * var(--ui, 1)); line-height:1.55}
-  #adopted .regs, #adopted #regs, #adopted #regsbox{font-size:calc(14px * var(--ui, 1)); line-height:1.6}
+  #adopted .card h3{font-size:19px}
+  #adopted .card .sub{font-size:12px}
+  #adopted .big{font-size:42px}
+  #adopted .kv{font-size:14px; gap:6px 14px}
+  #adopted .why{font-size:14px; line-height:1.55}
+  #adopted .regs, #adopted #regs, #adopted #regsbox{font-size:14px; line-height:1.6}
   /* The ranked list is the thing you actually read on the water. */
-  #adopted .rank button{min-height:calc(58px * var(--ui, 1)); padding:10px 12px; font-size:calc(16px * var(--ui, 1))}
-  #adopted .rank .s{font-size:calc(19px * var(--ui, 1))}
-  #adopted .rank .m{font-size:calc(13px * var(--ui, 1))}
-  #adopted .empty{font-size:calc(15px * var(--ui, 1)); line-height:1.6}
-  #adopted .note{font-size:calc(13px * var(--ui, 1)); line-height:1.55}
-  #adopted .conf{font-size:calc(12px * var(--ui, 1)); padding:3px 7px}
-  #adopted .markwarn{font-size:calc(13px * var(--ui, 1)); line-height:1.55}
-  #adopted .markwin{font-size:calc(14px * var(--ui, 1)); min-height:calc(44px * var(--ui, 1)); align-items:center}
-  #adopted #layers h4{font-size:calc(12px * var(--ui, 1))}
-  #adopted #layers label{font-size:calc(15px * var(--ui, 1)); min-height:calc(44px * var(--ui, 1)); gap:10px}
-  #adopted #layers .cnt{font-size:calc(12px * var(--ui, 1))}
-  #adopted .ok, #adopted .err{font-size:calc(13px * var(--ui, 1))}
+  #adopted .rank button{min-height:58px; padding:10px 12px; font-size:16px}
+  #adopted .rank .s{font-size:19px}
+  #adopted .rank .m{font-size:13px}
+  #adopted .empty{font-size:15px; line-height:1.6}
+  #adopted .note{font-size:13px; line-height:1.55}
+  #adopted .conf{font-size:12px; padding:3px 7px}
+  #adopted .markwarn{font-size:13px; line-height:1.55}
+  #adopted .markwin{font-size:14px; min-height:44px; align-items:center}
+  #adopted #layers h4{font-size:12px}
+  #adopted #layers label{font-size:15px; min-height:44px; gap:10px}
+  #adopted #layers .cnt{font-size:12px}
+  #adopted .ok, #adopted .err{font-size:13px}
   /* 16px or Safari zooms the page on focus and takes the map with it. */
-  #adopted input, #adopted select, #adopted button{font-size:calc(16px * var(--ui, 1))}
-  #adopted input, #adopted select{min-height:calc(46px * var(--ui, 1)); padding:10px 12px}
+  #adopted input, #adopted select, #adopted button{font-size:16px}
+  #adopted input, #adopted select{min-height:46px; padding:10px 12px}
   /* The top bar is a control strip, not text: it needs tap targets. */
-  #bar{font-size:calc(15px * var(--ui, 1))}
-  #bar select{font-size:calc(16px * var(--ui, 1)); min-height:calc(40px * var(--ui, 1))}
-  label.chk{font-size:calc(14px * var(--ui, 1)); gap:8px}
-  #tlabel{font-size:calc(15px * var(--ui, 1))} #tsub{font-size:calc(13px * var(--ui, 1))}
+  #bar{font-size:15px}
+  #bar select{font-size:16px; min-height:40px}
+  label.chk{font-size:14px; gap:8px}
+  #tlabel{font-size:15px} #tsub{font-size:13px}
   /* The scrubber is absolutely positioned inside the map wrapper, not the
      app grid, so it needs no offset for the panel here -- the panel is a
      sibling below the map, already out of the way. Offsetting by the panel
@@ -384,6 +384,29 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 }
 #diag b{color:var(--ink-2); font-weight:600}
 #diag .warn{color:var(--warn)}
+
+/* One scale for the whole chrome, not thirty-seven font sizes.
+   Scaling type alone grew the text 2.4x and left padding, gaps and radii where
+   they were, so everything came apart at the seams. `zoom` scales layout --
+   text, spacing, borders, tap targets -- in proportion, which is what "make it
+   bigger" actually means. The map is deliberately NOT zoomed: it works in its
+   own pixel space and scaling it would break hit-testing and the label clamp.
+
+   1 on an honest viewport, so this is inert on a normal phone. */
+#sheet, #bar, #here, #timebar{ zoom: var(--ui, 1); }
+/* A zoomed fixed element still resolves left/right against the UNZOOMED
+   viewport, then multiplies the result -- so `left:0;right:0` came out 2.4x
+   wider than the screen. Width has to be stated in the zoomed coordinate
+   space, which is viewport / scale. */
+#sheet{ right:auto; width:calc(100vw / var(--ui, 1)); }
+/* Offsets are multiplied by the zoom as well as sizes, so a 12px inset would
+   land at 29px. Divide anything that has to stay put on the glass. */
+#bar{ left:calc(12px / var(--ui, 1)); top:calc(12px / var(--ui, 1));
+      width:calc((100vw - 24px) / var(--ui, 1)); }
+#here{ right:calc(14px / var(--ui, 1));
+       bottom:calc((20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
+#timebar{ right:calc(12px / var(--ui, 1)); bottom:calc(44px / var(--ui, 1));
+          left:calc(12px / var(--ui, 1)); width:auto; }
 </style>
 </head>
 <body>
