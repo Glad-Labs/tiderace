@@ -363,6 +363,31 @@ class Handler(BaseHTTPRequestHandler):
                                 "url": f"/charts/{n}.geojson"}
                                for n in charts.available()]
                 })
+            # Must precede the generic /charts/ route: that one is a
+            # prefix match and swallows /charts/cell/... as a layer name.
+            if url.path.startswith("/charts/cell/"):
+                # /charts/cell/{layer}/{iy}/{ix}.geojson
+                try:
+                    rest = url.path[len("/charts/cell/"):].replace(".geojson", "")
+                    name, iy, ix = rest.split("/")
+                    iy, ix = int(iy), int(ix)
+                except ValueError:
+                    return self._send_json({"error": "bad cell path"}, 400)
+                if name not in charts.LAYERS:
+                    return self._send_json({"error": "unknown layer"}, 404)
+                try:
+                    gj = charts.cell(name, iy, ix)
+                except Exception as exc:                          # noqa: BLE001
+                    return self._send_json({"error": str(exc)}, 502)
+                body = json.dumps(gj).encode()
+                # A cell is a fixed piece of the world and ENC updates are
+                # months apart, so it is worth holding on to.
+                self.send_response(200)
+                self.send_header("Content-Type", "application/geo+json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "public, max-age=2592000")
+                self.end_headers()
+                return self.wfile.write(body)
             if url.path.startswith("/charts/"):
                 name = url.path[len("/charts/"):].replace(".geojson", "")
                 if name not in charts.LAYERS:
@@ -373,6 +398,25 @@ class Handler(BaseHTTPRequestHandler):
                         {"error": "not cached — run: python3 -m tiderace charts"}, 404)
                 with open(path, "rb") as fh:
                     return self._send(fh.read(), "application/geo+json")
+            if url.path == "/api/chartcells":
+                # Which grid cells cover this viewport, so the client can ask
+                # for them individually and cache each one on its own key.
+                try:
+                    bbox = tuple(float(v) for v in
+                                 q.get("bbox", [""])[0].split(","))
+                    if len(bbox) != 4:
+                        raise ValueError
+                except ValueError:
+                    return self._send_json({"error": "bbox=w,s,e,n required"}, 400)
+                limit = min(int(q.get("limit", ["12"])[0]), 24)
+                cells = charts.cells_for(bbox, limit)
+                return self._send_json({
+                    "cell_deg": charts.CELL_DEG,
+                    "serve_bbox": charts.SERVE_BBOX,
+                    "cells": [{"iy": iy, "ix": ix,
+                               "bbox": charts.cell_bbox(iy, ix)}
+                              for iy, ix in cells],
+                })
             if url.path == "/api/structure":
                 # Fixed offshore structure we know about that the ENC harbour
                 # band does not carry. Its Offshore_Platform layer has eight

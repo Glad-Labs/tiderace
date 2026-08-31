@@ -90,9 +90,15 @@ def _get(url: str) -> dict:
         return json.loads(r.read().decode())
 
 
-def fetch(name: str, bbox=BAY_BBOX) -> dict:
+def fetch(name: str, bbox=BAY_BBOX, band: str | None = None,
+          layer_id: int | None = None) -> dict:
     """Fetch one layer as GeoJSON, paging past the service record limit."""
-    layer_id, _ = LAYERS[name]
+    # Band and layer are parameters, not globals. The server is threaded
+    # and two cells can be in flight at once; swapping a module-level
+    # BAND under them would hand one request the other's chart band.
+    if layer_id is None:
+        layer_id, _ = LAYERS[name]
+    band = band or BAND
     xmin, ymin, xmax, ymax = bbox
     geom = json.dumps({"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax,
                        "spatialReference": {"wkid": 4326}})
@@ -107,7 +113,7 @@ def fetch(name: str, bbox=BAY_BBOX) -> dict:
             "outFields": "*", "resultOffset": offset,
             "resultRecordCount": PAGE, "f": "geojson",
         })
-        page = _get(f"{ENC}/{BAND}/MapServer/{layer_id}/query?{q}")
+        page = _get(f"{ENC}/{band}/MapServer/{layer_id}/query?{q}")
         got = page.get("features", [])
         feats.extend(got)
         if len(got) < PAGE:
@@ -585,3 +591,138 @@ def depth_at(lat: float, lon: float) -> dict | None:
         return None
     return {"min_ft": best.get("depth_min_ft"), "max_ft": best.get("depth_max_ft"),
             "min_m": best.get("depth_min_m"), "max_m": best.get("depth_max_m")}
+
+
+# ------------------------------------------------------- charts on demand
+#
+# Shipping whole GeoJSON layers to the browser works for one bay and cannot
+# work for Montauk to the Cape. That box is seventeen times the area of
+# Narragansett Bay -- 37,000 square nautical miles against 2,100 -- and the
+# current layers are already 17 MB. Naively widened they would be a quarter of
+# a gigabyte, which no phone is going to parse, let alone over a cell
+# connection on the water.
+#
+# So chart data is cut into a fixed grid and fetched a cell at a time, only
+# where you actually look. The grid is fixed rather than following the viewport
+# because a stable key is what makes a cell cacheable: pan away and back and it
+# is the same cell, already on disk and already in the service worker. A
+# viewport-shaped query would be a different URL every time and would cache
+# nothing.
+#
+# Cells are fetched from NOAA once and kept forever -- ENC updates are measured
+# in months, and a stale rock is still a rock. Coverage therefore grows to
+# wherever you have been, which is the right shape for someone who runs the
+# same water repeatedly.
+
+CELL_DEG = 0.25                 # ~15 nm of latitude; a few hundred KB per cell
+CELL_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "charts", "cells")
+
+# The water this is willing to serve at all. Generous -- Montauk to well east of
+# the Cape, and south to the shelf break where the canyons start.
+SERVE_BBOX = (-74.30, 39.40, -69.60, 42.70)
+
+
+def cell_key(lat: float, lon: float) -> tuple[int, int]:
+    """Grid indices for a coordinate. Integers so the key is exact -- deriving
+    it from floats would make neighbouring requests miss each other."""
+    return (math.floor(lat / CELL_DEG), math.floor(lon / CELL_DEG))
+
+
+def cell_bbox(iy: int, ix: int) -> tuple[float, float, float, float]:
+    return (round(ix * CELL_DEG, 6), round(iy * CELL_DEG, 6),
+            round((ix + 1) * CELL_DEG, 6), round((iy + 1) * CELL_DEG, 6))
+
+
+def cells_for(bbox, limit: int = 12) -> list[tuple[int, int]]:
+    """Every grid cell a viewport touches, nearest the centre first.
+
+    Capped: a zoomed-out view can span hundreds of cells, and fetching them all
+    would hammer NOAA for data drawn two pixels wide. The map only asks for
+    detail layers when it is zoomed in far enough for them to mean something.
+    """
+    w, s, e, n = bbox
+    w, s = max(w, SERVE_BBOX[0]), max(s, SERVE_BBOX[1])
+    e, n = min(e, SERVE_BBOX[2]), min(n, SERVE_BBOX[3])
+    if w >= e or s >= n:
+        return []
+    cy, cx = (s + n) / 2, (w + e) / 2
+    out = []
+    iy0, ix0 = cell_key(s, w)
+    iy1, ix1 = cell_key(n, e)
+    for iy in range(iy0, iy1 + 1):
+        for ix in range(ix0, ix1 + 1):
+            bx = cell_bbox(iy, ix)
+            d = math.hypot((bx[1] + bx[3]) / 2 - cy, (bx[0] + bx[2]) / 2 - cx)
+            out.append((d, iy, ix))
+    out.sort()
+    return [(iy, ix) for _, iy, ix in out[:limit]]
+
+
+def cell_path(name: str, iy: int, ix: int) -> str:
+    return os.path.join(CELL_DIR, f"{name}_{iy}_{ix}.geojson")
+
+
+def cell(name: str, iy: int, ix: int, refresh: bool = False) -> dict:
+    """One grid cell of one layer, from disk or from NOAA.
+
+    An empty cell is cached too. Most of this box is open water with no rocks
+    in it, and re-asking NOAA every time you pan across nothing would be the
+    slowest possible way to learn that.
+    """
+    if name not in LAYERS:
+        raise KeyError(name)
+    path = cell_path(name, iy, ix)
+    if not refresh:
+        hit = cache.read_json(path)
+        if hit is not None:
+            return hit
+    gj = fetch_banded(name, cell_bbox(iy, ix))
+    cache.write_json(path, gj)
+    return gj
+
+# ENC is published in usage bands, and which one holds your water depends on
+# how far out you are. The harbour band has 4,475 soundings in a cell off
+# Montauk and NOTHING at all on the shelf; the coastal and general bands are
+# the opposite -- sparse inshore, but they are the only thing out where the
+# canyons are. A single band therefore cannot serve someone who runs from
+# Montauk to the Cape and then keeps going.
+#
+# So a cell tries bands finest-first and keeps the first that actually returns
+# something. Inshore that is harbour detail; offshore it falls through to
+# whatever exists. The band that answered is recorded on the response, because
+# "twelve soundings" from the general band and "twelve soundings" from the
+# harbour band mean very different things about how well surveyed the bottom is.
+BAND_LAYERS = {
+    # band          soundings  contours
+    "enc_harbour":  {"soundings": 76,  "contours": 104},
+    "enc_approach": {"soundings": 80,  "contours": 108},
+    "enc_coastal":  {"soundings": 61,  "contours": 82},
+    "enc_general":  {"soundings": 50,  "contours": 64},
+}
+BAND_ORDER = ("enc_harbour", "enc_approach", "enc_coastal", "enc_general")
+
+
+def fetch_banded(name: str, bbox, bands=BAND_ORDER) -> dict:
+    """Fetch a layer from the finest band that actually has anything here.
+
+    Only the depth layers are banded. Rocks, wrecks and kelp are inshore
+    features by nature, and the harbour band is where they live.
+    """
+    if name not in BAND_LAYERS["enc_harbour"]:
+        gj = fetch(name, bbox)
+        gj["band"] = BAND
+        return gj
+
+    for band in bands:
+        lid = BAND_LAYERS.get(band, {}).get(name)
+        if lid is None:
+            continue
+        try:
+            gj = fetch(name, bbox, band=band, layer_id=lid)
+        except Exception:                                         # noqa: BLE001
+            continue
+        if gj.get("features"):
+            gj["band"] = band
+            return gj
+    # Genuinely nothing charted here, which is itself worth caching.
+    return {"type": "FeatureCollection", "features": [], "band": None}

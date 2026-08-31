@@ -591,6 +591,7 @@ $('#labels').onchange = e => {
 let MAP_READY = false;
 map.on('load', () => {
   MAP_READY = true; syncMarkers(); loadCharts(); loadBait(); loadStructure();
+  loadCellsForView();
   clampLabels();
 });
 map.on('move', clampLabels);
@@ -1095,7 +1096,9 @@ async function loadCharts(){
       if (cb.checked && MAP_READY && !map.getSource(id)) {
         const cnt = document.querySelector('#cnt-' + name);
         if (cnt) cnt.textContent = '…';
-        loadCharts().catch(() => { if (cnt) cnt.textContent = '!'; });
+        loadCharts()
+          .then(() => { if (typeof loadCellsForView === 'function') loadCellsForView(); })
+          .catch(() => { if (cnt) cnt.textContent = '!'; });
         return;
       }
       // Contours carry a separate label layer; toggling only the line would
@@ -1156,6 +1159,75 @@ async function loadStructure(){
            'text-halo-width':1.2}
   });
 }
+
+
+/* ---- charts beyond the bay ---------------------------------------------
+ * The bundled layers are one bay. For Montauk to the Cape, and offshore to the
+ * shelf, the data is cut into a fixed 0.25 degree grid on the server and
+ * fetched a cell at a time -- only where you actually look.
+ *
+ * The grid is fixed rather than viewport-shaped on purpose: a stable key is
+ * what makes a cell cacheable. Pan away and back and it is the same URL,
+ * already on disk and already in the service worker. A viewport-shaped query
+ * would be a new URL every frame and would cache nothing.
+ *
+ * Only the depth layers work this way. Rocks and wrecks are inshore features
+ * and the bundled files already cover the water they exist in.
+ */
+const CELL_LAYERS = ['soundings', 'contours'];
+const CELL_MIN_ZOOM = 11;     // below this they are a smear, and not worth the data
+const CELLS_LOADED = new Set();
+let cellBusy = false;
+
+async function loadCellsForView(){
+  if (!MAP_READY || cellBusy) return;
+  if (map.getZoom() < CELL_MIN_ZOOM) return;
+  const want = CELL_LAYERS.filter(n => CHART_ON[n]);
+  if (!want.length) return;
+
+  const b = map.getBounds();
+  const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(',');
+  cellBusy = true;
+  try {
+    const meta = await (await fetch(`/api/chartcells?bbox=${bbox}&limit=6`)).json();
+    for (const c of (meta.cells || [])){
+      for (const name of want){
+        const key = `${name}/${c.iy}/${c.ix}`;
+        if (CELLS_LOADED.has(key)) continue;
+        CELLS_LOADED.add(key);          // claim it before awaiting, or a second
+                                        // pan starts the same fetch again
+        try {
+          const gj = await (await fetch(`/charts/cell/${key}.geojson`)).json();
+          if (gj.features && gj.features.length) mergeCell(name, gj);
+        } catch (_) {
+          CELLS_LOADED.delete(key);     // offline or a bad cell: let it retry
+        }
+      }
+    }
+  } catch (_) {
+    /* no network: the bundled layers still draw */
+  } finally {
+    cellBusy = false;
+  }
+}
+
+/* Cells are merged into the layer's existing source rather than each becoming
+   its own source and layer. Twenty cells across two layers would be forty
+   MapLibre layers, all needing the same styling and the same z-order fixed up
+   every time one arrived. */
+function mergeCell(name, gj){
+  const id = 'c-' + name;
+  const src = map.getSource(id);
+  if (!src) return;                     // layer not built yet; next pan catches it
+  const cur = CHART_DATA[name] || {type:'FeatureCollection', features:[]};
+  cur.features = cur.features.concat(gj.features);
+  CHART_DATA[name] = cur;
+  src.setData(cur);
+  const cnt = document.querySelector('#cnt-' + name);
+  if (cnt) cnt.textContent = cur.features.length;
+}
+
+map.on('moveend', loadCellsForView);
 
 async function loadBait(){
   if (!MAP_READY) return;

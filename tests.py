@@ -2893,5 +2893,82 @@ class ViewportLies(unittest.TestCase):
         self.assertIn("Desktop site", self.page)
 
 
+class ChartCells(unittest.TestCase):
+    """Chart data for water far wider than one bay, fetched a cell at a time.
+
+    Montauk to the Cape with the shelf included is 37,000 square nautical miles
+    against Narragansett Bay's 2,100 -- seventeen times the area, and the
+    bundled layers are already 17 MB. Shipping that whole is a quarter of a
+    gigabyte to a phone.
+    """
+
+    def test_the_grid_key_is_exact(self):
+        from tiderace import charts
+        # Integers, not floats: neighbouring requests must land on the same key
+        # or every pan re-fetches water it already has.
+        a = charts.cell_key(41.1234, -71.5678)
+        b = charts.cell_key(41.1299, -71.5601)
+        self.assertEqual(a, b)
+        self.assertTrue(all(isinstance(v, int) for v in a))
+
+    def test_a_cell_bbox_round_trips_to_its_own_key(self):
+        from tiderace import charts
+        for lat, lon in ((41.12, -71.50), (40.25, -70.90), (42.4, -70.1)):
+            iy, ix = charts.cell_key(lat, lon)
+            w, s_, e, n = charts.cell_bbox(iy, ix)
+            self.assertTrue(w <= lon < e and s_ <= lat < n)
+            self.assertEqual(charts.cell_key((s_ + n) / 2, (w + e) / 2), (iy, ix))
+
+    def test_a_wide_view_is_capped(self):
+        from tiderace import charts
+        # A zoomed-out view spans hundreds of cells; fetching them all would
+        # hammer NOAA for data drawn two pixels wide.
+        many = charts.cells_for((-74.2, 39.5, -69.8, 42.6), limit=12)
+        self.assertLessEqual(len(many), 12)
+
+    def test_cells_come_back_centre_first(self):
+        from tiderace import charts
+        bbox = (-72.0, 41.0, -71.0, 42.0)
+        cells = charts.cells_for(bbox, limit=4)
+        cy, cx = 41.5, -71.5
+        import math
+        d = [math.hypot((charts.cell_bbox(iy, ix)[1] + charts.cell_bbox(iy, ix)[3]) / 2 - cy,
+                        (charts.cell_bbox(iy, ix)[0] + charts.cell_bbox(iy, ix)[2]) / 2 - cx)
+             for iy, ix in cells]
+        self.assertEqual(d, sorted(d), "nearest the middle of the screen first")
+
+    def test_requests_outside_the_served_water_are_empty(self):
+        from tiderace import charts
+        self.assertEqual(charts.cells_for((-130, 30, -120, 40)), [])
+
+    def test_depth_layers_fall_through_the_bands(self):
+        from tiderace import charts
+        # The harbour band has thousands of soundings off Montauk and NOTHING
+        # on the shelf; coastal and general are the opposite. One band cannot
+        # serve someone who runs offshore.
+        self.assertEqual(charts.BAND_ORDER[0], "enc_harbour")
+        self.assertIn("enc_coastal", charts.BAND_ORDER)
+        for band in charts.BAND_ORDER:
+            self.assertIn("soundings", charts.BAND_LAYERS[band])
+            self.assertIn("contours", charts.BAND_LAYERS[band])
+
+    def test_the_band_is_never_swapped_through_a_global(self):
+        # The server is threaded; two cells can be in flight at once, and
+        # mutating a module-level BAND would hand one request the other's band.
+        import inspect
+        from tiderace import charts
+        src = inspect.getsource(charts.fetch_banded)
+        self.assertNotIn("global BAND", src)
+        self.assertIn("band=band", src)
+
+    def test_the_cell_route_precedes_the_generic_one(self):
+        # startswith("/charts/") is a prefix match and swallowed
+        # /charts/cell/... as a layer name, so every cell 404ed.
+        import pathlib as _p
+        src = (_p.Path(__file__).parent / "tiderace" / "server.py").read_text()
+        self.assertLess(src.index('startswith("/charts/cell/")'),
+                        src.index('url.path.startswith("/charts/"):'))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
