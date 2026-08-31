@@ -101,6 +101,47 @@ def snapshot(spot_key: str | None, when: datetime, species: str | None = None,
             if k not in ("time", "spot") and not isinstance(v, datetime)}
 
 
+# Two taps on a phone are one intention. A double-tap on the save button wrote
+# a real trip and then a blank three seconds later at the same coordinate, and
+# the blank went into a log with three entries in it -- a 33% corruption of the
+# scarcest data in the project. The client is now guarded too, but the log is
+# the thing that has to be right, so it refuses the duplicate itself.
+#
+# Deliberately narrow: same spot, same species, same count, within a minute.
+# Two genuinely separate drifts on one piece of water an hour apart are two
+# trips and must both survive.
+DUPLICATE_WINDOW_S = 60
+
+
+class DuplicateEntry(ValueError):
+    """A trip that looks like the previous one submitted seconds ago."""
+
+
+def _is_duplicate(entry: Entry, rows: list[dict]) -> bool:
+    # Count is deliberately NOT compared. The double-tap that started this
+    # wrote 2 fish and then a blank at the same coordinate three seconds later,
+    # so a rule keyed on matching counts would have missed the only case it
+    # exists to catch. Same water, same fish, seconds apart is one intention
+    # however the numbers came out.
+    if not rows:
+        return False
+    last = rows[-1]
+    if last.get("spot") != entry.spot or last.get("species") != entry.species:
+        return False
+    try:
+        prev = datetime.fromisoformat(last["logged_at"])
+    except (KeyError, ValueError):
+        return False
+    # entry.logged_at is already set by the caller; using it rather than "now"
+    # keeps a queued offline flush honest -- those arrive together but describe
+    # trips minutes or hours apart.
+    try:
+        this = datetime.fromisoformat(entry.logged_at)
+    except (TypeError, ValueError):
+        this = datetime.now()
+    return abs((this - prev).total_seconds()) <= DUPLICATE_WINDOW_S
+
+
 def record(entry: Entry, path: str = LOG_PATH) -> Entry:
     # A trip logged against a known spot still gets its coordinate written
     # down. Spot keys can be renamed or retired; 41.4408,-71.4228 cannot.
@@ -124,6 +165,13 @@ def record(entry: Entry, path: str = LOG_PATH) -> Entry:
     if entry.license_holder is None:
         entry.license_holder = cfg.get("license_holder")
     entry.logged_at = datetime.now().isoformat(timespec="seconds")
+
+    # Checked here rather than in the caller so every route in -- the web form,
+    # a queued offline flush, the CLI -- is covered by the same rule.
+    if _is_duplicate(entry, load(path)):
+        raise DuplicateEntry(
+            f"a {entry.species} trip with {entry.count} fish was already logged "
+            f"at {entry.spot} moments ago — not saving it twice")
 
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "a") as fh:

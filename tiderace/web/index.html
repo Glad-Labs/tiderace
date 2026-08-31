@@ -184,8 +184,30 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 }
 #loading.hide{display:none}
 @media (max-width:900px){
-  #app{grid-template-columns:1fr; grid-template-rows:1fr 300px}
-  #panel{border-left:none; border-top:1px solid var(--hair)}
+  /* One surface, not two. The panel used to sit in a 300px strip under the
+     map while the conditions sheet slid over the top of it -- two scrolling
+     regions competing for a phone screen, with the map squeezed into what was
+     left. Now the map has the whole screen and the panel is moved bodily into
+     the sheet (see adoptPanel), so there is exactly one thing to read and it
+     is the thing you pulled up. */
+  #app{grid-template-columns:1fr; grid-template-rows:1fr}
+  #panel{display:none}
+  #sheet{max-height:92vh}
+  #sheet.peek{transform:translateY(calc(100% - 210px))}
+  /* Everything a thumb has to hit, sized for a thumb. */
+  .srow{padding:14px 16px}
+  .srow .k{font-size:13px; width:36%}
+  .srow .v{font-size:21px}
+  .srow .v small{font-size:12px}
+  .sgroup{font-size:11px; letter-spacing:.18em; padding:16px 16px 6px}
+  .srule{font-size:13px; line-height:1.55}
+  .sdim{font-size:12px; line-height:1.6}
+  #sheethead b{font-size:19px}
+  #adopted{padding:0 4px 8px}
+  #adopted .card, #adopted .box{font-size:14px}
+  #adopted h3{font-size:17px}
+  #adopted dt, #adopted dd{font-size:13px}
+  #adopted .row{min-height:52px}
   /* The scrubber is absolutely positioned inside the map wrapper, not the
      app grid, so it needs no offset for the panel here -- the panel is a
      sibling below the map, already out of the way. Offsetting by the panel
@@ -900,7 +922,10 @@ async function loadCharts(){
         'circle-stroke-color': 'rgba(11,21,24,.85)'
       }
     }, undefined);
-    map.on('click', 'c-' + l.name, e => chartPopup(e, l.name));
+    // No per-layer click handler: MapLibre hit-tests the exact pixel, and a
+    // three-pixel rock is not something a thumb hits on a moving boat. The
+    // main map click queries a padded box instead and picks the nearest.
+
     map.on('mouseenter', 'c-' + l.name, () => map.getCanvas().style.cursor = 'pointer');
     map.on('mouseleave', 'c-' + l.name, () => map.getCanvas().style.cursor = '');
   }
@@ -1378,12 +1403,36 @@ map.on('click', e => {
   // and the map would silently stop answering.
   const clickable = ((map.getStyle() || {}).layers || [])
     .map(l => l.id)
-    .filter(id => (id === 'bait' ||
-                   (id.startsWith('c-') &&
+    .filter(id => (id === 'bait' || id === 'structure' ||
+                   (id.startsWith('c-') && !id.endsWith('-lbl') &&
                     (CHART_STYLE[id.slice(2)] || {}).kind !== 'fill'))
                   && map.getLayer(id));
-  if (clickable.length && map.queryRenderedFeatures(e.point, {layers: clickable}).length)
-    return;
+
+  // A finger is about 9 mm across; a charted rock is three pixels. Query a box
+  // around the tap rather than the pixel under it, and take whatever is nearest
+  // its centre -- so a near miss opens the rock you meant instead of silently
+  // falling through to "report at this coordinate", which is what made this
+  // feel like it took several tries.
+  const PAD = matchMedia('(pointer:coarse)').matches ? 14 : 6;
+  if (clickable.length){
+    const box = [[e.point.x - PAD, e.point.y - PAD],
+                 [e.point.x + PAD, e.point.y + PAD]];
+    const hits = map.queryRenderedFeatures(box, {layers: clickable});
+    if (hits.length){
+      let best = hits[0], bestD = Infinity;
+      for (const f of hits){
+        const g = f.geometry || {};
+        if (g.type !== 'Point'){ best = f; break; }
+        const pt = map.project(g.coordinates);
+        const d = Math.hypot(pt.x - e.point.x, pt.y - e.point.y);
+        if (d < bestD){ bestD = d; best = f; }
+      }
+      const layer = best.layer && best.layer.id;
+      if (layer && layer.startsWith('c-'))
+        chartPopup(Object.assign({}, e, {features:[best]}), layer.slice(2));
+      return;
+    }
+  }
   reportAt(e.lngLat.lat, e.lngLat.lng);
   // On a phone the sheet IS the answer -- the side panel is off-screen and
   // the forecast is not what you want mid-drift anyway. showConditions is
@@ -1547,8 +1596,13 @@ window.surveyURL = (lat, lon) =>
       h += `<div class="sdim">${d.binding_warnings.map(esc).join('<br>')}</div>`;
 
     h += logSection(d);
+    // render() replaces the sheet's contents, which would strand the adopted
+    // panel. Detach it first, rebuild, then put it back at the bottom.
+    if (adopted && adopted.parentNode === body) adopted.remove();
     body.innerHTML = h;
     wireLog(d);
+    if (adopted) body.appendChild(adopted);
+    adoptPanel();
   }
 
 
@@ -1601,8 +1655,52 @@ window.surveyURL = (lat, lon) =>
         form.scrollIntoView({behavior: 'smooth', block: 'nearest'});
       }
     };
+    let submitting = false, armed = false, armTimer = null, armedAt = 0;
+    const save = () => document.getElementById('slogsave');
+
     form.onsubmit = async e => {
       e.preventDefault();
+      // Two taps on a phone are one intention. The first submit disables the
+      // button outright; without this a double-tap wrote a real trip and then a
+      // blank three seconds later into a log that had three entries in it.
+      if (submitting) return;
+
+      // And a blank is the specific thing a stray tap produces, so it has to be
+      // deliberate. Blanks matter -- a model trained only on good days learns
+      // every day is good -- but they should be chosen, not fallen into. The
+      // button changes text, so the second tap of a double-tap lands on a
+      // control that has not appeared yet.
+      const n = Number(form.querySelector('[name=count]').value || 0);
+      if (n === 0 && !armed) {
+        armed = true;
+        const b = save();
+        b.textContent = 'Confirm: no fish';
+        b.style.background = 'var(--warn)';
+        // 900ms, not 450: a "double tap" on a boat is not the 300ms browsers
+        // mean by it -- it is two deliberate presses a moment apart, and 450
+        // was inside that. The button stays dead until well past any plausible
+        // second press, and the disabled state is checked in code too, because
+        // a disabled attribute alone does not stop every path to submit.
+        b.disabled = true;
+        setTimeout(() => { b.disabled = false; }, 900);
+        armedAt = Date.now();
+        clearTimeout(armTimer);
+        armTimer = setTimeout(() => {
+          armed = false; b.textContent = 'Save this trip';
+          b.style.background = '';
+        }, 6000);
+        return;
+      }
+      // Belt and braces: even if a submit arrives while the button is disabled
+      // -- a stray Enter, an autofill, a synthetic event -- refuse it until the
+      // arming window has actually elapsed.
+      if (armed && Date.now() - armedAt < 900) return;
+      clearTimeout(armTimer);
+      submitting = true;
+      const btn = save();
+      btn.disabled = true;
+      btn.textContent = 'saving…';
+
       const sel = document.getElementById('species');
       const f = new FormData(form);
       const body = {
@@ -1617,10 +1715,16 @@ window.surveyURL = (lat, lon) =>
 
       const msg = document.getElementById('slogmsg');
       msg.className = ''; msg.textContent = 'saving…';
+      const release = () => {
+        submitting = false; armed = false;
+        const b = save();
+        if (b) { b.disabled = false; b.textContent = 'Save this trip'; b.style.background = ''; }
+      };
       try { await queueAdd(body); }
       catch (err) {
         msg.className = 'err';
         msg.textContent = 'could not save: ' + err.message;
+        release();
         return;
       }
       form.reset();
@@ -1637,9 +1741,42 @@ window.surveyURL = (lat, lon) =>
         msg.innerHTML = `<span style="color:var(--warn)">held on this phone` +
                         ` · ${n} waiting to sync</span>`;
       }
+      release();
       if (typeof refreshNetState === 'function') refreshNetState();
       if (typeof loadBait === 'function' && MAP_READY) loadBait();
     };
+  }
+
+  /* On a phone the panel is not hidden and duplicated -- it is moved. The same
+     DOM node lives in the sidebar on desktop and inside the sheet on mobile, so
+     there is one copy of the ranked list, the rules and the mark card, and
+     every handler already bound to them keeps working. Duplicating the markup
+     would have meant two of everything drifting apart. */
+  const MOBILE = () => window.matchMedia('(max-width:900px)').matches;
+  let adopted = null;
+
+  function adoptPanel(){
+    const panel = document.getElementById('panel');
+    if (!panel) return;
+    if (MOBILE()){
+      if (adopted) return;
+      adopted = document.createElement('div');
+      adopted.id = 'adopted';
+      while (panel.firstChild) adopted.appendChild(panel.firstChild);
+      body.appendChild(adopted);
+    } else if (adopted){
+      while (adopted.firstChild) panel.appendChild(adopted.firstChild);
+      adopted.remove();
+      adopted = null;
+    }
+  }
+  window.adoptPanel = adoptPanel;
+  addEventListener('resize', adoptPanel);
+  // With the sidebar gone there has to be something to grab. Peek shows the
+  // grip and the top of the list without covering the map.
+  if (MOBILE()){
+    adoptPanel();
+    sheet.classList.add('up', 'peek');
   }
 
   async function show(lat, lon, label){

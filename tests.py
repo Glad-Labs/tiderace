@@ -2568,7 +2568,10 @@ class CoordinateLogging(unittest.TestCase):
     def test_the_sheet_posts_a_coordinate_not_a_spot_key(self):
         import pathlib as _p
         page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
-        body = page.split("function wireLog")[1][:1800]
+        # Whole function, not a fixed slice: I have now written this test three
+        # times with a character window that later edits pushed the assertion
+        # past, which fails green-to-red for no reason but the window.
+        body = page.split("function wireLog")[1].split("\n  }")[0]
         self.assertIn("lat: d.lat", body)
         self.assertIn("lon: d.lon", body)
         self.assertNotIn("spot:", body,
@@ -2578,7 +2581,7 @@ class CoordinateLogging(unittest.TestCase):
         # A trip you did not record is gone; one that has not synced is fine.
         import pathlib as _p
         page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
-        body = page.split("function wireLog")[1][:2200]
+        body = page.split("function wireLog")[1].split("\n  }")[0]
         self.assertLess(body.index("queueAdd"), body.index("flushQueue"),
                         "must write to the phone before trying the network")
 
@@ -2634,6 +2637,83 @@ class ChartCoverage(unittest.TestCase):
         page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
         self.assertIn("lazy: true", page, "soundings must be deferred")
         self.assertIn("st.lazy && !CHART_ON[l.name]", page)
+
+
+class DoubleTap(unittest.TestCase):
+    """A double-tap on save must not become two trips.
+
+    This is not hypothetical. Two fluke were logged at Second Beach and a blank
+    landed at the same coordinate three seconds later, in a catch log that had
+    three entries in it -- a third of the scarcest data in the project, created
+    by one stray tap.
+    """
+
+    def setUp(self):
+        import tempfile, os
+        self.path = os.path.join(tempfile.mkdtemp(), "log.jsonl")
+
+    def _entry(self, count, spot="at:41.45040,-71.31600", species="fluke"):
+        from tiderace import log as catchlog
+        return catchlog.Entry(spot=spot, species=species, count=count,
+                              started_at="2026-08-30T22:00", conditions={"x": 1})
+
+    def test_the_exact_incident_is_refused(self):
+        from tiderace import log as catchlog
+        catchlog.record(self._entry(2), self.path)
+        with self.assertRaises(catchlog.DuplicateEntry):
+            catchlog.record(self._entry(0), self.path)     # the accidental blank
+        self.assertEqual(len(catchlog.load(self.path)), 1)
+
+    def test_count_is_not_part_of_the_match(self):
+        # A rule keyed on matching counts would have missed the only case it
+        # exists to catch: the stray tap wrote 0 where the real trip wrote 2.
+        from tiderace import log as catchlog
+        catchlog.record(self._entry(2), self.path)
+        for n in (0, 1, 2, 7):
+            with self.assertRaises(catchlog.DuplicateEntry):
+                catchlog.record(self._entry(n), self.path)
+
+    def test_a_different_species_at_the_same_spot_is_a_real_trip(self):
+        from tiderace import log as catchlog
+        catchlog.record(self._entry(2), self.path)
+        catchlog.record(self._entry(1, species="scup"), self.path)
+        self.assertEqual(len(catchlog.load(self.path)), 2)
+
+    def test_two_drifts_an_hour_apart_both_survive(self):
+        # The guard must not eat a genuine second session on the same water.
+        from datetime import datetime, timedelta
+        from tiderace import log as catchlog
+        catchlog.record(self._entry(2), self.path)
+        rows = catchlog.load(self.path)
+        rows[-1]["logged_at"] = (datetime.now() - timedelta(hours=1)).isoformat(
+            timespec="seconds")
+        import json
+        with open(self.path, "w") as fh:
+            fh.write(json.dumps(rows[-1]) + "\n")
+        catchlog.record(self._entry(3), self.path)
+        self.assertEqual(len(catchlog.load(self.path)), 2)
+
+    def test_the_window_is_short_enough_to_be_a_tap_not_a_trip(self):
+        from tiderace import log as catchlog
+        self.assertLessEqual(catchlog.DUPLICATE_WINDOW_S, 120)
+        self.assertGreaterEqual(catchlog.DUPLICATE_WINDOW_S, 10)
+
+    def test_a_blank_needs_a_deliberate_second_press(self):
+        import pathlib as _p, re
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        body = page.split("function wireLog")[1].split("\n  }")[0]
+        self.assertIn("Confirm: no fish", body)
+        # The arming delay has to be longer than a double-tap, which on a boat
+        # is two deliberate presses rather than the 300ms a browser means.
+        m = re.search(r"armedAt < (\d+)", body)
+        self.assertTrue(m, "the arming window must be enforced in code")
+        self.assertGreaterEqual(int(m.group(1)), 700)
+
+    def test_a_second_submit_while_saving_is_dropped(self):
+        import pathlib as _p
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        body = page.split("function wireLog")[1].split("\n  }")[0]
+        self.assertIn("if (submitting) return;", body)
 
 
 if __name__ == "__main__":
