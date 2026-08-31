@@ -2400,5 +2400,77 @@ class TilePolicy(unittest.TestCase):
         self.assertLessEqual(int(z.group(1)), 15)
 
 
+class Basemap(unittest.TestCase):
+    """The offline vector basemap and the range serving it depends on."""
+
+    def test_range_parsing_covers_the_forms_pmtiles_uses(self):
+        # PMTiles reads a header, then directory pages, then tiles -- all by
+        # byte offset. Suffix ranges are used to find the footer.
+        import re as _re
+        pat = _re.compile(r"bytes=(\d*)-(\d*)$")
+        for header, want in (("bytes=0-16383", ("0", "16383")),
+                             ("bytes=100-", ("100", "")),
+                             ("bytes=-2048", ("", "2048"))):
+            m = pat.match(header)
+            self.assertIsNotNone(m, header)
+            self.assertEqual(m.groups(), want)
+        self.assertIsNone(pat.match("bytes=abc-def"))
+        self.assertIsNone(pat.match("items=0-10"))
+
+    def test_the_archive_is_never_gzipped(self):
+        # Ranges are byte offsets into the file. Compressing the body would
+        # make every offset refer to something else, and the failure would look
+        # like a corrupt archive rather than a server bug.
+        import pathlib as _p
+        src = (_p.Path(__file__).parent / "tiderace" / "server.py").read_text()
+        body = src.split("def _pmtiles")[1].split("def _send_json")[0]
+        # Strip the docstring: it says the word "gzip" precisely to explain why
+        # the code must not call it, and matching prose is not a test.
+        code = body.split('"""')[2] if body.count('"""') >= 2 else body
+        self.assertNotIn("gzip", code, "the archive must be served uncompressed")
+        self.assertIn("Accept-Ranges", body)
+        self.assertIn("Content-Range", body)
+
+    def test_the_page_gets_its_basemap_choice_synchronously(self):
+        # The style must exist when the Map is constructed; awaiting a fetch
+        # would race every layer added on 'load'.
+        import pathlib as _p
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        self.assertIn("__TIDERACE_BASEMAP__", page)
+        self.assertLess(page.index("const BASEMAP"), page.index("new maplibregl.Map"))
+
+    def test_layer_anchor_works_for_both_basemaps(self):
+        # The raster style has one layer called 'osm'; the vector style has ~70
+        # from a Protomaps flavor. 'seamark' is the one both put on top.
+        import pathlib as _p
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        fn = page.split("function ABOVE_BASEMAP")[1].split("\n}")[0]
+        # Drop comment lines: they mention 'osm' precisely to explain why the
+        # code no longer leads with it, and twice now I have written a test
+        # that matched the prose instead of the logic.
+        code = "\n".join(l for l in fn.splitlines()
+                         if not l.strip().startswith("//"))
+        self.assertIn("seamark", code, "anchor must not depend on the raster layer")
+        self.assertLess(code.index("seamark"), code.index("'osm'"),
+                        "seamark must be tried first — the vector style has no 'osm'")
+
+    def test_a_missing_extract_is_a_normal_state(self):
+        # A fresh clone has never run `tiderace basemap`. That must return None
+        # so the map falls back to the hosted API, not raise.
+        import unittest.mock as m
+        from tiderace import server as srv
+        with m.patch.object(srv, "BASEMAP_DEFAULT", "/nope/also-missing.pmtiles"):
+            self.assertIsNone(srv._basemap_path({"pmtiles_path": "/nope/missing.pmtiles"}))
+            self.assertIsNone(srv._basemap_path({}))
+
+    def test_a_configured_extract_wins_over_the_default(self):
+        import tempfile, unittest.mock as m
+        from tiderace import server as srv
+        with tempfile.NamedTemporaryFile(suffix=".pmtiles") as fh:
+            with m.patch.object(srv, "BASEMAP_DEFAULT", "/nope/missing.pmtiles"):
+                self.assertEqual(srv._basemap_path({"pmtiles_path": fh.name}),
+                                 os.path.abspath(fh.name))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

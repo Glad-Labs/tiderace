@@ -317,6 +317,11 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 </div>
 
 <script src="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.js"></script>
+<!-- pmtiles reads the single-file basemap archive; basemaps builds the layer
+     list for a Protomaps flavor. Both are cached by the service worker, or the
+     map cannot draw offline even with the tile data on disk. -->
+<script src="https://unpkg.com/pmtiles@4.3.0/dist/pmtiles.js"></script>
+<script src="https://unpkg.com/@protomaps/basemaps@5.2.0/dist/basemaps.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 let GRID = null, TI = 0, SEL = null, MARKERS = {};
@@ -335,24 +340,67 @@ function colour(s){
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
-const map = new maplibregl.Map({
-  container:'map',
-  style:{
+/* The server substitutes this at request time. The style must exist when the
+   Map is constructed, and every layer this app adds hangs off map.on('load')
+   -- swapping the style afterwards would race all of them. */
+const BASEMAP = __TIDERACE_BASEMAP__;
+
+if (window.pmtiles) {
+  maplibregl.addProtocol('pmtiles', new pmtiles.Protocol().tile);
+}
+
+const PM_ATTR = '\u00a9 <a href="https://protomaps.com">Protomaps</a> ' +
+                '\u00a9 <a href="https://openstreetmap.org">OpenStreetMap</a>';
+const SEAMARK = {type:'raster',
+  tiles:['https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png'],
+  tileSize:256, maxzoom:18,
+  attribution:'\u00a9 <a href="https://www.openseamap.org/">OpenSeaMap</a>'};
+
+/* Three cases, in order of how well they work on the water:
+     local pmtiles  one file on your own machine, draws with no internet at all
+     hosted API     needs signal, but no build step
+     OSM raster     the old path, kept so a fresh clone still shows a map
+   The basemap is vector now, so the dark look comes from a flavor rather than
+   from raster filters beaten into an unwilling image. */
+function basemapStyle() {
+  if (BASEMAP.local || BASEMAP.hosted_key) {
+    const src = BASEMAP.local
+      ? {type:'vector', url:'pmtiles://' + location.origin + BASEMAP.url,
+         attribution: PM_ATTR}
+      : {type:'vector', maxzoom:15, attribution: PM_ATTR,
+         tiles:['https://api.protomaps.com/tiles/v4/{z}/{x}/{y}.mvt?key='
+                + BASEMAP.hosted_key]};
+    return {
+      version: 8,
+      glyphs: 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf',
+      sprite: 'https://protomaps.github.io/basemaps-assets/sprites/v4/dark',
+      sources: {protomaps: src, seamark: SEAMARK},
+      layers: [
+        ...basemaps.layers('protomaps', basemaps.namedFlavor('dark'), {lang:'en'}),
+        {id:'seamark', type:'raster', source:'seamark', paint:{'raster-opacity':0.95}}
+      ]
+    };
+  }
+  return {
     version:8,
     sources:{
       osm:{type:'raster', tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
            tileSize:256, maxzoom:19,
-           attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'},
-      seamark:{type:'raster', tiles:['https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png'],
-           tileSize:256, maxzoom:18,
-           attribution:'© <a href="https://www.openseamap.org/">OpenSeaMap</a>'}
+           attribution:'\u00a9 <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'},
+      seamark: SEAMARK
     },
     layers:[
       {id:'osm', type:'raster', source:'osm',
-       paint:{'raster-saturation':-0.55,'raster-brightness-min':0.05,'raster-brightness-max':0.72,'raster-contrast':0.12}},
+       paint:{'raster-saturation':-0.55,'raster-brightness-min':0.05,
+              'raster-brightness-max':0.72,'raster-contrast':0.12}},
       {id:'seamark', type:'raster', source:'seamark', paint:{'raster-opacity':0.95}}
     ]
-  },
+  };
+}
+
+const map = new maplibregl.Map({
+  container:'map',
+  style: basemapStyle(),
   center:[-71.35, 41.53], zoom:10.2, minZoom:8, maxZoom:16, attributionControl:true
 });
 map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'top-right');
@@ -658,11 +706,18 @@ fetch('/api/meta').then(r=>r.json()).then(m => {
 // position, it is a race.
 function ABOVE_BASEMAP(){
   const ids = ((map.getStyle() || {}).layers || []).map(l => l.id);
-  const i = ids.indexOf('osm');
-  if (i === -1) return ids[0];
+  // The raster basemap is one layer called 'osm'; the vector one is ~90 layers
+  // whose names come from the Protomaps flavor, so there is nothing fixed to
+  // look for. What IS fixed is that 'seamark' sits directly on top of whichever
+  // basemap is in use -- both styles put it last -- so anchoring on it means
+  // depth shading lands above the ground and below the sea marks either way.
+  const i = ids.indexOf('seamark');
+  if (i !== -1) return ids[i];
+  const j = ids.indexOf('osm');
   // undefined when the basemap is the only layer, which appends -- and
   // appending is still directly above it.
-  return ids[i + 1];
+  if (j !== -1) return ids[j + 1];
+  return ids[0];
 }
 
 async function loadCharts(){

@@ -18,6 +18,7 @@ import mimetypes
 import subprocess
 import sys
 import os
+import re
 import threading
 import traceback
 from datetime import datetime, timedelta
@@ -138,6 +139,27 @@ def point_report(lat: float, lon: float, species: str, hours: int) -> dict:
     return rep
 
 
+
+# Where the basemap extract lives. Config wins so you can point at one built
+# elsewhere; otherwise the conventional path, which is what `tiderace basemap`
+# writes and what .gitignore already excludes.
+BASEMAP_DEFAULT = os.path.join(os.path.dirname(__file__), "..",
+                               "data", "pmtiles", "narragansett.pmtiles")
+
+
+def _basemap_path(cfg: dict | None = None) -> str | None:
+    """The local pmtiles extract, or None if there is not one.
+
+    Returning None rather than raising is deliberate: no local basemap is a
+    normal state -- a fresh clone has never run `tiderace basemap` -- and the
+    map falls back to the hosted API, which works fine until you lose signal.
+    """
+    cfg = cfg or {}
+    for cand in (cfg.get("pmtiles_path"), BASEMAP_DEFAULT):
+        if cand and os.path.isfile(cand):
+            return os.path.abspath(cand)
+    return None
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -169,6 +191,74 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _pmtiles(self):
+        """Serve the basemap extract with byte-range support.
+
+        PMTiles is a single file that the client reads in pieces -- a header,
+        then directory pages, then individual tiles -- so range requests are
+        not an optimisation here, they are the entire access pattern. Without
+        a 206 the library falls back to fetching the whole archive to read one
+        tile, which on a phone means a hundred megabytes to draw one square.
+
+        Deliberately never gzipped: the ranges are byte offsets into the file,
+        and compressing the body would make them refer to nothing. The tile
+        data inside is already compressed anyway.
+        """
+        from . import config as _cfg
+        path = _basemap_path(_cfg.load())
+        if not path:
+            return self._send_json(
+                {"error": "no local basemap — run: tiderace basemap"}, 404)
+
+        size = os.path.getsize(path)
+        rng = self.headers.get("Range")
+        start, end = 0, size - 1
+        status = 200
+
+        if rng:
+            m = re.match(r"bytes=(\d*)-(\d*)$", rng.strip())
+            if not m:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            a, b = m.group(1), m.group(2)
+            if a == "":                      # suffix range: last N bytes
+                if b == "":
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.end_headers()
+                    return
+                start, end = max(0, size - int(b)), size - 1
+            else:
+                start = int(a)
+                end = int(b) if b else size - 1
+            if start >= size or start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            end = min(end, size - 1)
+            status = 206
+
+        length = end - start + 1
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            body = fh.read(length)
+
+        self.send_response(status)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        # A basemap extract changes when you rebuild it, not between requests.
+        # Letting the browser and the service worker hold it is the whole point.
+        self.send_header("Cache-Control", "public, max-age=604800")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _send_json(self, obj, status: int = 200):
         self._send(json.dumps(obj, default=str).encode(), "application/json", status)
@@ -248,6 +338,25 @@ class Handler(BaseHTTPRequestHandler):
                                          include_slow=not fast))
                 except ValueError as exc:
                     return self._send_json({"error": str(exc)}, 400)
+            if url.path == "/basemap.pmtiles":
+                return self._pmtiles()
+            if url.path == "/api/basemap":
+                # The page needs to know which basemap to build a style for
+                # before it draws anything.
+                from . import config as _cfg
+                c = _cfg.load()
+                path = _basemap_path(c)
+                return self._send_json({
+                    "local": bool(path),
+                    "url": "/basemap.pmtiles" if path else None,
+                    "bytes": (os.path.getsize(path) if path else None),
+                    # The hosted key is public by necessity -- the browser
+                    # fetches tiles directly -- but it is only handed out when
+                    # there is no local extract to prefer.
+                    "hosted_key": (None if path else c.get("protomaps_key")),
+                    "attribution": "© <a href=\"https://protomaps.com\">Protomaps</a> "
+                                   "© <a href=\"https://openstreetmap.org\">OpenStreetMap</a>",
+                })
             if url.path == "/api/charts":
                 return self._send_json({
                     "layers": [{"name": n, "label": charts.LAYERS[n][1],
@@ -363,7 +472,22 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"error": "not found"}, 404)
         ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
         with open(path, "rb") as fh:
-            self._send(fh.read(), ctype)
+            body = fh.read()
+        # The page builds its map style at construction time and cannot await a
+        # fetch to find out which basemap exists, so the answer is substituted
+        # here. One token, replaced with a JSON literal -- the alternative was
+        # constructing the map with a throwaway style and swapping it after
+        # load, which races every layer the map adds on 'load'.
+        if safe == "index.html" and b"__TIDERACE_BASEMAP__" in body:
+            from . import config as _cfg
+            c = _cfg.load()
+            local = _basemap_path(c)
+            body = body.replace(b"__TIDERACE_BASEMAP__", json.dumps({
+                "local": bool(local),
+                "url": "/basemap.pmtiles" if local else None,
+                "hosted_key": (None if local else c.get("protomaps_key")),
+            }).encode())
+        self._send(body, ctype)
 
 
 def tailscale_ip() -> tuple[str, str] | None:

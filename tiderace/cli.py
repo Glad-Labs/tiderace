@@ -143,6 +143,15 @@ def run(argv=None) -> int:
                     help="NWS marine zone (ANZ236 bay, ANZ237 RI/Block sounds)")
     cd.add_argument("--station", default="8452660", help="CO-OPS water level station")
 
+    bm = sub.add_parser("basemap", help="build the offline vector basemap")
+    bm.add_argument("--bbox", default="-71.95,40.95,-71.10,41.80",
+                    help="min_lon,min_lat,max_lon,max_lat (default: the bay "
+                         "through Block Island to the wind farm)")
+    bm.add_argument("--maxzoom", type=int, default=14)
+    bm.add_argument("--build", default=None,
+                    help="Protomaps daily build date, YYYYMMDD (default: yesterday)")
+    bm.add_argument("--out", default=None)
+
     sv = sub.add_parser("survey", help="every condition at one place and time")
     sv.add_argument("coord", nargs="?", default="41.4408,-71.4228",
                     help="lat,lon (default: Whale Rock)")
@@ -212,6 +221,8 @@ def run(argv=None) -> int:
         return _cmd_scrape(args)
     if args.cmd == "review":
         return _cmd_review(args)
+    if args.cmd == "basemap":
+        return _cmd_basemap(args)
     if args.cmd == "survey":
         return _cmd_survey(args)
     if args.cmd == "whales":
@@ -464,6 +475,48 @@ def _res(m):
         return f"{m}m"
     km = m / 1000
     return f"{km:.1f}km" if km < 10 else f"{km:.0f}km"
+
+
+def _cmd_basemap(args) -> int:
+    """Cut a local vector basemap out of the Protomaps planet build.
+
+    This is the only route to a basemap that works with no signal at all. The
+    OSM raster tiles cannot legally be pre-seeded, so panning at the dock is
+    the best they can ever do; a pmtiles extract is one file on your own disk
+    that draws anywhere in the box, whether or not you have ever been there.
+    """
+    import shutil
+    import subprocess
+    from datetime import date, timedelta
+
+    exe = shutil.which("pmtiles") or os.path.expanduser("~/.local/bin/pmtiles")
+    if not os.path.isfile(exe):
+        print("pmtiles CLI not found. Install from:")
+        print("  https://github.com/protomaps/go-pmtiles/releases")
+        print("and put it on PATH or at ~/.local/bin/pmtiles")
+        return 1
+
+    # Yesterday, because today's build may not have finished.
+    build = args.build or (date.today() - timedelta(days=1)).strftime("%Y%m%d")
+    src = f"https://build.protomaps.com/{build}.pmtiles"
+    out = args.out or os.path.join(os.path.dirname(__file__), "..",
+                                   "data", "pmtiles", "narragansett.pmtiles")
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+
+    print(f"  source  {src}")
+    print(f"  bbox    {args.bbox}")
+    print(f"  maxzoom {args.maxzoom}")
+    print("  (the extract reads only the tiles in the box, not the planet)\n")
+    r = subprocess.run([exe, "extract", src, out,
+                        f"--bbox={args.bbox}", f"--maxzoom={args.maxzoom}"])
+    if r.returncode != 0:
+        print("\nextract failed — if the build date 404s, try an older --build")
+        return r.returncode
+
+    size = os.path.getsize(out)
+    print(f"\n  wrote {out}  ({size/1e6:.1f} MB)")
+    print("  restart the server to pick it up:  systemctl --user restart tiderace")
+    return 0
 
 
 def _cmd_survey(args) -> int:

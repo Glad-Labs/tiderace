@@ -34,3 +34,13 @@ data/review_queue.jsonl
 *.egg-info/
 build/
 dist/
+
+# Fetched-response cache (iNaturalist, CO-OPS, NDBC, satellite). Entirely
+# regenerable, 16 MB and growing, and it was swept into a commit by a careless
+# `git add -A` -- which is exactly the kind of thing an ignore rule is for.
+data/cache/
+
+# Basemap tiles. A Rhode Island pmtiles extract is 100-200 MB of someone
+# else's data; it belongs on the machine, not in the history.
+data/pmtiles/
+*.pmtiles

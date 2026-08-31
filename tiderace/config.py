@@ -34,6 +34,15 @@ DEFAULTS = {
     # Free key from https://ebird.org/api/keygen. Kept in the gitignored local
     # config, never committed.
     "ebird_key": None,
+    # Protomaps basemap key. Same rule: gitignored local config only. This one
+    # is served to the browser by necessity -- the map fetches tiles directly --
+    # so it is a public-by-design key, not a secret. It still does not belong in
+    # a public repository, where it would be scraped and burned.
+    "protomaps_key": None,
+    # Local pmtiles extract, if you have one. Set by `tiderace basemap`. When
+    # present it is preferred over the hosted API: it works with no internet at
+    # all, which the hosted one cannot.
+    "pmtiles_path": None,
 }
 
 

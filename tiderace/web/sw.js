@@ -34,7 +34,7 @@
 // is genuinely confusing during development -- a browser check against a
 // stale cache proves nothing, which is how a debug probe survived one round
 // of "verification" here.
-const SHELL = 'tiderace-shell-v7';
+const SHELL = 'tiderace-shell-v8';
 const TILES = 'tiderace-tiles-v1';
 
 // About 55 MB of raster tiles: enough for the bay at working zoom plus wherever
@@ -50,7 +50,12 @@ const SHELL_URLS = [
   '/', '/static/manifest.webmanifest',
   '/static/icon-192.png', '/static/icon-512.png',
   'https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.js',
-  'https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.css'
+  'https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.css',
+  // The basemap is vector now: pmtiles reads the archive, basemaps builds the
+  // layer list. Without these two cached the map cannot draw offline even
+  // though the tile data is sitting on the disk right there.
+  'https://unpkg.com/pmtiles@4.3.0/dist/pmtiles.js',
+  'https://unpkg.com/@protomaps/basemaps@5.2.0/dist/basemaps.js'
 ];
 
 self.addEventListener('install', e => {
@@ -76,6 +81,12 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET') return;              // POSTs are queued client-side
+
+  // The basemap archive is ours, served from this origin, and read by range
+  // requests. Range responses cannot usefully live in the Cache API -- a
+  // cached 206 answers exactly one byte range -- so it is left to the HTTP
+  // cache, which does understand ranges and is told to hold it for a week.
+  if (url.pathname === '/basemap.pmtiles') return;
 
   // Tiles: keep the ones actually viewed, never fetch ahead. The note at the
   // top explains why that difference matters more than the size does.
