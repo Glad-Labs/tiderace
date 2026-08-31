@@ -321,47 +321,47 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   #sheet.peek{transform:translateY(calc(100% - 210px))}
   /* Everything a thumb has to hit, sized for a thumb. */
   .srow{padding:14px 16px}
-  .srow .k{font-size:14px; width:36%}
-  .srow .v{font-size:22px}
-  .srow .v small{font-size:13px}
-  .sgroup{font-size:12px; letter-spacing:.18em; padding:16px 16px 6px}
-  .srule{font-size:14px; line-height:1.6}
-  .sdim{font-size:13px; line-height:1.65}
-  #sheethead b{font-size:20px}
+  .srow .k{font-size:calc(14px * var(--ui, 1)); width:36%}
+  .srow .v{font-size:calc(22px * var(--ui, 1))}
+  .srow .v small{font-size:calc(13px * var(--ui, 1))}
+  .sgroup{font-size:calc(12px * var(--ui, 1)); letter-spacing:.18em; padding:16px 16px 6px}
+  .srule{font-size:calc(14px * var(--ui, 1)); line-height:1.6}
+  .sdim{font-size:calc(13px * var(--ui, 1)); line-height:1.65}
+  #sheethead b{font-size:calc(20px * var(--ui, 1))}
   /* Type, sized for reading at arm's length in sunlight with salt on the
      screen. The first attempt at this guessed selectors that do not exist
      (.box, .row) and changed nothing; these are the real ones, taken from the
      stylesheet above. Everything roughly +3px, and nothing left under 12. */
   #adopted{padding:0 2px 8px}
-  #adopted .ph{font-size:12px; letter-spacing:.16em; padding-top:4px}
+  #adopted .ph{font-size:calc(12px * var(--ui, 1)); letter-spacing:.16em; padding-top:4px}
   #adopted .card{padding:14px}
-  #adopted .card h3{font-size:19px}
-  #adopted .card .sub{font-size:12px}
-  #adopted .big{font-size:42px}
-  #adopted .kv{font-size:14px; gap:6px 14px}
-  #adopted .why{font-size:14px; line-height:1.55}
-  #adopted .regs, #adopted #regs, #adopted #regsbox{font-size:14px; line-height:1.6}
+  #adopted .card h3{font-size:calc(19px * var(--ui, 1))}
+  #adopted .card .sub{font-size:calc(12px * var(--ui, 1))}
+  #adopted .big{font-size:calc(42px * var(--ui, 1))}
+  #adopted .kv{font-size:calc(14px * var(--ui, 1)); gap:6px 14px}
+  #adopted .why{font-size:calc(14px * var(--ui, 1)); line-height:1.55}
+  #adopted .regs, #adopted #regs, #adopted #regsbox{font-size:calc(14px * var(--ui, 1)); line-height:1.6}
   /* The ranked list is the thing you actually read on the water. */
-  #adopted .rank button{min-height:58px; padding:10px 12px; font-size:16px}
-  #adopted .rank .s{font-size:19px}
-  #adopted .rank .m{font-size:13px}
-  #adopted .empty{font-size:15px; line-height:1.6}
-  #adopted .note{font-size:13px; line-height:1.55}
-  #adopted .conf{font-size:12px; padding:3px 7px}
-  #adopted .markwarn{font-size:13px; line-height:1.55}
-  #adopted .markwin{font-size:14px; min-height:44px; align-items:center}
-  #adopted #layers h4{font-size:12px}
-  #adopted #layers label{font-size:15px; min-height:44px; gap:10px}
-  #adopted #layers .cnt{font-size:12px}
-  #adopted .ok, #adopted .err{font-size:13px}
+  #adopted .rank button{min-height:calc(58px * var(--ui, 1)); padding:10px 12px; font-size:calc(16px * var(--ui, 1))}
+  #adopted .rank .s{font-size:calc(19px * var(--ui, 1))}
+  #adopted .rank .m{font-size:calc(13px * var(--ui, 1))}
+  #adopted .empty{font-size:calc(15px * var(--ui, 1)); line-height:1.6}
+  #adopted .note{font-size:calc(13px * var(--ui, 1)); line-height:1.55}
+  #adopted .conf{font-size:calc(12px * var(--ui, 1)); padding:3px 7px}
+  #adopted .markwarn{font-size:calc(13px * var(--ui, 1)); line-height:1.55}
+  #adopted .markwin{font-size:calc(14px * var(--ui, 1)); min-height:calc(44px * var(--ui, 1)); align-items:center}
+  #adopted #layers h4{font-size:calc(12px * var(--ui, 1))}
+  #adopted #layers label{font-size:calc(15px * var(--ui, 1)); min-height:calc(44px * var(--ui, 1)); gap:10px}
+  #adopted #layers .cnt{font-size:calc(12px * var(--ui, 1))}
+  #adopted .ok, #adopted .err{font-size:calc(13px * var(--ui, 1))}
   /* 16px or Safari zooms the page on focus and takes the map with it. */
-  #adopted input, #adopted select, #adopted button{font-size:16px}
-  #adopted input, #adopted select{min-height:46px; padding:10px 12px}
+  #adopted input, #adopted select, #adopted button{font-size:calc(16px * var(--ui, 1))}
+  #adopted input, #adopted select{min-height:calc(46px * var(--ui, 1)); padding:10px 12px}
   /* The top bar is a control strip, not text: it needs tap targets. */
-  #bar{font-size:15px}
-  #bar select{font-size:16px; min-height:40px}
-  label.chk{font-size:14px; gap:8px}
-  #tlabel{font-size:15px} #tsub{font-size:13px}
+  #bar{font-size:calc(15px * var(--ui, 1))}
+  #bar select{font-size:calc(16px * var(--ui, 1)); min-height:calc(40px * var(--ui, 1))}
+  label.chk{font-size:calc(14px * var(--ui, 1)); gap:8px}
+  #tlabel{font-size:calc(15px * var(--ui, 1))} #tsub{font-size:calc(13px * var(--ui, 1))}
   /* The scrubber is absolutely positioned inside the map wrapper, not the
      app grid, so it needs no offset for the panel here -- the panel is a
      sibling below the map, already out of the way. Offsetting by the panel
@@ -434,6 +434,38 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 <script src="https://unpkg.com/@protomaps/basemaps@5.2.0/dist/basemaps.js"></script>
 <script>
 const $ = s => document.querySelector(s);
+
+/* ---- the viewport can lie ---------------------------------------------
+ * Chrome's "Desktop site" toggle overrides <meta name=viewport> and reports
+ * 980 CSS pixels on a phone whose screen is about 412. Everything is then
+ * scaled down by 2.4x on the way to the glass, so 22px type arrives at nine
+ * and the app is unreadable while every measurement inside it says the sizes
+ * are correct. That is exactly what the diagnostics line showed.
+ *
+ * The page cannot turn that setting off. It can notice and compensate: --ui
+ * multiplies every font size and tap target in the touch stylesheet, so the
+ * app comes out the same physical size either way.
+ *
+ * screen.width is in the same CSS pixels as innerWidth, so their ratio is the
+ * shrink factor being applied. On a normal phone it is ~1 and nothing changes.
+ */
+function uiScale(){
+  if (!matchMedia('(pointer:coarse)').matches) return 1;
+  const real = Math.min(screen.width || 0, screen.height || 0) || innerWidth;
+  if (!innerWidth || !real) return 1;
+  // Clamped: 1 means "the viewport is honest", 2.6 stops a strange reading
+  // from blowing the layout apart.
+  return Math.min(2.6, Math.max(1, innerWidth / real));
+}
+
+function applyUiScale(){
+  const k = uiScale();
+  document.documentElement.style.setProperty('--ui', k.toFixed(3));
+  return k;
+}
+applyUiScale();
+addEventListener('resize', applyUiScale);
+
 let GRID = null, TI = 0, SEL = null, MARKERS = {};
 let MARK = null, MARK_PIN = null;
 
@@ -1923,10 +1955,18 @@ const MOBILE = () =>
       `build <b>${build}</b> · viewport <b>${innerWidth}×${innerHeight}</b>` +
       ` · pointer <b>${coarse ? 'coarse' : 'fine'}</b><br>` +
       `layout <b>${mob ? 'touch' : 'desktop'}</b>` +
+      ` · ui scale <b>${getComputedStyle(document.documentElement)
+          .getPropertyValue('--ui').trim() || '1'}×</b>` +
       ` · panel <b>${inSheet ? 'in sheet' : 'in sidebar'}</b>` +
       ` · value text <b>${size || '—'}</b>` +
       (stale ? '<br><span class="warn">This looks like an old cached build — '
-             + 'close the app completely and reopen it.</span>' : '');
+             + 'close the app completely and reopen it.</span>' : '') +
+      (innerWidth > 700 && coarse
+        ? '<br><span class="warn">Chrome is reporting a ' + innerWidth
+          + 'px desktop viewport on a touch screen — "Desktop site" is on in the '
+          + '⋮ menu. Text is being scaled up to compensate; turning it off is '
+          + 'sharper.</span>'
+        : '');
   }
 
   async function show(lat, lon, label){

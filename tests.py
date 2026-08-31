@@ -2823,5 +2823,55 @@ class MapLabels(unittest.TestCase):
             self.assertIn(hook, self.page, hook)
 
 
+class ViewportLies(unittest.TestCase):
+    """Chrome's "Desktop site" reports 980 CSS px on a 412 px phone.
+
+    Everything is then scaled by ~2.4x on the way to the glass, so 22px type
+    arrives at nine and the app is unreadable while every measurement inside it
+    insists the sizes are correct. Two rounds of "make the text bigger" changed
+    nothing because nothing was wrong with the text.
+    """
+
+    def setUp(self):
+        import pathlib
+        self.page = (pathlib.Path(__file__).parent
+                     / "tiderace" / "web" / "index.html").read_text()
+        i = self.page.index("@media (max-width:900px), (pointer:coarse)")
+        self.touch = self.page[i:self.page.index("</style>", i)]
+
+    def test_the_meta_viewport_still_asks_for_the_device_width(self):
+        # The page cannot override the browser setting, but it must not be the
+        # one asking for a wide viewport.
+        self.assertIn('name="viewport"', self.page)
+        self.assertIn("width=device-width", self.page)
+
+    def test_every_touch_size_is_scalable(self):
+        import re
+        left = re.findall(r"(?:font-size|min-height):\s*[\d.]+px", self.touch)
+        self.assertEqual(left, [],
+                         f"unscaled sizes in the touch block: {left}")
+        self.assertIn("var(--ui, 1)", self.touch)
+
+    def test_the_scale_is_derived_from_the_real_screen(self):
+        fn = self.page.split("function uiScale()")[1].split("\n}")[0]
+        self.assertIn("screen.width", fn)
+        self.assertIn("innerWidth", fn)
+        self.assertIn("pointer:coarse", fn,
+                      "a mouse-driven wide window must not be scaled up")
+
+    def test_the_scale_is_clamped(self):
+        import re
+        fn = self.page.split("function uiScale()")[1].split("\n}")[0]
+        self.assertIn("Math.min", fn)
+        self.assertIn("Math.max(1", fn)
+        # Never below 1: an honest viewport must come out unchanged.
+        m = re.search(r"Math\.min\(([\d.]+)", fn)
+        self.assertTrue(m and float(m.group(1)) <= 3.0, "clamp too permissive")
+
+    def test_the_cause_is_reported_not_just_papered_over(self):
+        # Compensating silently would leave a blurry app and no way to know why.
+        self.assertIn("Desktop site", self.page)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
