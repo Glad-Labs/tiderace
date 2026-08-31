@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       provenance,
-                      bathy, cache as cachemod, llm, reconcile, reports, protected, survey, whales,
+                      bathy, cache as cachemod, voicelog, llm, reconcile, reports, protected, survey, whales,
                       madmf, regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
@@ -2767,8 +2767,12 @@ class ResponsiveLayout(unittest.TestCase):
     def test_there_are_only_the_two_breakpoints(self):
         # A third width-only query would reintroduce the same split-brain.
         import re
-        qs = re.findall(r"@media ([^{]+)\{", self.page)
-        self.assertEqual(sorted(q.strip() for q in qs),
+        qs = [q.strip() for q in re.findall(r"@media ([^{]+)\{", self.page)]
+        # Accessibility queries are not layout breakpoints. A
+        # prefers-reduced-motion rule is not a third way for the page to lay
+        # itself out, and counting it here would forbid honouring the setting.
+        layout = [q for q in qs if "width" in q or "pointer" in q]
+        self.assertEqual(sorted(layout),
                          sorted(["(max-width:900px), (pointer:coarse)",
                                  "(min-width:901px) and (pointer:fine)"]))
 
@@ -3234,19 +3238,23 @@ class MassachusettsReconcilePortability(unittest.TestCase):
     """What the RI reconciler does and does not survive."""
 
     def test_gear_keys_keep_separate_limits_apart(self):
-        """`_key` already carries sub_fishery, so MA's gear dimension needs
-        no reconciler change -- pot, hook-and-line and all-gear coexist."""
+        """The identity key already carries sub_fishery, so MA's gear
+        dimension needs no reconciler change -- pot, hook-and-line and
+        all-gear coexist."""
         st = reconcile.effective_state(_ma_corpus(), date(2026, 9, 15))
-        gears = {k[5] for k in st if k[0] == "black_sea_bass"}
+        gears = {k[4] for k in st if k[0] == "black_sea_bass"}
         self.assertIn("pot", gears)
         self.assertIn("hook_and_line", gears)
 
     def test_the_consecutive_daily_limit_coexists_with_the_daily_one(self):
         """1,200 lb over two days and 600 lb in one day are both real and
-        both in force. Keying on period is what keeps them distinct."""
+        both in force. What keeps them distinct is that the Consecutive Daily
+        programme is its own permit-gated fishery -- not that the units
+        differ. Leaning on the period made a superseded daily limit immortal
+        the moment DMF omitted the word "daily"."""
         st = reconcile.effective_state(_ma_corpus(), date(2026, 9, 15))
-        periods = {k[3] for k in st if k[0] == "black_sea_bass" and k[5] == "pot"}
-        self.assertIn("per two days", periods)
+        progs = {k[3] for k in st if k[0] == "black_sea_bass" and k[4] == "pot"}
+        self.assertEqual(progs, {None, "consecutive_daily"})
 
     def test_upcoming_surfaces_changes_before_they_land(self):
         up = reconcile.upcoming(_ma_corpus(), date(2026, 8, 15))
@@ -3262,30 +3270,148 @@ class MassachusettsReconcilePortability(unittest.TestCase):
             [n for n in _ma_corpus() if n.get("superseded_on") or n.get("successor")],
             [])
 
-    @unittest.expectedFailure
     def test_a_later_notice_retires_the_limit_it_replaces(self):
-        """FAILS TODAY. The 9/1 advisory raises pot from 500 to 600. Because
-        supersession is never declared -- MA simply states the new number --
-        `effective_state` keeps both, and reports two contradictory pot
-        limits as simultaneously in force. RIDEM never exposed this because
-        every RIDEM notice carries its own expiry."""
+        """The 9/1 advisory raises pot from 500 to 600. MA never declares
+        supersession -- it just states the new number -- so this used to
+        report two contradictory pot limits as simultaneously in force."""
         st = reconcile.effective_state(_ma_corpus(), date(2026, 9, 15))
         daily = [n["amount"]["value"] for k, n in st.items()
-                 if k[0] == "black_sea_bass" and k[5] == "pot"
-                 and k[3] != "per two days"]
+                 if k[0] == "black_sea_bass" and k[4] == "pot"
+                 and k[3] != "consecutive_daily"]
         self.assertEqual(sorted(daily), [600])
 
-    @unittest.expectedFailure
-    def test_a_closure_retires_the_opening_it_ends(self):
-        """FAILS TODAY. `change_type` is part of the key, so a season_open
-        and a season_close never compete and striped bass is reported open
-        and closed at once. In RI closures carry a dated `reopens_on` and
-        `compare` pairs them; the 8/5 MA closure runs "until it is scheduled
-        to reopen in 2027" and has no date to pair on."""
+    def test_the_retired_limit_is_kept_not_dropped(self):
+        """"pot went 500 -> 600 on 1 Sep" is the finding a licence holder
+        needs. Returning 600 alone tells them the number without telling
+        them it moved."""
         st = reconcile.effective_state(_ma_corpus(), date(2026, 9, 15))
-        seasons = {k[2] for k in st if k[0] == "striped_bass"
-                   and k[2].startswith("season")}
-        self.assertEqual(seasons, {"season_close"})
+        pot = next(n for k, n in st.items()
+                   if k[0] == "black_sea_bass" and k[4] == "pot"
+                   and k[3] != "consecutive_daily")
+        self.assertEqual([r["amount"]["value"] for r in pot["retired"]], [500])
+
+    def test_retired_history_does_not_accumulate_across_calls(self):
+        """`retired` is assigned a fresh list every call. Appending to one
+        left on the notice by an earlier run would grow history forever."""
+        corpus = _ma_corpus()
+        for _ in range(3):
+            st = reconcile.effective_state(corpus, date(2026, 9, 15))
+        pot = next(n for k, n in st.items()
+                   if k[0] == "black_sea_bass" and k[4] == "pot"
+                   and k[3] != "consecutive_daily")
+        self.assertEqual(len(pot["retired"]), 1)
+
+    def test_one_fishery_under_two_names_is_one_rule(self):
+        """DMF writes "rod and reel gear" in July and "hook and line fishers"
+        in September for the same black sea bass category. Keyed apart, the
+        superseded 250 lb limit sat beside the 300 lb one that replaced it.
+        The September notice settles it by saying "from 250 pounds to 300"."""
+        st = reconcile.effective_state(_ma_corpus(), date(2026, 9, 15))
+        line = [n for k, n in st.items()
+                if k[0] == "black_sea_bass" and k[4] == "hook_and_line"]
+        self.assertEqual([n["amount"]["value"] for n in line], [300])
+        self.assertEqual([r["amount"]["value"] for r in line[0]["retired"]], [250])
+        self.assertNotIn("rod_and_reel", {k[4] for k in st})
+
+    def test_a_closure_retires_the_opening_it_ends(self):
+        """An opening and a closure are one rule stated from opposite ends.
+        Keyed apart, the spent 6/16 opening outlived the 8/5 closure and
+        striped bass read as open and closed at once. RI hid this because its
+        closures carry a dated `reopens_on`; the MA closure runs "until it is
+        scheduled to reopen in 2027" and has no date to pair on."""
+        st = reconcile.effective_state(_ma_corpus(), date(2026, 9, 15))
+        seasons = [n["change_type"] for k, n in st.items()
+                   if k[0] == "striped_bass" and k[2] == "season"]
+        self.assertEqual(seasons, ["season_close"])
+
+
+class VoiceLog(unittest.TestCase):
+    """Spoken trip notes into log fields.
+
+    The catch log has two rows and it is not because trips go unfished -- it is
+    that logging one means typing on a phone with a rod in the other hand. This
+    is the piece that unblocks every other thing on the roadmap, so the parts a
+    model can get wrong are pinned deterministically.
+    """
+
+    def test_a_size_in_words_is_read_exactly(self):
+        # Dropped by the model about half the time. A number followed by
+        # "inch" is not a judgement call, so it does not go to a model.
+        for said, want in (("biggest about thirty two inches", 32.0),
+                           ("maybe nineteen inches", 19.0),
+                           ("a 28 inch fish", 28.0),
+                           ("19-inch fluke", 19.0),
+                           ("twenty six inches", 26.0)):
+            self.assertEqual(voicelog._size_said(said), want, said)
+
+    def test_a_depth_is_not_mistaken_for_a_fish(self):
+        # "ninety inches" is not a striped bass.
+        self.assertIsNone(voicelog._size_said("ninety inches"))
+        self.assertIsNone(voicelog._size_said("no numbers here"))
+
+    def test_the_species_you_said_beats_the_species_selected(self):
+        """Saying "fluke" with the app set to striped bass would otherwise log
+        a fluke trip as striped bass -- a quietly wrong row, and a wrong row is
+        worse than a missing one because later it is indistinguishable from a
+        real trip."""
+        self.assertEqual(voicelog._species_said("a few fluke drifting sand"), "fluke")
+        self.assertEqual(voicelog._species_said("couple of tog"), "tautog")
+        self.assertIsNone(voicelog._species_said("good day out there"))
+
+    def test_the_longest_fish_name_wins(self):
+        # "sea bass" must beat "bass", or every sea bass becomes a striper.
+        self.assertEqual(voicelog._species_said("four sea bass on the wreck"),
+                         "black_sea_bass")
+
+    def test_sizes_of_striped_bass_are_not_species(self):
+        for word in ("schoolie", "schoolies", "keeper", "keepers", "linesider"):
+            self.assertEqual(voicelog._species_said(f"two {word} tonight"),
+                             "striped_bass", word)
+
+    def test_a_spoken_blank_is_heard_as_a_blank(self):
+        """The worst failure available here. Blanks are half the signal the
+        evaluation harness has, and a blank misread as a catch puts a fish in
+        the log that never existed."""
+        for said in ("nothing today, not a touch", "no fish at all",
+                     "got skunked", "didn't catch a thing", "blanked",
+                     "never got a bite", "no luck out there"):
+            self.assertTrue(voicelog._blank_said(said), said)
+
+    def test_a_good_day_is_not_read_as_a_blank(self):
+        for said in ("two schoolies on a live eel",
+                     "four sea bass on the wreck",
+                     "nothing but big ones today"):
+            self.assertFalse(voicelog._blank_said(said), said)
+
+    def test_the_transcript_is_kept_on_the_draft(self):
+        # So a bad parse can be read back against what was actually said,
+        # months later, when nobody remembers the trip.
+        out = voicelog.parse("", species="scup")
+        self.assertIn("transcript", out)
+
+    def test_nothing_is_written_by_parsing(self):
+        """It fills the form; a human presses save. A model that mishears
+        "no fish" as "four fish" must not be able to write to the log."""
+        import inspect
+        src = inspect.getsource(voicelog)
+        # Strip docstrings and comments: the prose here says the word "write"
+        # precisely to explain why the module must not, and matching that is
+        # testing the explanation rather than the code.
+        code = "\n".join(l.split("#")[0] for l in src.splitlines())
+        for block in re.findall(r'"""[\s\S]*?"""', code):
+            code = code.replace(block, "")
+        for banned in ("catchlog", "log.record", "open(", ".write("):
+            self.assertNotIn(banned, code, f"voicelog must not persist ({banned})")
+
+    def test_audio_never_leaves_the_device(self):
+        """Transcription is the browser's; only the sentence is posted, and the
+        coordinate came from the tap before anyone spoke."""
+        import pathlib as _p
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        fn = page.split("function wireMic(")[1].split("\n  }")[0]
+        self.assertIn("SpeechRecognition", fn)
+        for banned in ("MediaRecorder", "getUserMedia", "audio/", "blob"):
+            self.assertNotIn(banned, fn, f"no audio should be captured ({banned})")
 
 
 if __name__ == "__main__":

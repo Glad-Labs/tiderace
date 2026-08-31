@@ -496,6 +496,30 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------- POST
     def do_POST(self):
         url = urlparse(self.path)
+
+        if url.path == "/api/log/voice":
+            # Transcript in, draft fields out. Deliberately does NOT write to
+            # the log: the form is filled and a human presses save, because a
+            # misheard "no fish" would otherwise put a fish that never existed
+            # into the one irreplaceable file in this project.
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                data = json.loads(self.rfile.read(n) or b"{}")
+            except Exception as exc:                              # noqa: BLE001
+                return self._send_json({"error": str(exc)}, 400)
+            text = (data.get("transcript") or "").strip()
+            if not text:
+                return self._send_json({"error": "no transcript"}, 400)
+            from . import voicelog
+            try:
+                return self._send_json(
+                    voicelog.parse(text, data.get("species")))
+            except Exception as exc:                              # noqa: BLE001
+                traceback.print_exc()
+                return self._send_json(
+                    {"error": f"could not read that: {exc}",
+                     "transcript": text}, 502)
+
         if url.path != "/api/log":
             return self._send_json({"error": "not found"}, 404)
         try:

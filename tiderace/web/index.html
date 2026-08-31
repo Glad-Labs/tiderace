@@ -407,6 +407,36 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
        bottom:calc((20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
 #timebar{ right:calc(12px / var(--ui, 1)); bottom:calc(44px / var(--ui, 1));
           left:calc(12px / var(--ui, 1)); width:auto; }
+
+/* ---- speak the trip -------------------------------------------------
+   The reason the catch log has two rows is that logging one means typing on
+   a phone with a rod in the other hand. This is the button that fixes that,
+   so it is the largest control in the sheet. */
+#slogmic{
+  width:100%; min-height:60px; margin-top:10px;
+  border:1px solid var(--hair); border-radius:12px;
+  background:var(--panel-2); color:var(--ink);
+  font:600 16px/1.2 var(--display); cursor:pointer;
+  display:flex; align-items:center; justify-content:center; gap:10px;
+}
+#slogmic:active{transform:scale(.99)}
+#slogmic.live{
+  background:var(--accent); color:#fff; border-color:transparent;
+  animation:pulse 1.4s ease-in-out infinite;
+}
+#slogmic.thinking{opacity:.6}
+#slogmic[disabled]{opacity:.4; cursor:default}
+@keyframes pulse{50%{opacity:.72}}
+@media (prefers-reduced-motion:reduce){#slogmic.live{animation:none}}
+/* What it heard, kept visible so a bad parse is obvious rather than silent. */
+#slogheard{
+  margin-top:10px; padding:11px 13px; border-radius:9px;
+  background:var(--ground); border:1px solid var(--hair);
+  font:13px/1.55 var(--mono); color:var(--ink-2); display:none;
+}
+#slogheard.show{display:block}
+#slogheard b{color:var(--ink); font-weight:600}
+#slogheard .conf{color:var(--warn)}
 </style>
 </head>
 <body>
@@ -1929,6 +1959,7 @@ window.surveyURL = (lat, lon) =>
     if (adopted && adopted.parentNode === body) adopted.remove();
     body.innerHTML = h;
     wireLog(d);
+    wireMic(d);
     if (adopted) body.appendChild(adopted);
     adoptPanel();
     fillDiag();
@@ -1954,6 +1985,8 @@ window.surveyURL = (lat, lon) =>
           Log ${esc(name)} here &nbsp;·&nbsp; ${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}
         </button>
         <form id="slogform" novalidate>
+          <button id="slogmic" type="button">🎙 Say the trip</button>
+          <div id="slogheard"></div>
           <div class="two">
             <input type="number" name="count" min="0" value="0" inputmode="numeric"
                    placeholder="fish" required>
@@ -1971,6 +2004,133 @@ window.surveyURL = (lat, lon) =>
             did not record is gone, one that has not synced yet is fine.</div>
         </form>
       </div>`;
+  }
+
+
+  /* Speech goes to text in the browser, and only the sentence comes here --
+     never audio, and never the coordinate, which came from the tap before
+     anyone spoke. Extraction then runs on Ollama on your own machine.
+
+     It fills the form. It does not save. A model that mishears "no fish" as
+     "four fish" would otherwise write a fish that never existed into the one
+     irreplaceable file in this project, and a wrong row is worse than a
+     missing one -- months later it is indistinguishable from a real trip. */
+  function wireMic(d){
+    const btn = document.getElementById('slogmic');
+    const form = document.getElementById('slogform');
+    const heard = document.getElementById('slogheard');
+    if (!btn || !form) return;
+
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR){
+      btn.disabled = true;
+      btn.textContent = 'Speech not supported in this browser';
+      return;
+    }
+
+    let rec = null, running = false;
+    const reset = () => {
+      running = false;
+      btn.classList.remove('live','thinking');
+      btn.textContent = '🎙 Say the trip';
+    };
+
+    btn.onclick = () => {
+      if (running){ try { rec.stop(); } catch(_){} return; }
+      rec = new SR();
+      rec.lang = 'en-US';
+      rec.interimResults = true;
+      // One utterance, not a dictation session: you say a sentence and stop.
+      rec.continuous = false;
+
+      let finalText = '';
+      rec.onstart = () => {
+        running = true;
+        btn.classList.add('live');
+        btn.textContent = '● Listening — tap to stop';
+        heard.className = '';
+      };
+      rec.onresult = e => {
+        let interim = '';
+        for (let i = e.resultIndex; i < e.results.length; i++){
+          const t = e.results[i][0].transcript;
+          if (e.results[i].isFinal) finalText += t; else interim += t;
+        }
+        // Show it as it comes, so a bad recognition is obvious before it is
+        // sent anywhere rather than after the form fills with nonsense.
+        heard.className = 'show';
+        heard.innerHTML = esc(finalText + interim) || '…';
+      };
+      rec.onerror = ev => {
+        reset();
+        heard.className = 'show';
+        heard.textContent = ev.error === 'not-allowed'
+          ? 'Microphone blocked. Allow it for this site and try again.'
+          : 'Did not catch that (' + ev.error + '). Tap to try again.';
+      };
+      rec.onend = async () => {
+        if (!finalText.trim()){ reset(); return; }
+        btn.classList.remove('live');
+        btn.classList.add('thinking');
+        btn.textContent = 'Reading it…';
+        try {
+          const r = await fetch('/api/log/voice', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({transcript: finalText,
+                                  species: (document.getElementById('species')||{}).value})
+          });
+          const p = await r.json();
+          if (p.error){
+            heard.className = 'show';
+            heard.innerHTML = '<b>heard:</b> ' + esc(finalText) +
+                              '<br>' + esc(p.error);
+            reset(); return;
+          }
+          applyParse(p, form, heard, finalText);
+        } catch (_) {
+          heard.className = 'show';
+          heard.innerHTML = '<b>heard:</b> ' + esc(finalText) +
+            '<br>Saved nothing — could not reach the extractor. ' +
+            'Type it in and the words are still above.';
+        }
+        reset();
+      };
+      try { rec.start(); } catch(_) { reset(); }
+    };
+  }
+
+  /* Fill, do not submit. Every field stays editable and the transcript stays
+     on screen, so the parse can be corrected before anything is written. */
+  function applyParse(p, form, heard, transcript){
+    const set = (name, val) => {
+      if (val === undefined || val === null || val === '') return;
+      const el = form.querySelector(`[name=${name}]`);
+      if (el) el.value = val;
+    };
+    set('count', p.count);
+    set('biggest_in', p.biggest_in);
+    set('method', p.method);
+    set('bait_observed', p.bait_observed);
+    const extra = [p.notes, p.released ? `released ${p.released}` : ''] 
+      .filter(Boolean).join(' · ');
+    set('notes', extra);
+
+    // A species heard that differs from the one selected is worth saying out
+    // loud rather than silently switching the whole app under you.
+    const sel = document.getElementById('species');
+    let note = '';
+    if (p.species && sel && p.species !== sel.value){
+      sel.value = p.species;
+      if (typeof loadGrid === 'function') loadGrid();
+      note = ` · switched to <b>${esc(p.species.replace('_',' '))}</b>`;
+    }
+    const conf = p.confidence && p.confidence !== 'high'
+      ? ` <span class="conf">(${esc(p.confidence)} confidence — check it)</span>` : '';
+    heard.className = 'show';
+    heard.innerHTML = '<b>heard:</b> ' + esc(transcript) + conf + note +
+                      (p.overridden ? '<br><span class="conf">' +
+                        esc(p.overridden) + '</span>' : '') +
+                      '<br>Filled in below — check it, then save.';
   }
 
   function wireLog(d) {
