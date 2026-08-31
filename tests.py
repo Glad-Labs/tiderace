@@ -2472,5 +2472,35 @@ class Basemap(unittest.TestCase):
                                  os.path.abspath(fh.name))
 
 
+class SurveyRendering(unittest.TestCase):
+    """Values that are dicts must be formatted, not stringified.
+
+    `bottom` shipped to the phone as "[object Object]". The renderer treated a
+    {bottom, quality, distance_nm} record as a scalar, and nothing caught it
+    because the survey tests check the data layer and never the drawing.
+    """
+
+    def setUp(self):
+        import pathlib
+        root = pathlib.Path(__file__).parent
+        self.page = (root / "tiderace" / "web" / "index.html").read_text()
+        self.cli = (root / "tiderace" / "cli.py").read_text()
+
+    def test_no_layer_whose_value_is_a_dict_is_rendered_raw(self):
+        # Every survey layer that returns a record needs a field pulled out of
+        # it. Passing the object itself is the bug that shipped.
+        sheet = self.page.split("function render(d)")[1][:4000]
+        for layer in ("bottom", "surface_current", "water_level_anomaly", "buoy"):
+            self.assertNotRegex(
+                sheet, r"row\('" + layer + r"',\s*(val\('" + layer + r"'\)|\w+),\s*res",
+                f"{layer} looks like it is rendered as a bare object")
+
+    def test_bottom_shows_its_distance(self):
+        # "rock" underfoot and "rock" a fifth of a mile away are different
+        # claims, and the survey is supposed to be honest about footprints.
+        self.assertIn("distance_nm", self.page.split("const bt = val('bottom')")[1][:400])
+        self.assertIn("distance_nm", self.cli.split('L.get("bottom")')[1][:400])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

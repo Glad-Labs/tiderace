@@ -1336,7 +1336,13 @@ window.surveyURL = (lat, lon) =>
     if (wl && wl.anomaly_ft != null)
       h += row('water level', `${wl.anomaly_ft > 0 ? '+' : ''}${wl.anomaly_ft.toFixed(2)} ft`,
                res('water_level_anomaly'), 'vs predicted');
-    const bt = val('bottom'); if (bt) h += row('bottom', bt, res('bottom'));
+    // bottom_at returns {bottom, quality, distance_nm} -- rendering the object
+    // gave "[object Object]" on the phone. The distance matters: a rock
+    // sounding a fifth of a mile away is a different claim from one underfoot.
+    const bt = val('bottom');
+    if (bt && bt.bottom)
+      h += row('bottom', bt.bottom, res('bottom'),
+               bt.distance_nm != null ? `nearest, ${bt.distance_nm} nm` : '');
     const st = val('structure') || {};
     const stk = Object.keys(st);
     if (stk.length)

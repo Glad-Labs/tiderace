@@ -570,8 +570,9 @@ def _cmd_survey(args) -> int:
         elif not s["charted"]:
             row("charted depth", "no chart data for this area", None)
         b = (L.get("bottom") or {}).get("value")
-        if b:
-            row("bottom", str(b), 5)
+        if b and b.get("bottom"):
+            d = b.get("distance_nm")
+            row("bottom", b["bottom"] + (f"   nearest, {d} nm" if d is not None else ""), 5)
         st = (L.get("structure") or {}).get("value") or {}
         if st:
             row("structure", ", ".join(f"{k} {v}" for k, v in st.items()), 5)
