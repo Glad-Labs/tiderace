@@ -640,27 +640,48 @@ function makeMarker(sp){
 
    Runs on move and on resize because the sheet's height changes when it is
    dragged between peek and full. */
+/* Pure so it can be tested with numbers instead of geometry: placing real
+   markers needs a real map, and the decision is the part worth being sure of.
+   Returns what to do with one marker given its box and the UI edges. */
+function markerVisibility(box, barBottom, sheetTop, sheetLeft){
+  // Behind the sheet, hide the WHOLE marker, not just its text. Keeping the
+  // dot is right over the map -- knowing a spot is up there is useful -- and
+  // wrong over an opaque panel, where it is a circle floating on the readout.
+  // Both edges are tested because the sheet is a bottom sheet on a phone and a
+  // right-hand panel on a desktop.
+  if (box.bottom > sheetTop + 4 && box.right > sheetLeft + 4)
+    return {marker: 'hidden', label: 'hidden'};
+  // Under the top bar only the text collides; the dot is still on open map.
+  if (box.top < barBottom + 4)
+    return {marker: '', label: 'hidden'};
+  return {marker: '', label: ''};
+}
+
 function clampLabels(){
-  // MARKERS is replaced, not mutated, when the grid reloads -- read the
-  // live binding rather than a captured alias.
+  // MARKERS is replaced, not mutated, when the grid reloads -- read the live
+  // binding rather than a captured alias.
   if (!MAP_READY || !MARKERS) return;
   const bar = document.getElementById('bar');
   const sheet = document.getElementById('sheet');
   const showLabels = document.getElementById('labels');
-  if (showLabels && !showLabels.checked) return;   // user turned them off
+  const wanted = !showLabels || showLabels.checked;
 
   const barBottom = bar ? bar.getBoundingClientRect().bottom : 0;
   const r = sheet ? sheet.getBoundingClientRect() : null;
-  // Only counts when the sheet is actually up; when it is translated off the
-  // bottom its rect still has a top, and using it would blank half the map.
-  const sheetTop = (r && sheet.classList.contains('up')) ? r.top : Infinity;
+  // Only counts when the sheet is actually up; translated off the bottom its
+  // rect still reports a top, and using that would blank half the map.
+  const up = r && sheet.classList.contains('up');
+  const sheetTop = up ? r.top : Infinity;
+  const sheetLeft = up ? r.left : Infinity;
 
   for (const m of Object.values(MARKERS)){
-    const lbl = m.el && m.el.querySelector('.lbl');
-    if (!lbl) continue;
-    const box = m.el.getBoundingClientRect();
-    const hidden = box.top < barBottom + 4 || box.bottom > sheetTop - 4;
-    lbl.style.visibility = hidden ? 'hidden' : '';
+    const el = m.el;
+    if (!el) continue;
+    const v = markerVisibility(el.getBoundingClientRect(),
+                               barBottom, sheetTop, sheetLeft);
+    el.style.visibility = v.marker;
+    const lbl = el.querySelector('.lbl');
+    if (lbl) lbl.style.visibility = wanted ? v.label : 'hidden';
   }
 }
 

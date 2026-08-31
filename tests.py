@@ -2812,11 +2812,32 @@ class MapLabels(unittest.TestCase):
         fn = self.page.split("function clampLabels()")[1].split("\n}")[0]
         self.assertIn("classList.contains('up')", fn)
 
-    def test_the_dot_survives_when_the_label_is_hidden(self):
-        # Knowing a spot is up there is useful; it is the text that collides.
-        fn = self.page.split("function clampLabels()")[1].split("\n}")[0]
-        self.assertIn("visibility", fn)
-        self.assertNotIn("m.el.style.display", fn)
+    def test_the_dot_survives_under_the_bar_but_not_behind_the_sheet(self):
+        """Keeping the dot is right over the map and wrong over an opaque
+        panel, where it is a circle floating on top of the readout -- which is
+        what shipped and what showed up in the screenshot."""
+        fn = self.page.split("function markerVisibility(")[1].split("\n}")[0]
+        self.assertIn("marker: 'hidden'", fn, "behind the sheet hides the marker")
+        self.assertIn("marker: '', label: 'hidden'", fn, "under the bar keeps the dot")
+
+    def test_the_sheet_test_needs_both_edges(self):
+        """The sheet is a bottom sheet on a phone and a right-hand panel on a
+        desktop. Testing only the top edge would blank every marker in the
+        lower half of a desktop map; only the left edge would blank the right
+        half of a phone map."""
+        fn = self.page.split("function markerVisibility(")[1].split("\n}")[0]
+        self.assertIn("sheetTop", fn)
+        self.assertIn("sheetLeft", fn)
+        self.assertIn("&&", fn, "both edges must hold, not either")
+
+    def test_the_decision_is_pure_so_it_can_be_checked(self):
+        # Placing real markers needs a real map; the decision is the part worth
+        # being sure of, so it takes numbers and returns a verdict.
+        self.assertIn("function markerVisibility(box, barBottom, sheetTop, sheetLeft)",
+                      self.page)
+        fn = self.page.split("function markerVisibility(")[1].split("\n}")[0]
+        for dom in ("document.", "getElementById", "getBoundingClientRect"):
+            self.assertNotIn(dom, fn, "must not touch the DOM")
 
     def test_user_toggle_and_chrome_test_use_different_properties(self):
         # display for the checkbox, visibility for the clamp -- otherwise one
