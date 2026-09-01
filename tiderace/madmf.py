@@ -94,8 +94,13 @@ GEAR_HINTS = [
     (r"all gear types", "all_gear"),
     (r"purse sein", "purse_seine"),
     (r"weir", "weir"),
-    (r"hook and line", "hook_and_line"),
-    (r"rod and reel", "rod_and_reel"),
+    # DMF calls one fishery by two names -- "rod and reel gear" in the July
+    # black sea bass advisory, "hook and line fishers" in the September one
+    # that raises it. Left as separate keys they are separate rule
+    # identities, so the superseded 250 lb limit sits next to the 300 lb one
+    # that replaced it. The notice itself settles the question by writing
+    # "from 250 pounds to 300 pounds", so they are one category here.
+    (r"hook and line|rod and reel", "hook_and_line"),
     (r"(?<!non-)(?<!non )trawl", "trawl"),
     (r"\bpot(?:ter|s|\b)", "pot"),
     (r"limited access|limited entry", "limited_access"),
@@ -122,6 +127,16 @@ UNDATED_END = re.compile(
 FORWARD_LOOKING = re.compile(
     r"(?i)\b(?:may|might|could)\s+(?:increase|decrease|be\s+"
     r"(?:increased|decreased|reduced|added))|^\s*at\s+that\s+time\b")
+
+# The Consecutive Daily Trip Limit Program is a separate, Letter-of-
+# Authorization gated programme that runs *alongside* the daily limit: a
+# potter may land 1,200 lb over two days AND is capped at 600 lb on either
+# one. Both are in force at once, so it must be marked as its own programme.
+# Leaning on the period to keep them apart is what let a superseded daily
+# limit key itself somewhere new and survive its own replacement.
+CONSECUTIVE = re.compile(
+    r"(?i)consecutive\s+(?:daily\s+trip\s+limit|calendar\s+days)"
+    r"|letter\s+of\s+authorization")
 
 
 def _mkdate(month: str, day: str, year: str | None, fallback_year: int) -> str | None:
@@ -258,6 +273,7 @@ def parse_advisory(text: str, species_hint: str | None = None) -> dict:
     One advisory yields one record per gear class it sets a limit for.
     """
     year = dateline_year(text)
+    mode = document_mode(text)
     sentences = _sentences(text)
 
     # The effective date is stated once, usually in the first operative
@@ -338,11 +354,11 @@ def parse_advisory(text: str, species_hint: str | None = None) -> dict:
                     s_eff, name, key, change,
                     {"value": int(value.replace(",", "")), "unit": unit.lower(),
                      "cross_checked": False, "agrees": None},
-                    _gear(who), _period(s), succ, conditional, s))
+                    _gear(who), _period(s), succ, conditional, s, mode))
             continue
 
         notices.append(_record(s_eff, name, key, change, amt, _gear(s),
-                               _period(s), succ, conditional, s))
+                               _period(s), succ, conditional, s, mode))
 
     notices = _dedupe(notices)
 
@@ -383,20 +399,39 @@ def _dedupe(notices: list[dict]) -> list[dict]:
     return list(best.values())
 
 
-def _record(eff, name, key, change, amt, gear, period, succ, conditional, quote) -> dict:
+def document_mode(text: str) -> str:
+    """Recreational or commercial, read once for the whole advisory.
+
+    Like the year, this is a document-level fact. DMF names it in the title
+    -- "Adjustments to Commercial Black Sea Bass Limits" -- and then writes
+    operative sentences that never repeat the word. Deciding per sentence
+    split one rule into a "commercial" July notice and an "unstated"
+    September one, which gave them different identities and let the
+    superseded July limit survive its own replacement.
+    """
+    low = text.lower()
+    if "recreational" in low and "commercial" not in low:
+        return "recreational"
+    if "commercial" in low:
+        return "commercial"
+    return "unstated"
+
+
+def _record(eff, name, key, change, amt, gear, period, succ, conditional, quote,
+            mode="unstated") -> dict:
     """Assemble a notice in exactly the shape `reconcile` consumes."""
     undated_end = bool(UNDATED_END.search(quote))
     return {
         "effective_date": eff,
         "species": name, "species_key": key,
-        # Every advisory in this corpus is commercial. DMF publishes
-        # recreational changes separately, so this is not inferred from prose
-        # the way RIDEM's is -- an unstated mode would be a parser bug here.
-        "license_mode": "commercial" if "commercial" in quote.lower() else "unstated",
+        "license_mode": mode,
         "change_type": change,
         "amount": amt,
         "period": period,
-        "aggregate_program": None,
+        # Massachusetts' equivalent of RI's Aggregate Program: a distinct
+        # permit-gated fishery whose limit stands alongside the general one
+        # rather than replacing it.
+        "aggregate_program": "consecutive_daily" if CONSECUTIVE.search(quote) else None,
         # Gear is Massachusetts' equivalent of RI's sub-fishery split, and
         # `reconcile._key` already keys on it.
         "sub_fishery": gear,

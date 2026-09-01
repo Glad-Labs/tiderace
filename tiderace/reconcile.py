@@ -34,12 +34,44 @@ from datetime import date
 from . import regs
 
 
-def _key(n: dict) -> tuple:
-    # The Aggregate Program is a distinct fishery, so its notices key
-    # separately -- comparing a 6,000 lb bi-weekly aggregate limit against the
-    # general 300 lb/day one is not a disagreement, it is a category error.
-    return (n.get("species_key"), n["license_mode"], n["change_type"],
-            n.get("period"), n.get("aggregate_program"), n.get("sub_fishery"))
+def _identity(n: dict) -> tuple:
+    """*Which rule* this notice is about, independent of what it says.
+
+    Two notices sharing an identity are the same rule at different times, so
+    the later one retires the earlier. Anything that varies *within* a rule --
+    the amount, the period, whether it is open -- must stay out of this, or a
+    superseded notice keys itself somewhere new and outlives its replacement.
+
+    Two things were in here and had to come out:
+
+      * **`period`.** Massachusetts raised the black sea bass pot limit from
+        500 lb to 600 lb and simply did not repeat the word "daily" in the
+        second notice. With period in the key, "per day / 500" and "None /
+        600" were different rules and both stayed in force -- two
+        contradictory pot limits, no signal which was live. Period is a term
+        of the rule, not its name. Where a period really does mark a separate
+        concurrent programme -- Massachusetts' Consecutive Daily Trip Limit,
+        which is Letter-of-Authorization gated and runs *alongside* the daily
+        limit -- that is an `aggregate_program`, and it is the programme that
+        keeps them apart, not the units.
+
+      * **open vs closed.** `season_open` and `season_close` are one rule --
+        "is this fishery open" -- stated from opposite ends. Keyed apart, a
+        spent opening outlives the closure that ended it, and the state says
+        a fishery is open and closed at once. Rhode Island hid this because
+        its closures carry a dated `reopens_on` that `compare` pairs off;
+        Massachusetts closed striped bass "until it is scheduled to reopen in
+        2027", with no date to pair on.
+
+    The Aggregate Program stays in: it is a distinct, permit-required
+    fishery, so comparing its 6,000 lb bi-weekly limit against the general
+    300 lb/day one is not a disagreement, it is a category error.
+    """
+    change = n["change_type"]
+    if change in ("season_open", "season_close"):
+        change = "season"
+    return (n.get("species_key"), n["license_mode"], change,
+            n.get("aggregate_program"), n.get("sub_fishery"))
 
 
 def _promote(n: dict, on_date: str) -> dict | None:
@@ -72,6 +104,7 @@ def effective_state(notices: list[dict], on: date | None = None) -> dict:
     on = on or date.today()
     state: dict[tuple, dict] = {}
     collisions: dict[tuple, int] = {}
+    retired: dict[tuple, list] = {}
     for n in notices:
         if not n.get("species_key"):
             continue
@@ -94,15 +127,30 @@ def effective_state(notices: list[dict], on: date | None = None) -> dict:
             n = _promote(n, sup)
             if n is None:
                 continue
-        k = _key(n)
+        k = _identity(n)
         prev = state.get(k)
-        if prev is None or n["effective_date"] > prev["effective_date"]:
+        if prev is None:
+            state[k] = n
+            collisions[k] = 1
+        elif n["effective_date"] > prev["effective_date"]:
+            # The later notice wins, and the one it displaced is kept rather
+            # than dropped. "pot went 500 -> 600 on 1 Sep" is the finding a
+            # licence holder actually needs; silently returning 600 tells
+            # them the number without telling them it moved.
+            retired.setdefault(k, []).append(prev)
             state[k] = n
             collisions[k] = 1
         elif n["effective_date"] == prev["effective_date"]:
             collisions[k] = collisions.get(k, 1) + 1
+        else:
+            retired.setdefault(k, []).append(n)
     for k, c in collisions.items():
         state[k]["same_date_notices"] = c
+        # Assigned unconditionally, and always a fresh list -- appending to a
+        # list left on the notice by an earlier call would accumulate history
+        # across runs.
+        state[k]["retired"] = sorted(
+            retired.get(k, []), key=lambda r: r["effective_date"])
     return state
 
 
@@ -137,7 +185,12 @@ def compare(notices: list[dict], on: date | None = None,
     findings = []
 
     for k, n in sorted(state.items(), key=lambda kv: str(kv[0])):
-        species, notice_mode, change, period, program, sub = k
+        species, notice_mode, _, program, sub = k
+        # The identity key normalises open/close into one rule and drops the
+        # period, so both are read back off the notice, which is the source
+        # of truth. The key is an index, not the record.
+        change = n["change_type"]
+        period = n.get("period")
         # Skip fisheries you are not in. A Floating Fish Trap limit is not a
         # disagreement with a General Category one.
         if sub and only_fishery and sub != only_fishery:
@@ -230,6 +283,17 @@ def compare(notices: list[dict], on: date | None = None,
             severity = "mismatch"
             detail = (f"RIDEM: {value} {amount.get('unit','')} {period or ''}"
                       f"  ·  regs.py: {stored or '(nothing stored)'}")
+
+        # What the limit was before this notice replaced it. A number that
+        # moved last week is worth more attention than one that has stood all
+        # season, and until the identity key was fixed both were reported as
+        # simultaneously in force instead.
+        prior = [p for p in (n.get("retired") or [])
+                 if (p.get("amount") or {}).get("value") not in (None, value)]
+        if prior:
+            was = prior[-1]
+            detail += (f"  [was {was['amount']['value']} "
+                       f"{was['amount'].get('unit','')} until {n['effective_date']}]")
 
         if n.get("same_date_notices", 1) > 1:
             severity = "ambiguous" if severity == "mismatch" else severity
