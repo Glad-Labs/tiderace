@@ -312,9 +312,9 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   /* One surface, not two. The panel used to sit in a 300px strip under the
      map while the conditions sheet slid over the top of it -- two scrolling
      regions competing for a phone screen, with the map squeezed into what was
-     left. Now the map has the whole screen and the panel is moved bodily into
-     the sheet (see adoptPanel), so there is exactly one thing to read and it
-     is the thing you pulled up. */
+     left. Now the map has the whole screen and the sheet is the only reading
+     surface, split into four views by the tab bar. The panel stays hidden
+     here; its parts each have a tab. */
   #app{grid-template-columns:1fr; grid-template-rows:1fr}
   #panel{display:none}
   #sheet{max-height:92vh}
@@ -505,6 +505,44 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   font:12px/1.55 var(--mono); color:var(--warn); display:none;
 }
 #slogwarn.show{display:block}
+
+/* ---- one sheet, four views -------------------------------------------
+   This sheet had grown to 2,590px of content in an 812px screen: conditions,
+   the rules, the ranked list, the log form, past trips and a diagnostics
+   block, concatenated in the order they were built. Three and a bit screens
+   of scrolling with no way to reach anything -- which on a boat means you
+   scroll past what you need while the drift goes by.
+   One view at a time, and the tabs are the biggest control in the app. */
+#tabs{
+  flex:none; display:grid; grid-template-columns:repeat(4,1fr);
+  gap:0; border-bottom:1px solid var(--hair); background:var(--panel);
+}
+#tabs button{
+  min-height:52px; border:0; background:none; cursor:pointer;
+  color:var(--muted); font:600 13px/1 var(--display);
+  letter-spacing:.02em; border-bottom:2px solid transparent;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:3px; padding:0;
+}
+#tabs button .n{
+  font:10px/1 var(--mono); color:var(--muted); font-variant-numeric:tabular-nums;
+}
+#tabs button.on{color:var(--ink); border-bottom-color:var(--accent)}
+#tabs button.on .n{color:var(--accent)}
+#tabs button:active{background:var(--panel-2)}
+/* Rules are law, not a readout, so they collapse behind a line you can open
+   rather than taking 135px out of the middle of the conditions. */
+.fold{border-top:1px solid rgba(39,64,72,.5)}
+.fold > summary{
+  list-style:none; cursor:pointer; padding:14px 16px;
+  font:12px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
+  color:var(--muted); display:flex; justify-content:space-between; min-height:48px;
+  align-items:center;
+}
+.fold > summary::-webkit-details-marker{display:none}
+.fold > summary::after{content:"+"; font-size:16px; color:var(--muted)}
+.fold[open] > summary::after{content:"–"}
+.fold[open] > summary{color:var(--ink)}
 </style>
 </head>
 <body>
@@ -2148,6 +2186,12 @@ map.on('click', e => {
     <span id="sheetwhen"></span>
     <span id="sheetzone"></span>
   </div>
+  <div id="tabs">
+    <button data-view="now" class="on">Now<span class="n"></span></button>
+    <button data-view="log">Log<span class="n"></span></button>
+    <button data-view="spots">Spots<span class="n"></span></button>
+    <button data-view="trips">Trips<span class="n"></span></button>
+  </div>
   <div id="sheetbody"></div>
 </div>
 
@@ -2265,12 +2309,14 @@ window.surveyURL = (lat, lon) =>
 
     const pr = val('protected');
     if (pr && (pr.rules || []).length){
-      h += group('rules');
-      pr.rules.forEach(r => { h += `<div class="srule">${esc(r)}</div>`; });
+      let inner = '';
+      pr.rules.forEach(r => { inner += `<div class="srule">${esc(r)}</div>`; });
       (pr.areas || []).filter(a => !a.active).forEach(a => {
-        h += `<div class="srule">In the ${esc(a.name)} SMA, out of season ` +
-             `(${esc(a.season)}).</div>`;
+        inner += `<div class="srule">In the ${esc(a.name)} SMA, out of season ` +
+                 `(${esc(a.season)}).</div>`;
       });
+      h += `<details class="fold"><summary>rules &amp; protected species</summary>`
+         + inner + `</details>`;
     }
 
     const un = Object.keys(d.unavailable || {});
@@ -2280,23 +2326,12 @@ window.surveyURL = (lat, lon) =>
     if ((d.binding_warnings || []).length)
       h += `<div class="sdim">${d.binding_warnings.map(esc).join('<br>')}</div>`;
 
-    h += logSection(d);
-    // A way back to what you have already done. Below the log form on
-    // purpose: logging this trip comes before reviewing old ones.
-    h += `<div id="slog" style="border-top:0;padding-top:0"><button id="tripsbtn" type="button">Past trips</button></div>`;
+    // Rules are law, not a readout. Folded so they are one line here and a
+    // tap when you need them, instead of 135px in the middle of the numbers.
     h += diagBlock();
-    // render() replaces the sheet's contents, which would strand the adopted
-    // panel. Detach it first, rebuild, then put it back at the bottom.
-    if (adopted && adopted.parentNode === body) adopted.remove();
+    LAST_SURVEY = d;
     body.innerHTML = h;
-    wireLog(d);
-    wireMic(d);
-    wireSpeciesPicker();
-    if (adopted) body.appendChild(adopted);
-    adoptPanel();
     fillDiag();
-    const tb = document.getElementById('tripsbtn');
-    if (tb) tb.onclick = () => window.showTrips && window.showTrips();
   }
 
 
@@ -2616,40 +2651,19 @@ window.surveyURL = (lat, lon) =>
     };
   }
 
-  /* On a phone the panel is not hidden and duplicated -- it is moved. The same
-     DOM node lives in the sidebar on desktop and inside the sheet on mobile, so
-     there is one copy of the ranked list, the rules and the mark card, and
-     every handler already bound to them keeps working. Duplicating the markup
-     would have meant two of everything drifting apart. */
-  // Must match the media query above exactly, or the CSS hides the panel while
-// the JS declines to move it into the sheet and its contents vanish entirely.
-const MOBILE = () =>
-  window.matchMedia('(max-width:900px), (pointer:coarse)').matches;
-  let adopted = null;
+  /* The panel is NOT moved into the sheet any more. It used to be: the whole
+     desktop sidebar was relocated here on a phone, which put a 1,075px slab of
+     rules, ranked list and mark card at the bottom of everything else and made
+     the sheet 3.2 screens tall with no way to reach any of it.
+     The tabs replaced that job. The panel now simply stays hidden on a phone,
+     and each of its parts has a view of its own.
 
-  function adoptPanel(){
-    const panel = document.getElementById('panel');
-    if (!panel) return;
-    if (MOBILE()){
-      if (adopted) return;
-      adopted = document.createElement('div');
-      adopted.id = 'adopted';
-      while (panel.firstChild) adopted.appendChild(panel.firstChild);
-      body.appendChild(adopted);
-    } else if (adopted){
-      while (adopted.firstChild) panel.appendChild(adopted.firstChild);
-      adopted.remove();
-      adopted = null;
-    }
-  }
-  window.adoptPanel = adoptPanel;
-  addEventListener('resize', adoptPanel);
-  // With the sidebar gone there has to be something to grab. Peek shows the
-  // grip and the top of the list without covering the map.
-  if (MOBILE()){
-    adoptPanel();
-    sheet.classList.add('up', 'peek');
-  }
+     Moving it was also quietly destructive: render() rebuilds the sheet with
+     innerHTML, which deleted the relocated nodes outright rather than
+     returning them, so the sidebar came back empty on a resize to desktop. */
+  const MOBILE = () =>
+    window.matchMedia('(max-width:900px), (pointer:coarse)').matches;
+
 
 
   /* Read this off the screen rather than asking for devtools. Every number is
@@ -2695,6 +2709,101 @@ const MOBILE = () =>
         : '');
   }
 
+
+  /* ---- views ----------------------------------------------------------
+   * One at a time. Each is rebuilt on switch rather than hidden, so nothing
+   * off-screen is holding a stale reading, and the sheet never grows past
+   * roughly one screen of content.
+   */
+  let VIEW = 'now', LAST_SURVEY = null;
+
+  function setTab(v){
+    VIEW = v;
+    document.querySelectorAll('#tabs button').forEach(b =>
+      b.classList.toggle('on', b.dataset.view === v));
+  }
+
+  async function showView(v){
+    setTab(v);
+    sheet.classList.add('up');
+    sheet.classList.remove('peek');
+    if (v === 'now')   return LAST_SURVEY ? render(LAST_SURVEY) : nowEmpty();
+    if (v === 'log')   return renderLog();
+    if (v === 'spots') return renderSpots();
+    if (v === 'trips') return window.showTrips && window.showTrips();
+  }
+  window.showView = showView;
+
+  function nowEmpty(){
+    body.innerHTML = '<div class="sdim">Tap anywhere on the water, or press ' +
+      'HERE, to read the conditions at that spot.</div>';
+  }
+
+  /* The log form on its own screen, which is what it always needed: it is the
+     one thing you do with wet hands and it was previously below two screens
+     of readout. */
+  function renderLog(){
+    const d = LAST_SURVEY;
+    if (!d){
+      body.innerHTML = '<div class="sdim">Pick a spot first — tap the water ' +
+        'or press HERE. A trip is logged against a coordinate.</div>';
+      return;
+    }
+    body.innerHTML =
+      `<div class="sgroup">logging at ${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}</div>`
+      + logSection(d).replace('<div id="slog">', '<div id="slog" style="border-top:0">');
+    wireLog(d); wireMic(d); wireSpeciesPicker();
+    const f = document.getElementById('slogform');
+    if (f) f.classList.add('open');            // no second tap to open it
+    const t = document.getElementById('slogtoggle');
+    if (t) t.style.display = 'none';           // the tab already did that job
+  }
+
+  /* The ranked list, which used to arrive as part of a 1,075px slab of the old
+     desktop sidebar dropped at the bottom of everything. */
+  function renderSpots(){
+    if (!window.GRID || !GRID.spots){
+      body.innerHTML = '<div class="sdim">No forecast loaded yet.</div>';
+      return;
+    }
+    const t = GRID.times ? GRID.times[TI] : null;
+    const rows = GRID.spots
+      .map(sp => ({sp, s: (sp.scores || [])[TI] || 0}))
+      .sort((a, b) => b.s - a.s);
+    body.innerHTML =
+      `<div class="sgroup">${GRID.species_name || ''}` +
+      `${t ? ' · ' + new Date(t).toLocaleString([], {weekday:'short', hour:'2-digit', minute:'2-digit'}) : ''}</div>` +
+      rows.map(({sp, s}) => {
+        const d = (sp.detail || [])[TI] || {};
+        const cur = d.current_speed != null
+          ? `${d.current_speed.toFixed(2)} kt ${d.current_dir || ''}` : '';
+        return `<div class="trip" data-spot="${esc(sp.key)}">
+            <div class="when">${esc(sp.name)}</div>
+            <div class="fish">${Math.round(s)}</div>
+            <div class="meta">${esc(cur)}</div>
+          </div>`;
+      }).join('');
+    body.querySelectorAll('[data-spot]').forEach(el => el.onclick = () => {
+      const sp = GRID.spots.find(x => x.key === el.dataset.spot);
+      if (!sp) return;
+      if (MAP_READY) map.easeTo({center:[sp.lon, sp.lat],
+                                 zoom: Math.max(map.getZoom(), 12), duration:600});
+      show(sp.lat, sp.lon, sp.name);          // straight into Now for that spot
+    });
+  }
+
+  document.querySelectorAll('#tabs button').forEach(b =>
+    b.onclick = () => showView(b.dataset.view));
+
+  // Boot AFTER the view code above: setTab and nowEmpty close over `VIEW`,
+  // and calling them earlier hit its temporal dead zone and took the whole
+  // script down -- which is why showConditions stopped existing at all.
+  if (MOBILE()){
+    sheet.classList.add('up', 'peek');
+    setTab('now');
+    nowEmpty();
+  }
+
   async function show(lat, lon, label){
     SURVEY_AT = [lat, lon];
     title.textContent = label || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
@@ -2702,6 +2811,7 @@ const MOBILE = () =>
     zoneE.textContent = '';
     body.innerHTML = '<div class="sdim">reading conditions…</div>';
     sheet.classList.add('up'); sheet.classList.remove('peek');
+    setTab('now');
     if (typeof clampLabels === 'function') setTimeout(clampLabels, 240);
     try{
       const r = await fetch(window.surveyURL(lat, lon));

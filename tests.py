@@ -3958,5 +3958,55 @@ class SpeciesRegistry(unittest.TestCase):
         self.assertIn("spSel", body, "the log must post its own species")
 
 
+class SheetStructure(unittest.TestCase):
+    """One sheet was doing the job of four screens.
+
+    Measured before this: 2,590px of content in an 812px viewport -- 3.2
+    screens of scrolling, 23 concatenated blocks, 14 buttons, and a 1,075px
+    slab of the old desktop sidebar dropped at the bottom. On a boat that
+    means scrolling past what you need while the drift goes by.
+    """
+
+    def setUp(self):
+        import pathlib
+        self.page = (pathlib.Path(__file__).parent
+                     / "tiderace" / "web" / "index.html").read_text()
+
+    def test_there_are_four_views(self):
+        import re
+        views = re.findall(r'data-view="(\w+)"', self.page)
+        self.assertEqual(views, ["now", "log", "spots", "trips"])
+
+    def test_the_tabs_are_a_thumb_target(self):
+        import re
+        css = self.page.split("#tabs button{")[1].split("}")[0]
+        m = re.search(r"min-height:\s*(\d+)px", css)
+        self.assertTrue(m and int(m.group(1)) >= 48)
+
+    def test_the_panel_is_no_longer_moved_into_the_sheet(self):
+        """Relocating it was quietly destructive: render() rebuilds the sheet
+        with innerHTML, which deleted the moved nodes rather than returning
+        them, so the sidebar came back empty on a resize to desktop."""
+        self.assertNotIn("function adoptPanel", self.page)
+        self.assertNotIn("appendChild(adopted)", self.page)
+
+    def test_rules_are_folded_rather_than_inline(self):
+        # 135px of legal text in the middle of a conditions readout.
+        self.assertIn('<details class="fold">', self.page)
+        self.assertIn("rules &amp; protected species", self.page)
+
+    def test_the_log_view_does_not_need_a_second_tap_to_open(self):
+        body = self.page.split("function renderLog()")[1].split("\n  }")[0]
+        self.assertIn("classList.add('open')", body)
+
+    def test_view_code_runs_before_it_is_called(self):
+        """setTab and nowEmpty close over `VIEW`; calling them above its
+        declaration hit the temporal dead zone and took the whole script
+        down, which is how showConditions stopped existing at all."""
+        decl = self.page.index("let VIEW = 'now'")
+        boot = self.page.index("if (MOBILE()){\n    sheet.classList.add('up', 'peek');")
+        self.assertLess(decl, boot, "boot must come after the declarations")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
