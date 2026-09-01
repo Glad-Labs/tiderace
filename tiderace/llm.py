@@ -50,6 +50,26 @@ import urllib.request
 
 DEFAULT_OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 DEFAULT_OLLAMA_MODEL = "qwen3.6:27b"
+# Vision is a different model, not a flag. The text default is not multimodal,
+# so anything that passes images has to name one that is.
+#
+# **Not qwen3-vl, and this was measured rather than assumed.** The obvious
+# choice returns an EMPTY response to any request carrying a `format` schema
+# -- not malformed JSON, not a refusal, an empty string with done_reason
+# "stop". It happens with the full schema and with a one-boolean schema
+# alike, so it is the structured-output path and not the schema. Unconstrained
+# it answers correctly in under four seconds, so the model is fine and the
+# combination is not.
+#
+# Measured on a probe image containing the text "TAUTOG 7742" and a red
+# circle, asking for both back under a two-field schema:
+#
+#     gemma-4-31B-it-qat   1.0s   read the text exactly, named the colour
+#     qwen3-vl:30b        29.6s   ""
+#
+# Gemma is also the better placement here: it is 18.5 GB and GPU0 (the 5090)
+# has the room, where GPU1 is carrying Poindexter and has under 2 GB free.
+DEFAULT_VISION_MODEL = "gemma-4-31B-it-qat:latest"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-5"
 
 
@@ -60,7 +80,15 @@ class BackendUnavailable(RuntimeError):
 class Backend:
     name = "none"
 
-    def complete(self, system: str, user: str, schema: dict) -> dict:
+    def complete(self, system: str, user: str, schema: dict,
+                 images: list[str] | None = None) -> dict:
+        """`images` are base64-encoded, and only the local backend takes them.
+
+        A photo of a fish carries the coordinate it was caught at. Sending one
+        to a hosted API would hand over the single thing this project has
+        refused to share since the first commit, so the image path is local by
+        construction rather than by policy.
+        """
         raise NotImplementedError
 
     def describe(self) -> str:
@@ -97,7 +125,8 @@ class Ollama(Backend):
                 f"no Ollama at {self.host} ({type(e).__name__}). "
                 "Start it with `ollama serve`.") from e
 
-    def complete(self, system: str, user: str, schema: dict) -> dict:
+    def complete(self, system: str, user: str, schema: dict,
+                 images: list[str] | None = None) -> dict:
         body = {
             "model": self.model,
             # Guidance lives in the prompt, never in schema descriptions --
@@ -111,6 +140,8 @@ class Ollama(Backend):
         # task that is pure extraction.
         if self.model.startswith(("qwen3", "qwen3.6")):
             body["think"] = False
+        if images:
+            body["images"] = images
 
         req = urllib.request.Request(
             f"{self.host}/api/generate",
@@ -145,7 +176,13 @@ class Anthropic(Backend):
     def describe(self) -> str:
         return f"anthropic/{self.model}"
 
-    def complete(self, system: str, user: str, schema: dict) -> dict:
+    def complete(self, system: str, user: str, schema: dict,
+                 images: list[str] | None = None) -> dict:
+        if images:
+            raise BackendUnavailable(
+                "photos are read locally only — a catch photo carries the "
+                "coordinate it was taken at, and this project does not send "
+                "that anywhere. Use the ollama backend for --photo.")
         try:
             import anthropic
         except ImportError as e:

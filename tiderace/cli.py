@@ -78,7 +78,17 @@ def run(argv=None) -> int:
     lg.add_argument("--method")
     lg.add_argument("--bait")
     lg.add_argument("--notes")
-    lg.add_argument("--source", default="manual", choices=("manual", "voice", "report"))
+    lg.add_argument("--source", default="manual",
+                    choices=("manual", "voice", "report", "photo"))
+
+    ph = sub.add_parser("photos",
+                        help="rebuild trips from a camera roll (drafts only)")
+    ph.add_argument("paths", nargs="+",
+                    help="photo files, or directories to walk")
+    ph.add_argument("--no-identify", action="store_true",
+                    help="EXIF only — skip the vision model, much faster")
+    ph.add_argument("--model", help="vision model (default: see `tiderace scrape --check`)")
+    ph.add_argument("--json", action="store_true", help="machine-readable drafts")
 
     bt = sub.add_parser("bait", help="record a bait sighting (or its absence)")
     bt.add_argument("--spot", help="spot key; or give --lat/--lon")
@@ -239,6 +249,8 @@ def run(argv=None) -> int:
         return _cmd_offshore(args)
     if args.cmd == "config":
         return _cmd_config(args)
+    if args.cmd == "photos":
+        return _cmd_photos(args)
     if args.cmd == "regs":
         return _cmd_regs(args)
     if args.cmd == "gso":
@@ -1061,6 +1073,79 @@ def _cmd_config(args) -> int:
         print(f"  ollama         {'reachable' if p['ollama'] else 'NOT REACHABLE'}"
               f"{'' if p.get('model_present', True) else '  — model not pulled'}")
     print(f"\n  stored in {cfgmod.CONFIG_PATH}\n")
+    return 0
+
+
+def _cmd_photos(args) -> int:
+    import os
+    from . import llm, photolog
+
+    paths = []
+    for p in args.paths:
+        if os.path.isdir(p):
+            for root, _, files in os.walk(p):
+                paths.extend(os.path.join(root, f) for f in files)
+        else:
+            paths.append(p)
+
+    backend = None
+    if not args.no_identify:
+        backend = llm.Ollama(args.model or llm.DEFAULT_VISION_MODEL, timeout=600)
+        if not backend.available():
+            print(f"\n  No Ollama at {backend.host}. Either start it, or run "
+                  f"with --no-identify\n  to read just the coordinates and times.\n")
+            return 1
+
+    out = photolog.draft(paths, backend=backend,
+                         identify=not args.no_identify)
+
+    if args.json:
+        print(json.dumps(out, indent=2))
+        return 0
+
+    trips = out["trips"]
+    print(f"\n  {out['photos_read']} photos read · {len(trips)} "
+          f"session{'' if len(trips) == 1 else 's'} reconstructed")
+    print("  " + "─" * 74)
+    for i, t in enumerate(trips, 1):
+        when = t["started_at"].replace("T", " ")
+        span = f" · {t['span_minutes']} min on the water" if t["span_minutes"] else ""
+        print(f"\n  [{i}] {when}{span}")
+        print(f"      {t['spot'] or 'no position'}"
+              + (f"   {t['lat']:.4f}, {t['lon']:.4f}" if t["lat"] is not None else ""))
+        for c in t["catch"]:
+            if c["species"]:
+                print(f"      {c['species']} — seen in {c['photos_showing']} "
+                      f"photo{'' if c['photos_showing'] == 1 else 's'}")
+        if out["identified"] and not t["fish_in_any_photo"]:
+            print("      no fish in any frame — this is what a blank looks like, "
+                  "and it counts")
+        if t["notes"]:
+            print(f"      {t['notes'][:70]}")
+        for w in t["warnings"]:
+            print(f"      ! {w}")
+
+    if out["skipped"]:
+        print(f"\n  Skipped {len(out['skipped'])}:")
+        for sk in out["skipped"][:8]:
+            print(f"      {sk['file']} — {sk['why']}")
+
+    print("\n  " + "─" * 74)
+    print("  Nothing has been logged. **No count was filled in on purpose** — you")
+    print("  photograph the good one, not all of them, so a count read off a")
+    print("  camera roll flatters every day it touches. Log each session with")
+    print("  the real number:\n")
+    for i, t in enumerate(trips[:3], 1):
+        sp = next((c["species"] for c in t["catch"] if c["species"]), "SPECIES")
+        if not t["spot"]:
+            print(f"    # [{i}] {t['started_at']} had no GPS in any frame — "
+                  f"add --spot or --coord yourself")
+            continue
+        loc = (f"--coord {t['lat']:.5f},{t['lon']:.5f}"
+               if t["spot"].startswith("at:") else f"--spot {t['spot']}")
+        print(f"    tiderace log {loc} --species {sp} --count N \\")
+        print(f"        --at {t['started_at']} --source photo")
+    print()
     return 0
 
 

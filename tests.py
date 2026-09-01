@@ -15,7 +15,8 @@ from datetime import date, datetime, timedelta
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       provenance,
                       bathy, cache as cachemod, track, voicelog, llm, reconcile, reports, protected, survey, whales,
-                      madmf, regs, ridem, score, solunar, spots)
+                      exif as exifmod, madmf, photolog,
+                      regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
 from tiderace.features import _local_tz, _wind_against_tide
@@ -3654,6 +3655,235 @@ class HowFishingActuallyWorks(unittest.TestCase):
         import pathlib as _p
         src = (_p.Path(__file__).parent / "tiderace" / "voicelog.py").read_text()
         self.assertIn('if len(out["catch"]) == 1:', src)
+
+
+# --------------------------------------------------------------------------
+# Photos into draft trips.
+#
+# The fixtures are JPEGs with a hand-assembled EXIF block rather than files
+# written by a library, for two reasons: the test suite stays dependency-free
+# like the rest of the project, and the parser is then checked against bytes
+# laid out from the TIFF spec rather than against its own assumptions. The
+# coordinates below were cross-checked against an independent EXIF reader
+# when the fixtures were built.
+# --------------------------------------------------------------------------
+
+def _exif_jpeg(when=None, lat=None, lon=None) -> bytes:
+    """A minimal JPEG carrying a real APP1 Exif segment."""
+    import struct
+
+    def entry(tag, typ, cnt, payload, data, data_base):
+        if len(payload) <= 4:
+            val = payload + b"\x00" * (4 - len(payload))
+        else:
+            val = struct.pack(">I", data_base + len(data))
+            data.extend(payload)
+            if len(data) % 2:
+                data.append(0)
+        return struct.pack(">HHI", tag, typ, cnt) + val
+
+    def ifd(spec, data, data_base):
+        body = b"".join(entry(*e, data, data_base) for e in spec)
+        return struct.pack(">H", len(spec)) + body + struct.pack(">I", 0)
+
+    def rat3(v):
+        v = abs(v); d = int(v); m = int((v - d) * 60); sec = ((v - d) * 60 - m) * 60
+        return (struct.pack(">II", d, 1) + struct.pack(">II", m, 1)
+                + struct.pack(">II", int(round(sec * 10000)), 10000))
+
+    HDR = 8
+    n0 = (1 if when else 0) * 2 + (1 if lat is not None else 0)
+    ifd0_len = 2 + 12 * n0 + 4
+    exif_len = (2 + 12 * 1 + 4) if when else 0
+    gps_len = (2 + 12 * 4 + 4) if lat is not None else 0
+    exif_at = HDR + ifd0_len
+    gps_at = exif_at + exif_len
+    data_base = gps_at + gps_len
+    data = bytearray()
+
+    spec0 = []
+    if when:
+        spec0.append((0x0132, 2, 20, when.encode() + b"\x00"))
+        spec0.append((0x8769, 4, 1, struct.pack(">I", exif_at)))
+    if lat is not None:
+        spec0.append((0x8825, 4, 1, struct.pack(">I", gps_at)))
+    spec0.sort(key=lambda e: e[0])
+
+    tiff = b"MM\x00\x2a" + struct.pack(">I", HDR) + ifd(spec0, data, data_base)
+    if when:
+        tiff += ifd([(0x9003, 2, 20, when.encode() + b"\x00")], data, data_base)
+    if lat is not None:
+        tiff += ifd([
+            (0x0001, 2, 2, (b"N" if lat >= 0 else b"S") + b"\x00"),
+            (0x0002, 5, 3, rat3(lat)),
+            (0x0003, 2, 2, (b"E" if lon >= 0 else b"W") + b"\x00"),
+            (0x0004, 5, 3, rat3(lon)),
+        ], data, data_base)
+    tiff += bytes(data)
+
+    payload = b"Exif\x00\x00" + tiff
+    app1 = b"\xff\xe1" + struct.pack(">H", len(payload) + 2) + payload
+    # SOI, our APP1, a bare minimum of JPEG, EOI. The parser only walks
+    # segments, so this need not decode as an image.
+    return b"\xff\xd8" + app1 + b"\xff\xdb\x00\x04\x00\x00" + b"\xff\xd9"
+
+
+class ExifReader(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp(prefix="tiderace-exif-")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _write(self, name, **kw):
+        import os as _os
+        p = _os.path.join(self.dir, name)
+        with open(p, "wb") as fh:
+            fh.write(_exif_jpeg(**kw))
+        return p
+
+    def test_a_west_longitude_comes_back_negative(self):
+        """Rhode Island is west of Greenwich. An unsigned DMS triple read
+        without its reference tag puts Whale Rock in Kazakhstan."""
+        p = self._write("a.jpg", when="2026:08:30 05:41:12",
+                        lat=41.4433, lon=-71.4222)
+        got = exifmod.read(p)
+        self.assertAlmostEqual(got["lat"], 41.4433, places=4)
+        self.assertAlmostEqual(got["lon"], -71.4222, places=4)
+
+    def test_exif_datetime_is_not_iso(self):
+        """EXIF writes "2026:08:30 05:41:12" — colons in the date. Feeding
+        that to fromisoformat raises, and a silent except would drop the
+        capture time on every photo ever taken."""
+        p = self._write("b.jpg", when="2026:08:30 05:41:12")
+        self.assertEqual(exifmod.read(p)["taken_at"], "2026-08-30T05:41:12")
+
+    def test_gps_enabled_but_unfixed_is_not_null_island(self):
+        """A camera with GPS on and no lock writes 0/0 rather than omitting
+        the tags. 0,0 is in the Gulf of Guinea."""
+        p = self._write("c.jpg", when="2026:08:30 05:41:12", lat=0.0, lon=0.0)
+        got = exifmod.read(p)
+        self.assertIsNone(got["lat"])
+        self.assertFalse(got["has_gps"])
+
+    def test_a_photo_with_no_exif_says_so(self):
+        import os as _os
+        p = _os.path.join(self.dir, "d.jpg")
+        with open(p, "wb") as fh:
+            fh.write(b"\xff\xd8\xff\xdb\x00\x04\x00\x00\xff\xd9")
+        with self.assertRaises(exifmod.NoExif):
+            exifmod.read(p)
+
+    def test_a_parsed_container_is_flagged_differently_from_a_scanned_one(self):
+        p = self._write("e.jpg", when="2026:08:30 05:41:12")
+        self.assertTrue(exifmod.read(p)["exact"])
+
+
+class PhotoLog(unittest.TestCase):
+    def setUp(self):
+        import os as _os
+        import tempfile
+        self.dir = tempfile.mkdtemp(prefix="tiderace-photolog-")
+        self.paths = []
+        for name, when, lat, lon in [
+            ("dawn.jpg", "2026:08:30 05:41:12", 41.4433, -71.4222),
+            ("fish1.jpg", "2026:08:30 06:12:40", 41.4437, -71.4219),
+            ("fish2.jpg", "2026:08:30 07:05:03", 41.4431, -71.4225),
+            ("evening.jpg", "2026:08:30 18:50:00", 41.3745, -71.6390),
+            ("nogps.jpg", "2026:08:31 09:00:00", None, None),
+            ("notime.jpg", None, None, None),
+        ]:
+            p = _os.path.join(self.dir, name)
+            with open(p, "wb") as fh:
+                fh.write(_exif_jpeg(when=when, lat=lat, lon=lon))
+            self.paths.append(p)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _draft(self):
+        return photolog.draft(self.paths, identify=False)
+
+    def test_a_morning_of_photos_is_one_trip(self):
+        d = self._draft()
+        first = d["trips"][0]
+        self.assertEqual(len(first["photos"]), 3)
+        self.assertEqual(first["started_at"], "2026-08-30T05:41")
+
+    def test_the_evening_run_is_a_different_trip(self):
+        """Same day, three hours later, ten miles away. Merging them would
+        attach the morning's tide to the evening's fish."""
+        d = self._draft()
+        self.assertGreaterEqual(len(d["trips"]), 2)
+        self.assertEqual(d["trips"][1]["started_at"], "2026-08-30T18:50")
+
+    def test_first_frame_to_last_frame_is_the_only_effort_measure_there_is(self):
+        d = self._draft()
+        self.assertEqual(d["trips"][0]["span_minutes"], 83)
+
+    def test_a_single_photo_claims_no_duration(self):
+        """One frame proves you were there, not how long for."""
+        d = self._draft()
+        lone = [t for t in d["trips"] if len(t["photos"]) == 1]
+        self.assertTrue(lone)
+        for t in lone:
+            self.assertIsNone(t["span_minutes"])
+            self.assertIsNone(t["ended_at"])
+
+    def test_count_is_never_filled_in(self):
+        """The safety property of the whole module. People photograph the
+        good one, so any count inferred from a camera roll is biased upward
+        exactly where the log needs honesty most."""
+        for t in self._draft()["trips"]:
+            for c in t["catch"]:
+                self.assertIsNone(c["count"])
+
+    def test_a_session_near_a_known_spot_inherits_it(self):
+        d = self._draft()
+        self.assertEqual(d["trips"][0]["spot"], "whale_rock")
+
+    def test_a_session_with_no_fix_says_so_rather_than_guessing(self):
+        d = self._draft()
+        nofix = [t for t in d["trips"] if t["lat"] is None]
+        self.assertTrue(nofix)
+        self.assertIsNone(nofix[0]["spot"])
+        self.assertTrue(nofix[0]["warnings"])
+
+    def test_a_photo_with_no_timestamp_is_skipped_with_a_reason(self):
+        d = self._draft()
+        self.assertTrue(any("notime" in s["file"] for s in d["skipped"]))
+        self.assertTrue(all(s["why"] for s in d["skipped"]))
+
+    def test_the_species_enum_only_offers_fish_we_model(self):
+        """A grammar cannot stop the model being wrong, but it can stop it
+        naming a fish with no profile, no regulations and no thermal curve."""
+        allowed = set(photolog.SCHEMA["properties"]["species"]["enum"])
+        self.assertEqual(allowed - {"unknown", "other"}, set(score.PROFILES))
+
+    def test_the_prompt_forbids_counting_and_measuring(self):
+        low = photolog.SYSTEM.lower()
+        self.assertIn("never estimate a length", low)
+        self.assertIn("never estimate how many", low)
+
+
+class PhotoPrivacy(unittest.TestCase):
+    def test_a_hosted_backend_refuses_images(self):
+        """A catch photo carries the coordinate it was taken at. That is the
+        one thing this project has never sent anywhere, so the refusal is in
+        the backend rather than in a caller's good intentions."""
+        from tiderace import llm
+        with self.assertRaises(llm.BackendUnavailable) as e:
+            llm.Anthropic().complete("s", "u", {}, images=["Zm9v"])
+        self.assertIn("locally", str(e.exception))
+
+    def test_the_vision_default_is_not_the_model_that_returns_nothing(self):
+        """qwen3-vl:30b answers an empty string to any request carrying a
+        format schema — measured, see the note in llm.py."""
+        from tiderace import llm
+        self.assertNotIn("qwen3-vl", llm.DEFAULT_VISION_MODEL)
 
 
 if __name__ == "__main__":
