@@ -3484,16 +3484,35 @@ class TripTracks(unittest.TestCase):
         self.assertEqual(len(track.clean(pts)), 20)
         self.assertEqual(len(track.dwells(pts)), 1)
 
-    def test_two_spots_close_together_do_not_merge(self):
-        # Half a mile apart is two pieces of structure, not one long average.
+    def test_two_pieces_with_a_run_between_stay_two(self):
+        """Rewritten: the old version teleported between two stationary spots
+        in one minute, which under a speed model reads as a boat repositioning
+        over the same structure -- and it is not obvious it should read as
+        anything else. Two pieces are separated by an actual run."""
+        import math
         from datetime import datetime, timedelta
-        t = datetime(2026, 8, 31, 5, 0)
-        pts = []
-        for lat in (41.4408, 41.4498):
-            for k in range(20):
-                pts.append({"lat": lat, "lon": -71.4228, "t": t.isoformat()})
+        def leg(lat, lon, kt, mins, brg=0.0, t0=None):
+            t = t0 or datetime(2026, 8, 31, 6, 0)
+            pts = []
+            for _ in range(mins):
+                pts.append({"lat": lat, "lon": lon, "t": t.isoformat()})
+                lat += (kt / 60) * math.cos(math.radians(brg)) / 60
+                lon += ((kt / 60) * math.sin(math.radians(brg)) / 60
+                        / math.cos(math.radians(lat)))
                 t += timedelta(minutes=1)
-        self.assertEqual(len(track.dwells(pts)), 2)
+            return pts, lat, lon, t
+        a, lat, lon, t = leg(41.40, -71.45, 1.0, 20)
+        b, lat, lon, t = leg(lat, lon, 12.0, 6, brg=90, t0=t)
+        c, *_ = leg(lat, lon, 1.0, 20, t0=t)
+        self.assertEqual(len(track.sessions(a + b + c)), 2)
+
+    def test_the_rejoin_test_looks_at_ground_already_worked(self):
+        # Not at where the session started: a drift is half a mile long, so
+        # "near the start" is too strict at the far end of one and too loose
+        # for a second wreck sitting near the first one's beginning.
+        import inspect
+        src = inspect.getsource(track.sessions)
+        self.assertIn("for q in cur", src)
 
     def test_a_glance_is_not_a_session(self):
         from datetime import datetime, timedelta
@@ -3517,6 +3536,124 @@ class TripTracks(unittest.TestCase):
         import pathlib as _p
         ig = (_p.Path(__file__).parent / ".gitignore").read_text()
         self.assertIn("data/tracks.jsonl", ig)
+
+
+class HowFishingActuallyWorks(unittest.TestCase):
+    """Two corrections to models that were wrong about the activity itself.
+
+    The first version of the track looked for a stationary boat, and nobody
+    fishes standing still -- a fluke drift covers half a mile. The first
+    version of the log allowed one species per trip, and a bottom-fishing
+    afternoon produces three.
+    """
+
+    # ---- drifting and trolling are fishing, not travelling ----
+
+    def _leg(self, lat, lon, kt, mins, brg=0.0, t0=None):
+        import math
+        from datetime import datetime, timedelta
+        t = t0 or datetime(2026, 8, 31, 6, 0)
+        pts = []
+        for _ in range(mins):
+            pts.append({"lat": lat, "lon": lon, "t": t.isoformat()})
+            lat += (kt / 60) * math.cos(math.radians(brg)) / 60
+            lon += ((kt / 60) * math.sin(math.radians(brg)) / 60
+                    / math.cos(math.radians(lat)))
+            t += timedelta(minutes=1)
+        return pts, lat, lon, t
+
+    def test_a_drift_is_one_session_not_a_gap(self):
+        """A 25-minute fluke drift covers half a mile. The displacement-based
+        version fragmented it into two dwells and lost the fishing entirely."""
+        pts, *_ = self._leg(41.40, -71.45, 1.2, 25)
+        ses = track.sessions(pts)
+        self.assertEqual(len(ses), 1)
+        self.assertEqual(ses[0]["kind"], "drift")
+        self.assertGreater(ses[0]["distance_nm"], 0.3, "it really does move")
+
+    def test_trolling_is_fishing(self):
+        pts, *_ = self._leg(41.20, -71.50, 3.0, 40)
+        ses = track.sessions(pts)
+        self.assertEqual(len(ses), 1)
+        self.assertEqual(ses[0]["kind"], "troll")
+
+    def test_a_run_is_not_fishing(self):
+        pts, *_ = self._leg(41.20, -71.50, 18.0, 30)
+        self.assertEqual(track.sessions(pts), [])
+
+    def test_drift_motor_back_drift_is_one_piece_of_structure(self):
+        """The bottom-fishing sawtooth. Three segments, one spot."""
+        a, lat, lon, t = self._leg(41.40, -71.45, 1.2, 25)
+        b, lat, lon, t = self._leg(lat, lon, 6.0, 4, brg=180, t0=t)
+        c, *_ = self._leg(lat, lon, 1.2, 25, t0=t)
+        ses = track.sessions(a + b + c)
+        self.assertEqual(len(ses), 1, "one piece worked twice is one session")
+        self.assertGreater(ses[0]["minutes"], 45)
+
+    def test_leaving_ends_the_session(self):
+        a, lat, lon, t = self._leg(41.40, -71.45, 1.2, 25)
+        b, lat, lon, t = self._leg(lat, lon, 18.0, 27, brg=90, t0=t)
+        c, *_ = self._leg(lat, lon, 3.0, 40, brg=45, t0=t)
+        ses = track.sessions(a + b + c)
+        self.assertEqual([x["kind"] for x in ses], ["drift", "troll"])
+
+    def test_speed_bands_are_ordered(self):
+        self.assertLess(track.DRIFT_MAX_KT, track.TROLL_MAX_KT)
+        self.assertEqual(track.kind_of(1.0), "drift")
+        self.assertEqual(track.kind_of(3.0), "troll")
+        self.assertEqual(track.kind_of(12.0), "run")
+
+    def test_a_session_keeps_its_path_not_just_a_centre(self):
+        """A half-mile drift reduced to its midpoint loses which end of the
+        piece produced the fish."""
+        pts, *_ = self._leg(41.40, -71.45, 1.2, 25)
+        s = track.sessions(pts)[0]
+        self.assertIn("path", s)
+        self.assertGreater(len(s["path"]), 10)
+        self.assertNotEqual(s["start"], s["end"])
+
+    # ---- several species, one trip ----
+
+    def test_a_bottom_trip_writes_a_row_per_species(self):
+        import tempfile, os
+        from tiderace import log as catchlog
+        path = os.path.join(tempfile.mkdtemp(), "t.jsonl")
+        mk = lambda sp, n: catchlog.Entry(
+            spot="at:41.44000,-71.42000", species=sp, count=n,
+            started_at="2026-08-31T10:00", conditions={"water_temp_f": 69})
+        catchlog.record_trip([mk("black_sea_bass", 4), mk("scup", 6),
+                              mk("tautog", 1)], path)
+        rows = catchlog.load(path)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(len({r["trip_id"] for r in rows}), 1,
+                         "three catches, one trip")
+
+    def test_the_conditions_are_snapshotted_once_for_the_trip(self):
+        """All three were caught in the same water at the same time. Three
+        independent snapshots would differ by whatever the tide did while the
+        loop ran."""
+        import tempfile, os
+        from tiderace import log as catchlog
+        path = os.path.join(tempfile.mkdtemp(), "t.jsonl")
+        mk = lambda sp: catchlog.Entry(
+            spot="at:41.44000,-71.42000", species=sp, count=1,
+            started_at="2026-08-31T10:00", conditions={"water_temp_f": 69.3})
+        catchlog.record_trip([mk("scup"), mk("tautog")], path)
+        rows = catchlog.load(path)
+        self.assertEqual(rows[0]["conditions"], rows[1]["conditions"])
+
+    def test_voice_hears_more_than_one_fish(self):
+        import pathlib as _p
+        src = (_p.Path(__file__).parent / "tiderace" / "voicelog.py").read_text()
+        self.assertIn('"catch"', src)
+        self.assertIn("one entry per species", src)
+
+    def test_a_size_is_not_pinned_to_the_wrong_fish(self):
+        """With three species in a sentence there is no way to know from a
+        regex which one the nineteen inches belonged to."""
+        import pathlib as _p
+        src = (_p.Path(__file__).parent / "tiderace" / "voicelog.py").read_text()
+        self.assertIn('if len(out["catch"]) == 1:', src)
 
 
 if __name__ == "__main__":

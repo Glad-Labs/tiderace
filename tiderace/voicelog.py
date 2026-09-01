@@ -47,8 +47,25 @@ from . import llm, score
 SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["count", "confidence"],
+    "required": ["catch", "confidence"],
     "properties": {
+        # A list, because one afternoon on a piece of structure produces sea
+        # bass and scup and a tautog, and flattening that to a single species
+        # throws away two thirds of what was caught.
+        "catch": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["count"],
+                "properties": {
+                    "species": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "biggest_in": {"type": "number"},
+                    "released": {"type": "integer"},
+                },
+            },
+        },
         "count": {"type": "integer"},
         "species": {"type": "string"},
         "biggest_in": {"type": "number"},
@@ -84,23 +101,34 @@ Rules that matter:
 
 Never guess a species you were not told. Leave it out instead.
 
+Return a `catch` LIST with one entry per species. Most bottom-fishing trips
+produce several -- "four sea bass, half a dozen scup and a tog" is three
+entries, not one. A trip with one species is a list of one. A blank is a list
+with a single entry of count 0.
+
 Worked examples. These exist because the fields most often missed are the ones
 buried mid-sentence -- the method and the size -- and a rule alone did not get
 them out reliably.
 
   "two schoolies at the east side on a live eel dropping tide"
-    {"count":2,"species":"striped_bass","method":"live eel",
+    {"catch":[{"species":"striped_bass","count":2}],"method":"live eel",
      "notes":"east side, dropping tide","confidence":"high"}
 
   "got a few fluke drifting sand, biggest maybe nineteen inches, lots of shorts"
-    {"count":3,"species":"fluke","biggest_in":19,"method":"drifting",
-     "notes":"sand, lots of shorts","confidence":"medium"}
+    {"catch":[{"species":"fluke","count":3,"biggest_in":19}],
+     "method":"drifting","notes":"sand, lots of shorts","confidence":"medium"}
 
   "nothing today, fished two hours, not a touch"
-    {"count":0,"notes":"fished two hours, not a touch","confidence":"high"}
+    {"catch":[{"count":0}],"notes":"fished two hours, not a touch","confidence":"high"}
 
   "kept two, put back four, all on bucktail"
-    {"count":2,"released":4,"method":"bucktail","confidence":"high"}
+    {"catch":[{"count":2,"released":4}],"method":"bucktail","confidence":"high"}
+
+  "four sea bass, half a dozen scup and one tog on the reef"
+    {"catch":[{"species":"black_sea_bass","count":4},
+              {"species":"scup","count":6},
+              {"species":"tautog","count":1}],
+     "notes":"on the reef","confidence":"high"}
 
 Note what happens in the first two: a fish named anywhere in the sentence
 becomes species, a number followed by "inches" becomes biggest_in, and how they
@@ -259,33 +287,57 @@ def parse(transcript: str, species: str | None = None,
     out["transcript"] = transcript
 
     # A spoken blank overrides the model. See _blank_said.
-    if _blank_said(text) and out.get("count"):
+    if _blank_said(text) and any(c.get("count") for c in out.get("catch", [])):
+        out["catch"] = [{"count": 0}]
         out["count"] = 0
         out["confidence"] = "low"
         out["overridden"] = ("heard an explicit blank, so the count was set to "
                              "zero over the model's reading")
 
+    # Normalise to a catch list whatever shape came back. Older prompts and a
+    # confused model both sometimes answer with a flat count/species instead of
+    # the list, and silently dropping that would lose a real trip.
+    catch = out.get("catch")
+    if not isinstance(catch, list) or not catch:
+        one = {"count": out.get("count", 0)}
+        for k in ("species", "biggest_in", "released"):
+            if out.get(k) not in (None, ""):
+                one[k] = out[k]
+        catch = [one]
+    for c in catch:
+        if c.get("species"):
+            key = _species_key(c["species"])
+            c["species"] = key or None
+            if not key:
+                c.pop("species", None)
+    out["catch"] = [c for c in catch if c.get("count") is not None]
+
     # The two things a regex settles better than a model. Both are exact in
     # the text, and both were being dropped often enough to matter: a size
     # about half the time, and a species whenever the app was already set to a
     # different one -- which would have logged a fluke trip as striped bass.
-    said_size = _size_said(text)
-    if said_size is not None and not out.get("biggest_in"):
-        out["biggest_in"] = said_size
-    said_species = _species_said(text)
-    if said_species:
-        out["species"] = said_species
+    # These two backstops only make sense when one fish was named. With three
+    # species in a sentence there is no way to know from a regex which one the
+    # nineteen inches belonged to, and guessing would attach a size to the
+    # wrong fish -- worse than leaving it off.
+    if len(out["catch"]) == 1:
+        c = out["catch"][0]
+        said_size = _size_said(text)
+        if said_size is not None and not c.get("biggest_in"):
+            c["biggest_in"] = said_size
+        if not c.get("species"):
+            said_species = _species_said(text)
+            if said_species:
+                c["species"] = said_species
 
-    if out.get("species"):
-        key = _species_key(out["species"])
-        if key:
-            out["species"] = key
-        else:
-            # Heard something we do not model -- keep the words in the notes
-            # rather than dropping the only record that it was said.
-            out["notes"] = ((out.get("notes") or "") +
-                            f" (heard species: {out['species']})").strip()
-            out.pop("species")
+    # Mirror the first catch onto the flat fields, so the form has something to
+    # fill even when several species were heard.
+    first = out["catch"][0] if out["catch"] else {}
+    out["count"] = first.get("count", 0)
+    for k in ("species", "biggest_in", "released"):
+        if first.get(k) not in (None, ""):
+            out[k] = first[k]
+
     return out
 
 

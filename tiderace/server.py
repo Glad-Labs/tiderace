@@ -571,7 +571,21 @@ class Handler(BaseHTTPRequestHandler):
                                         "failed": failed,
                                         "summary": catchlog.summary()})
 
-            catchlog.record(self._entry(data))
+            # A `catch` list is one session with several species -- the usual
+            # shape of a bottom-fishing afternoon. Written as a row each,
+            # sharing a trip id, because `evaluate` correlates per species but
+            # three rows must not read as three separate outings.
+            cat = data.get("catch")
+            if isinstance(cat, list) and cat:
+                entries = []
+                for c in cat:
+                    row = dict(data)
+                    row.pop("catch", None)
+                    row.update({k: v for k, v in c.items() if v not in (None, "")})
+                    entries.append(self._entry(row))
+                catchlog.record_trip(entries)
+            else:
+                catchlog.record(self._entry(data))
             return self._send_json({"ok": True, "summary": catchlog.summary()})
         except Exception as exc:                                  # noqa: BLE001
             traceback.print_exc()

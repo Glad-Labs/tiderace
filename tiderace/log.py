@@ -67,6 +67,13 @@ class Entry:
     # filled in from the spot when the trip was logged against a known one.
     lat: float | None = None
     lon: float | None = None
+    # One row per species, and rows from the same session share a trip_id.
+    # Bottom fishing produces sea bass, scup and tautog in one afternoon on one
+    # piece of structure -- three catches, one trip. Keeping a row per species
+    # is what `evaluate` needs (it correlates each species against its own
+    # score), and the trip_id is what stops three rows being counted as three
+    # separate outings when anything asks how often you go.
+    trip_id: str | None = None
     source: str = "manual"          # manual | voice | report
     decided_by: str = "angler"      # angler | app -- who picked the spot
     # Which rules applied to this trip. Recorded rather than inferred: RI
@@ -177,6 +184,35 @@ def record(entry: Entry, path: str = LOG_PATH) -> Entry:
     with open(path, "a") as fh:
         fh.write(json.dumps(asdict(entry)) + "\n")
     return entry
+
+
+def record_trip(entries: list[Entry], path: str = LOG_PATH) -> list[Entry]:
+    """One session, several species. Writes a row each, sharing a trip id.
+
+    The conditions snapshot is taken once and copied, not recomputed per row:
+    they were all caught in the same water at the same time, and three
+    independent snapshots would differ by whatever the tide did while the loop
+    ran.
+    """
+    import uuid
+    if not entries:
+        return []
+    tid = entries[0].trip_id or uuid.uuid4().hex[:12]
+    first = entries[0]
+    if not first.conditions:
+        try:
+            first.conditions = snapshot(
+                first.spot, datetime.fromisoformat(first.started_at),
+                first.species, first.lat, first.lon)
+        except Exception:                                         # noqa: BLE001
+            first.conditions = {}
+    out = []
+    for e in entries:
+        e.trip_id = tid
+        if not e.conditions:
+            e.conditions = dict(first.conditions)
+        out.append(record(e, path))
+    return out
 
 
 def load(path: str = LOG_PATH) -> list[dict]:
