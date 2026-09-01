@@ -2732,6 +2732,18 @@ class DoubleTap(unittest.TestCase):
         self.assertIn("if (submitting) return;", body)
 
 
+
+def strip_comments(page):
+    """A page with its comments removed.
+
+    Every assertion below has at some point matched the word it was looking
+    for inside a comment explaining the bug, and passed while the code was
+    still wrong.
+    """
+    js = re.sub(r"/\*.*?\*/", " ", page, flags=re.S)
+    return re.sub(r"(?m)^\s*//.*$", " ", js)
+
+
 class ResponsiveLayout(unittest.TestCase):
     """Which layout you get is decided by what you point with, not by width.
 
@@ -2746,6 +2758,7 @@ class ResponsiveLayout(unittest.TestCase):
         import pathlib
         self.page = (pathlib.Path(__file__).parent
                      / "tiderace" / "web" / "index.html").read_text()
+
 
     def test_touch_gets_the_touch_layout_at_any_width(self):
         self.assertIn("@media (max-width:900px), (pointer:coarse){", self.page)
@@ -3972,6 +3985,9 @@ class SheetStructure(unittest.TestCase):
         self.page = (pathlib.Path(__file__).parent
                      / "tiderace" / "web" / "index.html").read_text()
 
+    def _script(self):
+        return strip_comments(self.page)
+
     def test_there_are_four_views(self):
         import re
         views = re.findall(r'data-view="(\w+)"', self.page)
@@ -4004,8 +4020,58 @@ class SheetStructure(unittest.TestCase):
         declaration hit the temporal dead zone and took the whole script
         down, which is how showConditions stopped existing at all."""
         decl = self.page.index("let VIEW = 'now'")
-        boot = self.page.index("if (MOBILE()){\n    sheet.classList.add('up', 'peek');")
+        boot = self.page.index("if (MOBILE()){")
         self.assertLess(decl, boot, "boot must come after the declarations")
+
+    def test_the_sheet_does_not_block_its_own_scrolling(self):
+        """touch-action intersects up the ancestor chain, so `none` on #sheet
+        also stopped #sheetbody -- the scrolling region holding every
+        reading -- from moving under a finger. It belongs on the handle."""
+        css = self._script().split("#sheet{")[1].split("}")[0]
+        self.assertNotIn("touch-action", css,
+                         "touch-action on #sheet disables the sheet's own scroller")
+        grip = self._script().split("#sheetgrip{")[1].split("}")[0]
+        self.assertIn("touch-action:none", grip)
+
+    def test_only_one_place_moves_the_sheet(self):
+        """Callers used to add 'up' and remove 'peek' by hand and the pair was
+        not always complete, so the sheet could hold both at once and which
+        rule won came down to stylesheet source order."""
+        js = self._script()
+        setter = js.index("function setSheet(state)")
+        end = js.index("function sheetState()")
+        for cls in ("'up'", "'peek'"):
+            for m in re.finditer(r"classList\.(add|remove)\(([^)]*)\)", js):
+                if cls in m.group(2):
+                    self.assertTrue(setter <= m.start() < end,
+                                    "sheet class touched outside setSheet: " + m.group(0))
+
+    def test_a_tap_on_the_handle_closes_the_sheet(self):
+        """It was drag-only, with a 40px threshold, which is the wrong ask
+        with wet hands on a boat -- and nothing said the bar was a button."""
+        js = self._script()
+        self.assertIn("STEP_DOWN", js)
+        self.assertIn("full:'peek'", js.replace(" ", ""))
+        self.assertIn("peek:'shut'", js.replace(" ", ""))
+        self.assertIn("gcue", self.page)
+
+    def test_a_cancelled_drag_does_not_strand_the_sheet(self):
+        """pointercancel fires instead of pointerup when the gesture is taken
+        away; without a handler the sheet stays mid-drag with transitions
+        off, which reads as the app having frozen."""
+        self.assertIn("pointercancel", self._script())
+
+    def test_the_sheet_setter_is_reachable_from_boot(self):
+        """Boot sits above the setter, so it cannot go through the window
+        alias (assigned later) and the setter cannot lean on a const arrow
+        that is still in its dead zone at that point."""
+        js = self._script()
+        self.assertIn("function reclamp()", js,
+                      "reclamp must hoist; boot calls setSheet above it")
+        boot = js.index("if (MOBILE()){")
+        line = js[boot:js.index("\n", js.index("setSheet", boot))]
+        self.assertNotIn("window.setSheet", line,
+                         "boot runs before the window alias exists")
 
 
 if __name__ == "__main__":

@@ -199,18 +199,36 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   max-height:86vh; display:flex; flex-direction:column;
   padding-bottom:env(safe-area-inset-bottom);
   box-shadow:0 -18px 44px rgba(0,0,0,.5);
-  touch-action:none;
+  /* touch-action deliberately NOT set here. It used to be `none` on the whole
+     sheet to stop the drag gesture being stolen, but the browser intersects
+     touch-action up the ancestor chain, so that one line also made #sheetbody
+     -- the scrolling region holding every reading -- refuse to scroll under a
+     finger. The gesture only ever happens on the handle, so the restriction
+     lives on the handle. */
 }
 #sheet.up{transform:translateY(0)}
 #sheet.peek{transform:translateY(calc(100% - 168px))}
+/* While a finger is down the sheet tracks it directly; the easing is for
+   released gestures, and leaving it on makes the drag feel like sludge. */
+#sheet.drag{transition:none}
 #sheetgrip{
   /* 44px of actual touch target, not the 21px the visible bar would give.
      This is the control you use with wet hands on a moving boat, so the hit
      area is sized for that even though the bar drawn inside it is small. */
-  flex:none; min-height:44px; padding:14px 0 10px;
-  display:grid; place-items:center; cursor:grab;
+  flex:none; min-height:44px; padding:10px 0 8px;
+  display:grid; place-items:center; gap:5px; cursor:grab;
+  touch-action:none;   /* the drag is ours; do not let the page pan instead */
+  -webkit-tap-highlight-color:transparent; user-select:none;
 }
-#sheetgrip div{width:44px; height:5px; border-radius:3px; background:var(--hair)}
+#sheetgrip .gbar{width:44px; height:5px; border-radius:3px; background:var(--hair)}
+#sheetgrip:active .gbar{background:var(--muted)}
+/* Says what the handle does. The handle was drag-only and undiscoverable:
+   nothing about a grey bar tells you it is also a button, and a drag that
+   has to clear a threshold is the wrong ask with wet hands on a wet screen. */
+#sheetgrip .gcue{
+  font:10px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase;
+  color:var(--muted); pointer-events:none;
+}
 #sheethead{
   flex:none; display:flex; align-items:baseline; gap:10px;
   padding:0 16px 10px; border-bottom:1px solid var(--hair);
@@ -1685,7 +1703,7 @@ async function showTrips(){
   document.getElementById('sheetwhen').textContent = '';
   document.getElementById('sheetzone').textContent = '';
   body.innerHTML = '<div class="sdim">reading trips…</div>';
-  sheet.classList.add('up'); sheet.classList.remove('peek');
+  window.setSheet('full');
 
   const ts = await loadTrips();
   if (!ts.length){
@@ -1710,7 +1728,7 @@ async function showTrips(){
     el.classList.add('on');
     TRIP_SHOWN = t;
     drawTrip(t);
-    sheet.classList.add('peek');      // get out of the way of the map
+    window.setSheet('peek');          // get out of the way of the map
   });
 }
 window.showTrips = showTrips;
@@ -2180,7 +2198,7 @@ map.on('click', e => {
 <button id="here" aria-label="Conditions at my location">HERE</button>
 <button id="trip" aria-label="Record this trip"><b>REC</b>trip</button>
 <div id="sheet" aria-live="polite">
-  <div id="sheetgrip"><div></div></div>
+  <div id="sheetgrip" role="button" tabindex="0" aria-label="Collapse panel"><div class="gbar"></div><span class="gcue"></span></div>
   <div id="sheethead">
     <b id="sheettitle">Conditions</b>
     <span id="sheetwhen"></span>
@@ -2552,7 +2570,7 @@ window.surveyURL = (lat, lon) =>
     btn.onclick = () => {
       form.classList.toggle('open');
       if (form.classList.contains('open')) {
-        sheet.classList.remove('peek');
+        window.setSheet('full');
         form.scrollIntoView({behavior: 'smooth', block: 'nearest'});
       }
     };
@@ -2725,8 +2743,7 @@ window.surveyURL = (lat, lon) =>
 
   async function showView(v){
     setTab(v);
-    sheet.classList.add('up');
-    sheet.classList.remove('peek');
+    window.setSheet('full');
     if (v === 'now')   return LAST_SURVEY ? render(LAST_SURVEY) : nowEmpty();
     if (v === 'log')   return renderLog();
     if (v === 'spots') return renderSpots();
@@ -2799,7 +2816,7 @@ window.surveyURL = (lat, lon) =>
   // and calling them earlier hit its temporal dead zone and took the whole
   // script down -- which is why showConditions stopped existing at all.
   if (MOBILE()){
-    sheet.classList.add('up', 'peek');
+    setSheet('peek');          // a reachable strip, not the whole screen
     setTab('now');
     nowEmpty();
   }
@@ -2810,7 +2827,7 @@ window.surveyURL = (lat, lon) =>
     when.textContent = '';
     zoneE.textContent = '';
     body.innerHTML = '<div class="sdim">reading conditions…</div>';
-    sheet.classList.add('up'); sheet.classList.remove('peek');
+    window.setSheet('full');
     setTab('now');
     if (typeof clampLabels === 'function') setTimeout(clampLabels, 240);
     try{
@@ -2831,25 +2848,94 @@ window.surveyURL = (lat, lon) =>
 
   /* Dragged, not tapped, shut: a knuckle on a moving boat should not be able
      to dismiss the panel mid-read. */
-  let y0 = null, t0 = 0;
-  const grip = document.getElementById('sheetgrip');
-  grip.addEventListener('pointerdown', e => {
-    y0 = e.clientY; t0 = Date.now(); grip.setPointerCapture(e.pointerId);
-  });
   // The sheet's top edge moves when it is dragged, so what it covers changes.
-  const reclamp = () => { if (typeof clampLabels === 'function') setTimeout(clampLabels, 240); };
+  // A declaration, not a const arrow: setSheet calls it, boot calls setSheet,
+  // and boot runs above this line -- a const would still be in its temporal
+  // dead zone there and would take the whole script down on the way past.
+  function reclamp(){ if (typeof clampLabels === 'function') setTimeout(clampLabels, 240); }
 
-  grip.addEventListener('pointerup', e => {
-    if (y0 == null) return;
-    const dy = e.clientY - y0, dt = Date.now() - t0;
-    if (dy > 40 || (dy > 12 && dt < 220)){
-      if (sheet.classList.contains('peek')) sheet.classList.remove('up','peek');
-      else { sheet.classList.add('peek'); }
-    } else if (dy < -30){
-      sheet.classList.remove('peek');
-    }
-    y0 = null;
+  const grip = document.getElementById('sheetgrip');
+  const cue  = grip.querySelector('.gcue');
+
+  /* One place that owns where the sheet sits.
+     Every caller used to do `add('up'); remove('peek')` by hand, and the pair
+     was not always complete -- the drag handler added 'peek' while leaving
+     'up' on, so the sheet booted in the impossible state "up peek" and which
+     rule won came down to source order in the stylesheet. Three states, one
+     setter, no combinations. */
+  function setSheet(state){
+    const el = document.getElementById('sheet');
+    if (!el) return;
+    el.classList.remove('up','peek');
+    if (state === 'full') el.classList.add('up');
+    else if (state === 'peek') el.classList.add('peek');
+    const c = el.querySelector('#sheetgrip .gcue');
+    if (c) c.textContent = state === 'full' ? 'tap to shrink'
+                         : state === 'peek' ? 'tap to close' : '';
     reclamp();
+  }
+  function sheetState(){
+    const el = document.getElementById('sheet');
+    if (!el) return 'shut';
+    return el.classList.contains('peek') ? 'peek'
+         : el.classList.contains('up')   ? 'full' : 'shut';
+  }
+  // Three script scopes each hold their own `sheet` binding, so the one
+  // setter has to be reachable from all of them.
+  window.setSheet = setSheet; window.sheetState = sheetState;
+
+  /* Drag to place it, or just tap.
+     Drag-only dismissal was the original design -- the worry was a knuckle
+     shutting the panel mid-read. But the handle is the only thing that takes
+     the tap, and a knuckle lands on content, so the worry is covered without
+     demanding a gesture that has to clear a 40px threshold on a pitching
+     boat. Tap steps it down one; a long drag closes it outright. */
+  let y0 = null, t0 = 0, base = 0, moved = false;
+  const STEP_DOWN = {full:'peek', peek:'shut', shut:'shut'};
+
+  grip.addEventListener('pointerdown', e => {
+    y0 = e.clientY; t0 = Date.now(); moved = false;
+    base = sheet.getBoundingClientRect().top;
+    sheet.classList.add('drag');
+    try { grip.setPointerCapture(e.pointerId); } catch (_) {}
+  });
+
+  grip.addEventListener('pointermove', e => {
+    if (y0 == null) return;
+    const dy = e.clientY - y0;
+    if (Math.abs(dy) > 6) moved = true;
+    // Follow the finger, but never above the sheet's natural top.
+    if (moved) sheet.style.transform = 'translateY(' + Math.max(0, dy) + 'px)';
+  });
+
+  const endDrag = e => {
+    if (y0 == null) return;
+    const dy = (e && typeof e.clientY === 'number') ? e.clientY - y0 : 0;
+    const dt = Date.now() - t0;
+    y0 = null;
+    sheet.classList.remove('drag');
+    sheet.style.transform = '';       // hand control back to the classes
+    const was = sheetState();
+    if (!moved && dt < 700){          // a tap: step down one
+      setSheet(STEP_DOWN[was]);
+    } else if (dy > 120){             // a decisive pull: straight shut
+      setSheet('shut');
+    } else if (dy > 30){              // a short pull: one step
+      setSheet(STEP_DOWN[was]);
+    } else if (dy < -30){             // a pull up: open fully
+      setSheet('full');
+    } else {
+      setSheet(was);                  // went nowhere; put it back
+    }
+  };
+  grip.addEventListener('pointerup', endDrag);
+  // Without this a cancelled gesture leaves the sheet stuck mid-drag with
+  // transitions off, which looks exactly like the app having frozen.
+  grip.addEventListener('pointercancel', endDrag);
+  grip.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' '){
+      e.preventDefault(); setSheet(STEP_DOWN[sheetState()]);
+    }
   });
 
   const here = document.getElementById('here');
