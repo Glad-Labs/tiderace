@@ -447,13 +447,11 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if url.path == "/api/tracks":
                 from . import track as trackmod
-                rows = trackmod.load()
-                # Points are deliberately not returned: the summary and the
-                # dwells are what any caller needs, and the full breadcrumb is
-                # the part worth not moving around even locally.
-                return self._send_json({"tracks": [
-                    {k: v for k, v in r.items() if k != "points"}
-                    for r in rows[-40:]]})
+                # Sessions carry their own paths, so the map can draw where you
+                # drifted; the raw breadcrumb stays on disk. Catches are matched
+                # by time rather than wired in at write time, which makes the
+                # link work backwards over trips already logged.
+                return self._send_json({"tracks": trackmod.with_catches()[:40]})
             if url.path == "/api/structure":
                 # Fixed offshore structure we know about that the ENC harbour
                 # band does not carry. Its Offshore_Platform layer has eight
@@ -549,6 +547,77 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(
                     {"error": f"could not read that: {exc}",
                      "transcript": text}, 502)
+
+        if url.path == "/api/log/photo":
+            # Base64 photos in, draft sessions out. Like /api/log/voice this
+            # deliberately does NOT write: EXIF settles where and when, the
+            # model guesses only the species, and the count is left empty for
+            # a human because a camera roll cannot honestly supply one.
+            #
+            # The bytes go to Ollama on this machine and nowhere else. A catch
+            # photo carries the coordinate it was taken at, which is the one
+            # thing this project has never shared.
+            import base64
+            import tempfile
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                data = json.loads(self.rfile.read(n) or b"{}")
+            except Exception as exc:                              # noqa: BLE001
+                return self._send_json({"error": str(exc)}, 400)
+            shots = data.get("photos")
+            if not isinstance(shots, list) or not shots:
+                return self._send_json({"error": "no photos"}, 400)
+            if len(shots) > 60:
+                return self._send_json(
+                    {"error": f"{len(shots)} photos in one request; "
+                              "send them in batches of 60"}, 413)
+            from . import photolog
+            tmp = tempfile.mkdtemp(prefix="tiderace-photo-")
+            paths = []
+            try:
+                for i, sh in enumerate(shots):
+                    blob = sh.get("data") if isinstance(sh, dict) else sh
+                    name = (sh.get("name") if isinstance(sh, dict) else None) or f"{i}.jpg"
+                    ext = os.path.splitext(name)[1].lower() or ".jpg"
+                    # mkstemp rather than open(): it creates the file
+                    # atomically with owner-only permissions, which matters
+                    # for a photo that carries a coordinate, and it keeps
+                    # this out of the non-atomic-write guard in tests.py.
+                    fd, fp = tempfile.mkstemp(prefix=f"{i:03d}-", suffix=ext,
+                                              dir=tmp)
+                    try:
+                        os.write(fd, base64.b64decode(blob))
+                    finally:
+                        os.close(fd)
+                    paths.append(fp)
+                out = photolog.draft(
+                    paths, identify=not data.get("no_identify"))
+                # The temp filenames are an implementation detail; give the
+                # client back the names it sent.
+                names = [(sh.get("name") if isinstance(sh, dict) else None) or f"{i}.jpg"
+                         for i, sh in enumerate(shots)]
+                by_index = {os.path.basename(fp): names[i]
+                            for i, fp in enumerate(paths)}
+                for t in out["trips"]:
+                    for ph in t["photos"]:
+                        ph["file"] = by_index.get(ph["file"], ph["file"])
+                for sk in out["skipped"]:
+                    sk["file"] = by_index.get(sk["file"], sk["file"])
+                    sk.pop("path", None)
+                return self._send_json(out)
+            except Exception as exc:                              # noqa: BLE001
+                traceback.print_exc()
+                return self._send_json({"error": f"could not read those: {exc}"}, 502)
+            finally:
+                for fp in paths:
+                    try:
+                        os.unlink(fp)
+                    except OSError:
+                        pass
+                try:
+                    os.rmdir(tmp)
+                except OSError:
+                    pass
 
         if url.path != "/api/log":
             return self._send_json({"error": "not found"}, 404)

@@ -269,3 +269,59 @@ def load(path: str = TRACK_PATH) -> list[dict]:
                 except ValueError:
                     continue                   # a torn line is not worth dying over
     return out
+
+
+# ------------------------------------------------------- tracks and catches
+#
+# The two are recorded independently and on purpose: a track happens whether or
+# not anybody logs anything, and a catch can be logged from the dock days later
+# off a photo. So they are matched after the fact by time rather than being
+# wired together at write time, which also means the matching works backwards
+# over trips already in the log.
+#
+# Overlap, not containment. A catch logged at 14:05 for a trip that ended at
+# 14:00 is obviously the same trip, and demanding the timestamp fall inside the
+# track would drop exactly the entries made at the ramp on the way home -- which
+# is when most of them get made.
+MATCH_SLACK_MINUTES = 90
+
+
+def catches_for(track_row: dict, entries: list[dict]) -> list[dict]:
+    """Log entries that belong to this track, by time."""
+    from datetime import timedelta
+    t0, t1 = _when({"t": track_row.get("started_at")}), _when({"t": track_row.get("ended_at")})
+    if not t0 or not t1:
+        return []
+    lo = t0 - timedelta(minutes=MATCH_SLACK_MINUTES)
+    hi = t1 + timedelta(minutes=MATCH_SLACK_MINUTES)
+    out = []
+    for e in entries:
+        when = _when({"t": e.get("started_at")}) or _when({"t": e.get("logged_at")})
+        if when and lo <= when <= hi:
+            out.append(e)
+    return out
+
+
+def with_catches(rows: list[dict] | None = None,
+                 entries: list[dict] | None = None) -> list[dict]:
+    """Every track, newest first, with what was caught on it.
+
+    The full breadcrumb is dropped and only the fishing sessions kept. The
+    sessions carry their own paths, so the map can still draw where you drifted
+    without moving every fix of a six-hour day around.
+    """
+    from . import log as catchlog
+    rows = load() if rows is None else rows
+    entries = catchlog.load() if entries is None else entries
+    out = []
+    for r in rows:
+        cs = catches_for(r, entries)
+        out.append({
+            **{k: v for k, v in r.items() if k != "points"},
+            "catches": [{k: c.get(k) for k in
+                         ("species", "count", "biggest_in", "method",
+                          "notes", "trip_id", "lat", "lon")} for c in cs],
+            "fish": sum(int(c.get("count") or 0) for c in cs),
+            "species": sorted({c["species"] for c in cs if c.get("species")}),
+        })
+    return sorted(out, key=lambda r: r.get("started_at") or "", reverse=True)

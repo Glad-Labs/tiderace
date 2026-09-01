@@ -462,6 +462,33 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 @media (prefers-reduced-motion:reduce){#trip.rec{animation:none}}
 #trip b{font-size:14px; font-weight:700; display:block}
 @media (min-width:901px) and (pointer:fine){ #trip{display:none} }
+
+/* ---- trips ------------------------------------------------------------
+   A trip is a line and a list of fish, so the row shows both: the numbers
+   you scan for, and a tap to put the drift itself on the map. */
+#tripsbtn{
+  width:100%; min-height:52px; margin-top:10px; border-radius:12px;
+  border:1px solid var(--hair); background:var(--panel-2); color:var(--ink);
+  font:600 15px/1 var(--display); cursor:pointer;
+}
+#tripsbtn:active{transform:scale(.99)}
+.trip{
+  display:grid; grid-template-columns:1fr auto; gap:4px 12px;
+  padding:14px 16px; border-bottom:1px solid rgba(39,64,72,.5);
+  cursor:pointer; align-items:baseline;
+}
+.trip:active{background:var(--panel-2)}
+.trip.on{background:var(--panel-2); box-shadow:inset 3px 0 0 var(--accent)}
+.trip .when{font:600 15px/1.2 var(--display); color:var(--ink)}
+.trip .fish{
+  font:600 17px/1 var(--display); color:var(--accent);
+  font-variant-numeric:tabular-nums; text-align:right;
+}
+.trip .fish.blank{color:var(--muted); font-size:13px; font-weight:400}
+.trip .meta{
+  grid-column:1 / -1; font:12px/1.5 var(--mono); color:var(--muted);
+}
+.trip .sp{color:var(--depth)}
 </style>
 </head>
 <body>
@@ -1495,6 +1522,145 @@ function showTripSummary(s){
   setInterval(paintTrip, 30000);
 })();
 
+
+/* ---- trips ------------------------------------------------------------
+ * What the tracking is for. A trip is a line and a list of fish; the row
+ * shows the numbers and a tap puts the drift itself on the map.
+ *
+ * Only the fishing sessions are drawn, not the raw breadcrumb. The run out and
+ * the run home are not information -- they are the same channel every time --
+ * and drawing them buries the part that matters under a line to the ramp.
+ */
+let TRIPS = [], TRIP_SHOWN = null;
+
+// The sheet's own esc() lives inside its IIFE and is not reachable from here.
+// Duplicating four lines beats reaching into another scope, and beats the
+// alternative that shipped for a moment: interpolating unescaped values into
+// innerHTML because the helper happened not to be in scope.
+const tesc = t => String(t == null ? '' : t)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+async function loadTrips(){
+  try { TRIPS = (await (await fetch('/api/tracks')).json()).tracks || []; }
+  catch (_) { TRIPS = []; }
+  return TRIPS;
+}
+
+function tripRow(t, i){
+  const d = new Date(t.started_at);
+  const when = d.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'})
+             + ' · ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  const fish = t.fish > 0
+    ? `<div class="fish">${t.fish}</div>`
+    : `<div class="fish blank">blank</div>`;
+  const sp = (t.species || []).map(x => x.replace(/_/g,' ')).join(', ');
+  const bits = [
+    `${Math.round(t.minutes)} min`,
+    `${t.distance_nm} nm`,
+    `${(t.sessions || []).length} spot${(t.sessions||[]).length === 1 ? '' : 's'}`,
+    t.fishing_minutes ? `${Math.round(t.fishing_minutes)} min fishing` : '',
+  ].filter(Boolean).join(' · ');
+  return `<div class="trip" data-trip="${i}">
+      <div class="when">${tesc(when)}</div>${fish}
+      <div class="meta">${tesc(bits)}${sp ? ' · <span class="sp">' + tesc(sp) + '</span>' : ''}</div>
+    </div>`;
+}
+
+/* Draw one trip's fishing sessions. Redrawn rather than toggled per trip:
+   MapLibre sources are cheap to replace and this keeps exactly one trip on the
+   map, which is what you want when comparing two days. */
+function drawTrip(t){
+  if (!MAP_READY) return;
+  const feats = [];
+  for (const s of (t.sessions || [])){
+    if ((s.path || []).length > 1)
+      feats.push({type:'Feature',
+        geometry:{type:'LineString', coordinates: s.path.map(([la,lo]) => [lo,la])},
+        properties:{kind:s.kind, minutes:s.minutes}});
+  }
+  for (const c of (t.catches || []))
+    if (c.lat != null && c.lon != null)
+      feats.push({type:'Feature', geometry:{type:'Point', coordinates:[c.lon,c.lat]},
+                  properties:{fish:true, label:`${c.count} ${(c.species||'').replace(/_/g,' ')}`}});
+
+  const gj = {type:'FeatureCollection', features:feats};
+  if (map.getSource('trip')) { map.getSource('trip').setData(gj); }
+  else {
+    map.addSource('trip', {type:'geojson', data:gj});
+    map.addLayer({id:'trip-line', type:'line', source:'trip',
+      filter:['==',['geometry-type'],'LineString'],
+      layout:{'line-join':'round','line-cap':'round'},
+      paint:{'line-color':['match',['get','kind'],'troll','#D9A521','#F04FA0'],
+             'line-width':3.5, 'line-opacity':.9}});
+    map.addLayer({id:'trip-fish', type:'circle', source:'trip',
+      filter:['==',['get','fish'],true],
+      paint:{'circle-color':'#4FBF89','circle-radius':6,
+             'circle-stroke-width':2,'circle-stroke-color':'#0B1518'}});
+    map.addLayer({id:'trip-fish-lbl', type:'symbol', source:'trip',
+      filter:['==',['get','fish'],true], minzoom:10,
+      layout:{'text-field':['get','label'],'text-font':['Noto Sans Regular'],
+              'text-size':11,'text-offset':[0,1.2],'text-anchor':'top'},
+      paint:{'text-color':'#E4ECEE','text-halo-color':'rgba(11,21,24,.9)',
+             'text-halo-width':1.2}});
+  }
+
+  // Frame the fishing, not the whole day.
+  const pts = feats.flatMap(f => f.geometry.type === 'LineString'
+    ? f.geometry.coordinates : [f.geometry.coordinates]);
+  if (pts.length){
+    const lons = pts.map(p=>p[0]), lats = pts.map(p=>p[1]);
+    map.fitBounds([[Math.min(...lons),Math.min(...lats)],
+                   [Math.max(...lons),Math.max(...lats)]],
+                  {padding:70, maxZoom:14, duration:700});
+  }
+}
+
+function clearTrip(){
+  for (const id of ['trip-fish-lbl','trip-fish','trip-line'])
+    if (map.getLayer(id)) map.removeLayer(id);
+  if (map.getSource('trip')) map.removeSource('trip');
+  TRIP_SHOWN = null;
+}
+
+async function showTrips(){
+  const body = document.getElementById('sheetbody');
+  const head = document.getElementById('sheettitle');
+  const sheet = document.getElementById('sheet');
+  if (!body) return;
+  head.textContent = 'Trips';
+  document.getElementById('sheetwhen').textContent = '';
+  document.getElementById('sheetzone').textContent = '';
+  body.innerHTML = '<div class="sdim">reading trips…</div>';
+  sheet.classList.add('up'); sheet.classList.remove('peek');
+
+  const ts = await loadTrips();
+  if (!ts.length){
+    body.innerHTML = '<div class="sdim">No trips recorded yet. Hit REC at the ' +
+      'ramp and stop at the dock — a trip is kept whether or not you log a fish, ' +
+      'and the blanks are the half everyone throws away.</div>';
+    return;
+  }
+  const fish = ts.reduce((n,t) => n + (t.fish||0), 0);
+  const blanks = ts.filter(t => !t.fish).length;
+  body.innerHTML =
+    `<div class="sgroup">${ts.length} trip${ts.length===1?'':'s'} · ` +
+    `${fish} fish · ${blanks} blank${blanks===1?'':'s'}</div>` +
+    ts.map(tripRow).join('') +
+    `<div class="sdim">Tap a trip to put its drifts on the map. ` +
+    `Pink is drifting, amber is trolling; green dots are logged catches.</div>`;
+
+  body.querySelectorAll('.trip').forEach(el => el.onclick = () => {
+    const t = ts[+el.dataset.trip];
+    body.querySelectorAll('.trip').forEach(x => x.classList.remove('on'));
+    if (TRIP_SHOWN === t){ clearTrip(); return; }
+    el.classList.add('on');
+    TRIP_SHOWN = t;
+    drawTrip(t);
+    sheet.classList.add('peek');      // get out of the way of the map
+  });
+}
+window.showTrips = showTrips;
+
 async function loadBait(){
   if (!MAP_READY) return;
   let gj;
@@ -2099,6 +2265,9 @@ window.surveyURL = (lat, lon) =>
       h += `<div class="sdim">${d.binding_warnings.map(esc).join('<br>')}</div>`;
 
     h += logSection(d);
+    // A way back to what you have already done. Below the log form on
+    // purpose: logging this trip comes before reviewing old ones.
+    h += `<div id="slog" style="border-top:0;padding-top:0"><button id="tripsbtn" type="button">Past trips</button></div>`;
     h += diagBlock();
     // render() replaces the sheet's contents, which would strand the adopted
     // panel. Detach it first, rebuild, then put it back at the bottom.
@@ -2109,6 +2278,8 @@ window.surveyURL = (lat, lon) =>
     if (adopted) body.appendChild(adopted);
     adoptPanel();
     fillDiag();
+    const tb = document.getElementById('tripsbtn');
+    if (tb) tb.onclick = () => window.showTrips && window.showTrips();
   }
 
 
