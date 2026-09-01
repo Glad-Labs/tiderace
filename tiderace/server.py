@@ -357,6 +357,20 @@ class Handler(BaseHTTPRequestHandler):
                     "attribution": "© <a href=\"https://protomaps.com\">Protomaps</a> "
                                    "© <a href=\"https://openstreetmap.org\">OpenStreetMap</a>",
                 })
+            if url.path == "/api/species":
+                # Two lists, because they answer different questions: what the
+                # forecast can rank, and what the log will accept. Collapsing
+                # them is what stopped you logging a bonito.
+                from . import species as spmod
+                return self._send_json({
+                    "loggable": [
+                        {"key": s.key, "name": s.name, "group": s.group,
+                         "scored": s.scored, "regulated": s.regulated,
+                         "hms": s.hms,
+                         "warning": spmod.unregulated_warning(s.key)}
+                        for s in spmod.loggable()],
+                    "scored": [s.key for s in spmod.scored()],
+                })
             if url.path == "/api/charts":
                 return self._send_json({
                     "layers": [{"name": n, "label": charts.LAYERS[n][1],
@@ -670,8 +684,18 @@ class Handler(BaseHTTPRequestHandler):
             spot = f"at:{float(lat):.5f},{float(lon):.5f}"
         if not spot:
             raise ValueError("entry needs a spot or a coordinate")
+        # Any species in the registry, not just the six the forecast scores.
+        # A bonito is a real fish and the log should hold it; refusing it
+        # because the model has no opinion is how the log stayed empty.
+        from . import species as spmod
+        sp = data.get("species")
+        if sp and sp not in spmod.BY_KEY:
+            resolved = spmod.resolve(sp)
+            if not resolved:
+                raise ValueError(f"unknown species {sp!r}")
+            sp = resolved
         return catchlog.Entry(
-            spot=spot, species=data["species"],
+            spot=spot, species=sp,
             count=int(data.get("count", 0)),
             started_at=data.get("started_at") or datetime.now().isoformat(
                 timespec="minutes"),

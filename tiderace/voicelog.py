@@ -237,27 +237,14 @@ def _size_said(text: str) -> float | None:
 
 
 def _species_said(text: str) -> str | None:
-    """A fish named anywhere in the note, matched against what we model.
+    """A fish named anywhere in the note, matched against the full registry.
 
     Deterministic for the same reason: saying "fluke" while the app is set to
     striped bass and having the trip logged as striped bass would be a quietly
     wrong row, and a wrong row is worse than a missing one.
     """
-    from .extract import SPECIES_ALIASES
-    t = " " + text.lower() + " "
-    hits = []
-    for alias, key in SPECIES_ALIASES.items():
-        if re.search(r"\b" + re.escape(alias) + r"s?\b", t):
-            hits.append((len(alias), key))
-    for word, key in (("schoolie", "striped_bass"), ("keeper", "striped_bass"),
-                      ("linesider", "striped_bass")):
-        if re.search(r"\b" + word + r"s?\b", t):
-            hits.append((len(word), key))
-    if not hits:
-        return None
-    # Longest alias wins: "sea bass" must beat "bass".
-    hits.sort(reverse=True)
-    return hits[0][1]
+    from . import species as spmod
+    return spmod.resolve(text)
 
 
 def parse(transcript: str, species: str | None = None,
@@ -342,17 +329,11 @@ def parse(transcript: str, species: str | None = None,
 
 
 def _species_key(said: str) -> str | None:
-    """Map a spoken fish name onto a profile key, via the report aliases."""
-    from .extract import SPECIES_ALIASES
-    s = (said or "").strip().lower()
-    if s in score.PROFILES:
-        return s
-    if s in SPECIES_ALIASES:
-        return SPECIES_ALIASES[s]
-    # "schoolie" and "keeper" are sizes of striped bass, not species.
-    if s in ("schoolie", "schoolies", "keeper", "keepers", "linesider"):
-        return "striped_bass"
-    for alias, key in SPECIES_ALIASES.items():
-        if alias in s:
-            return key
-    return None
+    """Map a spoken fish name onto a species key.
+
+    Goes through the full registry now, not just the six the model scores. You
+    caught a bonito; the log should say bonito rather than dropping it because
+    the forecast has no opinion about bonito.
+    """
+    from . import species as spmod
+    return spmod.resolve(said)

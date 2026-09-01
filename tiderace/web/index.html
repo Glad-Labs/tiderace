@@ -489,6 +489,22 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   grid-column:1 / -1; font:12px/1.5 var(--mono); color:var(--muted);
 }
 .trip .sp{color:var(--depth)}
+
+/* The log's own species picker. Separate from the one in the top bar, which
+   chooses what to FORECAST -- and the forecast only knows six fish. Sharing
+   one control meant you could not log a bonito without pretending you had
+   been fishing for something else. */
+#slogsp{
+  width:100%; margin-top:8px; padding:13px 12px; border-radius:10px;
+  border:1px solid var(--hair); background:var(--ground); color:var(--ink);
+  font:16px/1.2 var(--mono);
+}
+#slogwarn{
+  margin-top:8px; padding:10px 12px; border-radius:9px;
+  background:rgba(217,165,33,.10); border:1px solid rgba(217,165,33,.35);
+  font:12px/1.55 var(--mono); color:var(--warn); display:none;
+}
+#slogwarn.show{display:block}
 </style>
 </head>
 <body>
@@ -2275,6 +2291,7 @@ window.surveyURL = (lat, lon) =>
     body.innerHTML = h;
     wireLog(d);
     wireMic(d);
+    wireSpeciesPicker();
     if (adopted) body.appendChild(adopted);
     adoptPanel();
     fillDiag();
@@ -2304,6 +2321,8 @@ window.surveyURL = (lat, lon) =>
         <form id="slogform" novalidate>
           <button id="slogmic" type="button">🎙 Say the trip</button>
           <div id="slogheard"></div>
+          <select id="slogsp" name="species"></select>
+          <div id="slogwarn"></div>
           <div class="two">
             <input type="number" name="count" min="0" value="0" inputmode="numeric"
                    placeholder="fish" required>
@@ -2434,12 +2453,15 @@ window.surveyURL = (lat, lon) =>
 
     // A species heard that differs from the one selected is worth saying out
     // loud rather than silently switching the whole app under you.
-    const sel = document.getElementById('species');
+    // A heard species sets the LOG's picker. It used to switch the whole app's
+    // forecast, which is wrong twice over: it reloads the map under you, and it
+    // cannot represent a fish the forecast does not model.
+    const spSel = document.getElementById('slogsp');
     let note = '';
-    if (p.species && sel && p.species !== sel.value){
-      sel.value = p.species;
-      if (typeof loadGrid === 'function') loadGrid();
-      note = ` · switched to <b>${esc(p.species.replace('_',' '))}</b>`;
+    if (p.species && spSel){
+      spSel.value = p.species;
+      spSel.dispatchEvent(new Event('change'));
+      note = ` · logging as <b>${esc(p.species.replace(/_/g,' '))}</b>`;
     }
     const conf = p.confidence && p.confidence !== 'high'
       ? ` <span class="conf">(${esc(p.confidence)} confidence — check it)</span>` : '';
@@ -2448,6 +2470,44 @@ window.surveyURL = (lat, lon) =>
                       (p.overridden ? '<br><span class="conf">' +
                         esc(p.overridden) + '</span>' : '') +
                       '<br>Filled in below — check it, then save.';
+  }
+
+
+  /* Fill the log's species picker from the registry, grouped by where the fish
+     lives. The warning below it is the important part: an absent size limit
+     here means nobody verified it, not that there isn't one, and under a
+     commercial licence that difference is a violation rather than a bad day. */
+  let SPECIES_LIST = null;
+
+  async function wireSpeciesPicker(){
+    const sel = document.getElementById('slogsp');
+    const warn = document.getElementById('slogwarn');
+    if (!sel) return;
+    if (!SPECIES_LIST){
+      try { SPECIES_LIST = (await (await fetch('/api/species')).json()).loggable; }
+      catch (_) { SPECIES_LIST = []; }
+    }
+    const groups = {inshore:'Inshore', nearshore:'Sounds & nearshore',
+                    offshore:'Offshore'};
+    sel.innerHTML = Object.entries(groups).map(([g, label]) => {
+      const rows = SPECIES_LIST.filter(s => s.group === g);
+      if (!rows.length) return '';
+      return `<optgroup label="${label}">` + rows.map(s =>
+        `<option value="${s.key}">${esc(s.name)}` +
+        `${s.scored ? '' : ' ·'}${s.hms ? ' (HMS)' : ''}</option>`).join('') +
+        `</optgroup>`;
+    }).join('');
+
+    const top = document.getElementById('species');
+    if (top && SPECIES_LIST.some(s => s.key === top.value)) sel.value = top.value;
+
+    const showWarn = () => {
+      const s = SPECIES_LIST.find(x => x.key === sel.value);
+      if (s && s.warning){ warn.className = 'show'; warn.textContent = s.warning; }
+      else { warn.className = ''; warn.textContent = ''; }
+    };
+    sel.onchange = showWarn;
+    showWarn();
   }
 
   function wireLog(d) {
@@ -2509,12 +2569,15 @@ window.surveyURL = (lat, lon) =>
 
       const sel = document.getElementById('species');
       const f = new FormData(form);
+      // The LOG's species, not the forecast's. They are different questions
+      // and the forecast only knows six fish.
+      const spSel = document.getElementById('slogsp');
       const body = {
         // No spot key: the server mints "at:lat,lon" for a bare coordinate, and
         // snapshot() resolves it to stations exactly as a named spot would, so
         // this trip is as complete a training example as any other.
         lat: d.lat, lon: d.lon,
-        species: sel ? sel.value : 'striped_bass',
+        species: (spSel && spSel.value) || (sel ? sel.value : 'striped_bass'),
         client_id: (crypto.randomUUID?.() || String(Date.now()) + Math.random()),
       };
       for (const [k, v] of f.entries()) if (v !== '') body[k] = v;

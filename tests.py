@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       provenance,
-                      bathy, cache as cachemod, track, voicelog, llm, reconcile, reports, protected, survey, whales,
+                      bathy, cache as cachemod, species as speciesmod, track, voicelog, llm, reconcile, reports, protected, survey, whales,
                       exif as exifmod, madmf, photolog,
                       regs, ridem, score, solunar, spots)
 
@@ -3884,6 +3884,78 @@ class PhotoPrivacy(unittest.TestCase):
         format schema — measured, see the note in llm.py."""
         from tiderace import llm
         self.assertNotIn("qwen3-vl", llm.DEFAULT_VISION_MODEL)
+
+
+class SpeciesRegistry(unittest.TestCase):
+    """What you can log and what the model will forecast are different lists.
+
+    They used to be one list, and the consequence was that the catch log --
+    the scarcest thing in the project -- silently refused most of what comes
+    over the rail. You cannot log a bonito if the registry is the set of fish
+    the forecast has an opinion about.
+    """
+
+    def test_you_can_log_far_more_than_the_model_scores(self):
+        self.assertGreater(len(speciesmod.loggable()), 25)
+        self.assertEqual(len(speciesmod.scored()), 6)
+
+    def test_every_scored_species_is_in_the_registry(self):
+        from tiderace import score
+        for key in score.PROFILES:
+            self.assertIn(key, speciesmod.BY_KEY, f"{key} scored but unlisted")
+
+    def test_the_longest_name_wins(self):
+        # "sea bass" must beat "bass", "bluefin tuna" must beat "bluefin".
+        self.assertEqual(speciesmod.resolve("four sea bass"), "black_sea_bass")
+        self.assertEqual(speciesmod.resolve("a bass"), "striped_bass")
+        self.assertEqual(speciesmod.resolve("bluefin tuna"), "bluefin")
+
+    def test_an_ambiguous_name_resolves_to_nothing(self):
+        # "tuna" is three different fish with three different federal rules.
+        # Guessing one would put the wrong permit category on the entry.
+        self.assertIsNone(speciesmod.resolve("caught a tuna"))
+
+    def test_the_names_people_actually_use(self):
+        for said, want in (("albie", "false_albacore"), ("bones", "bonito"),
+                           ("squeteague", "weakfish"), ("tog", "tautog"),
+                           ("tinkers", "atlantic_mackerel"),
+                           ("dorado", "mahi"), ("schoolie", "striped_bass")):
+            self.assertEqual(speciesmod.resolve(said), want, said)
+
+    def test_an_unverified_rule_says_so_rather_than_staying_silent(self):
+        """A wrong size limit is not a bad forecast, it is a fine -- and under
+        a commercial licence it is worse than a fine. Absence of a rule here
+        means nobody checked, and the app has to say that out loud rather than
+        let silence read as "no limit"."""
+        w = speciesmod.unregulated_warning("bonito")
+        self.assertTrue(w)
+        self.assertIn("not modelled", w)
+        self.assertIn("not that there are none", w)
+
+    def test_a_modelled_species_gets_no_warning(self):
+        self.assertIsNone(speciesmod.unregulated_warning("striped_bass"))
+
+    def test_hms_species_are_flagged_as_federal(self):
+        w = speciesmod.unregulated_warning("bluefin")
+        self.assertIn("HMS", w)
+        self.assertIn("permit", w)
+        self.assertTrue(speciesmod.get("bluefin").hms)
+
+    def test_no_regulatory_numbers_were_invented(self):
+        """The registry carries names and aliases, never a size or a season.
+        Those live in regs.py and only when read out of an actual notice."""
+        import inspect, re
+        src = inspect.getsource(speciesmod)
+        body = src.split("SPECIES: tuple")[1].split("BY_KEY")[0]
+        for word in ("min_inches", "bag", "limit=", "season=", "slot"):
+            self.assertNotIn(word, body, f"registry must not carry rules ({word})")
+
+    def test_the_log_form_picks_species_separately_from_the_forecast(self):
+        import pathlib as _p
+        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
+        self.assertIn('id="slogsp"', page)
+        body = page.split("function wireLog")[1].split("\n  }")[0]
+        self.assertIn("spSel", body, "the log must post its own species")
 
 
 if __name__ == "__main__":
