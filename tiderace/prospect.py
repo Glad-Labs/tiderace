@@ -44,8 +44,13 @@ distinguishes one coordinate from its neighbour. The area score decides
 whether to bother with the box at all. Saying which is which is the entire
 value of this module; a prettier version that hid it would be worth less.
 
-Nothing here scores depth as a preference. No species profile carries one and
-none gets guessed in.
+Depth is ranked as structure, never as a preference, and that stays true now
+that two species carry a published depth band: the ranking below is by relief,
+because relief is what distinguishes one coordinate from its neighbour. What
+the band buys is a *label* on a bump -- `depth_suits` on each prospect says
+which species' published band the depth falls in, and what that band actually
+claims. Four of the six species have no band and appear on no bump; see
+`score.PROFILES` for which source was consulted for each and what it said.
 """
 
 from __future__ import annotations
@@ -199,6 +204,8 @@ def prospects(bbox, species: str = "striped_bass", n: int = 61,
         "sample_m": scan.get("sample_m"),
         "usable": scan.get("usable"),
         "prospects": [],
+        # The ranking is by relief and stays that way. Depth appears on a
+        # prospect as `depth_suits`, which labels rather than ranks.
         "depth_scored": False,
     }
     if not scan.get("usable"):

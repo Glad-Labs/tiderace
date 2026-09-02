@@ -28,12 +28,20 @@ named rather than dressed up as six independent factors. Second, **a third of
 the bay is "poor" confidence** and must not be painted as though it were
 known: `confidence` rides on every cell so the renderer can wash it out.
 
-What this deliberately does NOT do is invent a depth term. Depth is on every
-cell because it is worth seeing and Matt asked for it, but `score.PROFILES`
-has no depth preference for any species and this module will not be the place
-one gets guessed into existence. Getting there means what the temperature
-bands took: published numbers, cited, per species. Until then depth is
-reported, not scored, and `depth_scored` says so on every response.
+Depth was reported and never scored here for as long as `score.PROFILES` had
+no published band for anything. Two species now have one -- fluke and black
+sea bass, both out of the RIDEM Narragansett Bay trawl survey, both cited on
+the line that sets them -- so for those two this surface scores it, and
+`depth_scored` says which case any given response is. The other four still
+have no band and still get none. That is not a gap waiting to be filled by
+feel: for three of the four the source was consulted and said depth is the
+wrong variable. Nothing gets guessed in, which was always the rule.
+
+Depth is also the first term that varies WITHIN a binding. Every other input a
+cell has comes from its nearest stations, which is exactly why cells sharing a
+station are identical by construction -- but the bottom is measured per cell.
+So where a species has a band, the expensive station work still runs once per
+binding and only the arithmetic runs per cell.
 """
 
 from __future__ import annotations
@@ -180,9 +188,15 @@ def surface(species: str, bbox, when: datetime | None = None,
             "current_speed": row.get("current_speed"),
             "current_stage": row.get("current_stage"),
             "water_temp_f": row.get("water_temp_f"),
-            "terms": out.get("terms", {}),
+            # Depth is deliberately absent from the binding record even when
+            # it is scored: the binding is what two stations say about the
+            # water, and depth is the one thing they do not say. `row` carries
+            # no depth, so the value here would be the neutral placeholder --
+            # a number nothing measured, published under a key that reads as
+            # though it had.
+            "terms": {k: v for k, v in out.get("terms", {}).items()
+                      if k != "depth"},
         }
-        lim = _limiting(out.get("terms", {}), prof.weights)
 
         for i, j, la, lo, res in members:
             d = None
@@ -191,15 +205,31 @@ def surface(species: str, bbox, when: datetime | None = None,
                     d = depths[i][j]
                 except (IndexError, TypeError):
                     d = None
+            depth_ft = _depth_ft(d)
+
+            # Re-score only where there is a band to apply. For the other four
+            # species this is the same arithmetic twice, and `out` already
+            # holds it. features.build -- the expensive part -- stays above,
+            # once per binding.
+            cell = out
+            if prof.depth is not None:
+                try:
+                    cell = score.score(species, dict(row, depth_ft=depth_ft),
+                                       exposed=row["exposed"],
+                                       prior=spot.prior(species),
+                                       best_stage=spot.best_stage)
+                except (SourceError, ValueError, KeyError):
+                    cell = out
+
             cells.append({
                 "lat": round(la, 5), "lon": round(lo, 5),
-                "score": out["score"],
+                "score": cell["score"],
                 # The renderer washes a cell out by this, so a station three
                 # miles away cannot look like one you are sitting on.
                 "confidence": res.get("confidence"),
                 "binding": bkey,
-                "limiting": lim,
-                "depth_ft": _depth_ft(d),
+                "limiting": _limiting(cell.get("terms", {}), prof.weights),
+                "depth_ft": depth_ft,
             })
 
     surf = {
@@ -216,19 +246,29 @@ def surface(species: str, bbox, when: datetime | None = None,
             "scored": len(cells),
             "bindings": len(bindings),
         },
-        # Said on every response so a client cannot render this as though
-        # depth were one of the inputs.
-        "depth_scored": False,
-        "depth_note": ("Depth is reported, not scored. No species profile "
-                       "carries a depth preference, and none will be guessed "
-                       "in; that needs published numbers per species, the way "
-                       "the temperature bands were done."),
+        # Said on every response so a client can tell which of the two cases
+        # it is holding, rather than inferring it from whether the numbers
+        # happen to vary.
+        "depth_scored": prof.depth is not None,
+        "depth_note": (
+            ("Depth is scored for %s: score.PROFILES carries a published band "
+             "for it, cited on the line that sets it. It is also the only "
+             "term on this surface measured per cell -- every other input a "
+             "cell has comes from its stations." % prof.name)
+            if prof.depth is not None else
+            ("Depth is reported, not scored. %s carries no depth band. That "
+             "is a recorded finding, not an omission -- score.PROFILES names "
+             "the source consulted for each of the four unscored species and "
+             "what it said, and for three of them it said depth is the wrong "
+             "variable. None will be guessed in." % prof.name)),
         "resolution_note": (
             "The current at a cell is the nearest station's prediction, so "
             "cells sharing a station are identical by construction. %d cells "
             "resolve to %d stations -- that, not the lattice, is the real "
-            "resolution of this surface."
-            % (len(cells), len(bindings))),
+            "resolution of the water half of this surface.%s"
+            % (len(cells), len(bindings),
+               " Depth is the exception: it is measured per cell, so cells on "
+               "one station can still differ." if prof.depth is not None else "")),
     }
     cache.write_json(ck, surf)
     return surf

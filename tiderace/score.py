@@ -18,7 +18,7 @@ tautog is alive and present all summer and still nearly uncatchable. So a
 published occurrence range is an upper bound on the band, never a substitute
 for it, and the two must not be silently swapped.
 
-Sources, all consulted 2026-08-29:
+Sources, consulted 2026-08-29 except the depth work, consulted 2026-09-02:
   [BB-SB]  Buzzards Bay species account, striped bass (after Bigelow &
            Schroeder; Setzler et al. 1980; Coutant 1986; Rogers & Westin 1978;
            Hollis 1952).  buzzardsbay.org/.../striped-bass.pdf
@@ -27,10 +27,61 @@ Sources, all consulted 2026-08-29:
            buzzardsbay.org/.../tautog.pdf
   [SCUP]   Steimle et al. 1999, EFH source doc NMFS-NE-149, via ASMFC scup
            species profile.
-  [ASMFC-BSB] ASMFC black sea bass habitat fact sheet.
-  [NEFSC-SF]  NOAA Fisheries summer flounder science pages; EFH source doc
-           NMFS-NE-151.
+  [ASMFC-BSB] ASMFC black sea bass habitat fact sheet, January 2018.
+           asmfc.org/.../BlackSeaBass.pdf
+  [NEFSC-SF]  NOAA Fisheries summer flounder science pages, and Packer,
+           Griesbach, Berrien, Zetlin, Johnson & Morse 1999, EFH source doc
+           NMFS-NE-151 -- p.3 and Fig 8 are the RIDEM Narragansett Bay bottom
+           trawl survey, 1990-1996.
   [BSB-AS] Slesinger et al. 2019, aerobic scope of black sea bass (PMC6564031).
+  [EFH-BSB] Drohan, Manderson & Packer 2007, EFH source doc NMFS-NE-200
+           (2nd ed.), p.10 and Fig 31 -- the same RIDEM survey.
+  [EFH-TOG] Steimle & Shaheen 1999, EFH source doc NMFS-NE-118.
+  [EFH-BLU] Fahay, Berrien, Johnson & Morse 1999, EFH source doc NMFS-NE-144.
+  [ASMFC-SB] ASMFC 2009, Atlantic Coast Diadromous Fish Habitat, Habitat
+           Management Series #9, ch. 9 (striped bass), habitat summary table.
+  [LANGAN] Langan, McManus, Schonfeld, Truesdale & Collie 2019, Mar. Coast.
+           Fish. 11(1):76-85, doi:10.1002/mcf2.10065.
+
+Depth, added 2026-09-02, is scored for **two** of the six species. The other
+four are not "no number was found" -- three of them are "the source says depth
+is the wrong variable", which is a stronger answer and worth keeping:
+
+  * **fluke** and **black_sea_bass** have a depth band. Both come from the same
+    RIDEM Narragansett Bay trawl survey the temperature work already leans on,
+    both are about adults, and both are stated as in-bay modal depths rather
+    than a shelf-wide range.
+  * **scup** has only an occurrence envelope -- 2-38 m, summer adults, shelf
+    wide [SCUP Table 1]. In Narragansett Bay that is nearly every cell, and the
+    header caution above forbids swapping an envelope for a band.
+  * **tautog**: the envelope is <24 m from Cape Cod to New Jersey [EFH-TOG,
+    after Chang 1990], and the same document says what actually decides where
+    a tautog is -- they are "extremely local", and a few feet either way is the
+    difference between success and failure. Structure, not depth.
+  * **bluefish**: [EFH-BLU] reports that occurrence by bottom depth "closely
+    mirror[s] the distribution of depths sampled" -- i.e. the survey measured
+    its own effort. Adults were also rarely caught in the bay, and a bottom
+    otter trawl is the wrong gear for a pelagic fish, the same reason gso.py
+    has no striped bass in it.
+  * **striped_bass**: [ASMFC-SB] tabulates depth for at-sea juveniles and
+    adults as Tolerable "NIF", Optimal "NIF" -- No Information Found -- with
+    only a reported range of 0.6-46 m. The coastwide habitat compendium looked
+    and came back empty; this file is not going to do better by guessing.
+
+A band also has to *discriminate* to be worth its weight. Measured over the
+40x40 lattice heat.py scores across the bay (878 water cells, median 24 ft):
+
+    fluke           sd 0.411    band, from a stated in-bay preference
+    black_sea_bass  sd 0.427    band, from in-bay summer modal depths
+    scup            sd 0.274    envelope only
+    tautog          sd 0.170    envelope only
+    striped_bass    sd 0.103    nothing published
+
+For scale, the terms already here measure sd 0.263 (current), 0.182 (temp),
+0.152 (season) and 0.000 (light, wind, pressure) on the same lattice. The two
+envelopes sit closer to the constants than to the signals: a term worth 1.0
+over ninety per cent of the bay does not inform the forecast, it dilutes the
+terms that do.
 """
 
 from __future__ import annotations
@@ -84,6 +135,15 @@ class Profile:
     wind_max_kt: float = 25.0
     likes_falling_pressure: bool = True
     notes: str = ""
+    # Trapezoid on depth in FEET, or None where no publication supports one.
+    # None is not a placeholder to be filled in later by feel -- see the depth
+    # section of the module docstring for why four of six carry it.
+    depth: tuple[float, float, float, float] | None = None
+    # One sentence saying what the band above actually claims, carried with it
+    # so a reader who meets the number somewhere else -- a bump in
+    # structure.py, a cell in heat.py -- gets the caveat at the same time as
+    # the number instead of having to come back here for it.
+    depth_claim: str = ""
 
 
 PROFILES: dict[str, Profile] = {
@@ -95,6 +155,8 @@ PROFILES: dict[str, Profile] = {
         # three from [BB-SB]. Only the 55F plateau start is still hand-set.
         temp=(43, 55, 70, 78),
         current=(1.40, 0.62, 1.15, 4.0),
+        # No depth band: [ASMFC-SB] records optimal depth as "NIF" -- No
+        # Information Found -- for at-sea juveniles and adults alike.
         light={"golden": 1.0, "twilight": 0.96, "night": 0.88, "day": 0.40},
         weights={"season": 0.20, "temp": 0.15, "current": 0.28,
                  "light": 0.22, "wind": 0.07, "pressure": 0.08},
@@ -110,6 +172,8 @@ PROFILES: dict[str, Profile] = {
         # is unsourced -- no published upper feeding limit was found.
         temp=(58, 64, 78, 84),
         current=(1.30, 0.75, 1.40, 4.5),
+        # No depth band: [EFH-BLU] found occurrence by depth "closely
+        # mirror[ing] the distribution of depths sampled" -- effort, not fish.
         light={"golden": 1.0, "twilight": 0.88, "day": 0.74, "night": 0.60},
         weights={"season": 0.18, "temp": 0.14, "current": 0.24,
                  "light": 0.18, "wind": 0.10, "pressure": 0.16},
@@ -125,9 +189,40 @@ PROFILES: dict[str, Profile] = {
         # they just are not a fishery yet.
         temp=(56, 62, 74, 80),
         current=(1.00, 0.42, 0.52, 2.6),   # drift speed -- too fast is as bad as slack
+        # The best-supported depth statement found for any species here, and
+        # the only one that uses the word "preference": adults in THIS bay,
+        # 1990-1996 RIDEM trawl, abundance compared against the survey's own
+        # station distribution so it is effort-controlled. "Abundance in
+        # relation to bottom depth shows a preference for depths greater than
+        # 12.2-15.2 m (40-50 ft) and that few were captured in depths less
+        # than 9.1 m (30 ft)" [NEFSC-SF, Fig 8]. So 30 -> 50 is the cited ramp,
+        # taking the deep end of the stated 40-50 ft threshold.
+        #
+        # The upper pair is DELIBERATELY INERT. Nothing published bounds adult
+        # fluke on the deep side inside the bay -- the offshore 150 m figure is
+        # about where they winter, not where they are caught in August -- and
+        # the bay bottoms out near 163 ft on the lattice, so 300/400 never
+        # bites. It is a spacer, not a claim, and must not be read as one.
+        #
+        # Read this band with [LANGAN] next to it, because it complicates what
+        # "better" means. Working the same bay in 2016-17 they found females
+        # more prevalent shallow (<=15 m, about 49 ft) and males deeper, at
+        # sizes above 30 cm. So the deep water this band rewards holds MORE
+        # fluke and SMALLER ones, and the shallow water it penalises is where
+        # the doormats are. The two findings do not contradict -- one is about
+        # abundance, the other about who is there -- but a keeper-hunting
+        # angler should know the term is tuned on the first and not the
+        # second. This is the presence-vs-catchability caution at the top of
+        # the file, arriving through a second door.
+        depth=(30, 50, 300, 400),
+        depth_claim=("a lower bound only: few adults were caught below 30 ft "
+                     "and they are preferred above 40-50 ft, but nothing "
+                     "published bounds them on the deep side inside the bay, "
+                     "so a deep reading here is the absence of a limit rather "
+                     "than a recommendation"),
         light={"day": 1.0, "golden": 0.90, "twilight": 0.58, "night": 0.30},
-        weights={"season": 0.20, "temp": 0.14, "current": 0.34,
-                 "light": 0.14, "wind": 0.12, "pressure": 0.06},
+        weights={"season": 0.18, "temp": 0.13, "current": 0.31, "depth": 0.10,
+                 "light": 0.13, "wind": 0.10, "pressure": 0.05},
         wind_max_kt=20,
         likes_falling_pressure=False,
         notes="Drift speed is the whole game: 0.5-1.5 kt over sand and edges. "
@@ -141,9 +236,31 @@ PROFILES: dict[str, Profile] = {
         # the 7C migration threshold is presence, not catchability.
         temp=(55, 60, 76, 81),
         current=(0.90, 0.48, 0.68, 3.0),
+        # Adults in this bay, same 1990-1996 RIDEM survey: "found mostly at a
+        # depth of 100 ft (30 m) in the spring, 20-80 ft (6-24 m) in the
+        # summer, and from 30-50 ft (9-15 m) and from 100-110 ft (30-34 m) in
+        # the fall" [EFH-BSB, Fig 31]. Summer is the plateau because summer is
+        # the fishery -- peak_months here are 7,8,9. The 120 ft cutoff is a
+        # second, independent source: [ASMFC-BSB] puts the whole inshore
+        # summer population in "waters at depths of less than 120 ft".
+        #
+        # 10 ft is the one hand-set number in this tuple, a short ramp under
+        # the cited 20 ft rather than a cliff. Two things this band does not
+        # capture, both real: the fall distribution is BIMODAL (30-50 and
+        # 100-110 ft) and one trapezoid cannot hold that, and the survey is a
+        # bottom otter trawl, which cannot be towed across the wrecks and rock
+        # piles these fish actually sit on. So it samples sea bass that
+        # strayed onto open bottom. That biases abundance down, not depth in
+        # any obvious direction, but it is why this band is weaker evidence
+        # than the fluke one above despite reading the same way.
+        depth=(10, 20, 80, 120),
+        depth_claim=("summer adults in this bay were found mostly at 20-80 ft, "
+                     "and the inshore summer population within 120 ft; the "
+                     "fall distribution is bimodal and this band does not "
+                     "hold the deep 100-110 ft mode"),
         light={"day": 1.0, "golden": 0.90, "twilight": 0.60, "night": 0.36},
-        weights={"season": 0.20, "temp": 0.16, "current": 0.26,
-                 "light": 0.16, "wind": 0.14, "pressure": 0.08},
+        weights={"season": 0.18, "temp": 0.14, "current": 0.24, "depth": 0.10,
+                 "light": 0.14, "wind": 0.12, "pressure": 0.08},
         wind_max_kt=20,
         likes_falling_pressure=False,
         notes="Structure fish. Enough current to hold them on the piece, "
@@ -157,6 +274,8 @@ PROFILES: dict[str, Profile] = {
         # 56F lower is angling knowledge, not the 8-9C departure threshold.
         temp=(56, 63, 79, 84),
         current=(0.90, 0.55, 0.90, 3.2),
+        # No depth band: [SCUP] gives summer adults ~2-38 m, an occurrence
+        # envelope covering nearly the whole bay. An envelope is not a band.
         light={"day": 1.0, "golden": 0.85, "twilight": 0.50, "night": 0.28},
         weights={"season": 0.18, "temp": 0.14, "current": 0.24,
                  "light": 0.16, "wind": 0.18, "pressure": 0.10},
@@ -176,6 +295,9 @@ PROFILES: dict[str, Profile] = {
         # in this file -- see the presence-vs-catchability caution up top.
         temp=(38, 47, 58, 68),
         current=(0.60, 0.38, 0.50, 2.4),
+        # No depth band, and this one is a finding rather than a gap:
+        # [EFH-TOG] says tautog are "extremely local" and that a few feet
+        # either way decides the day. The variable is structure, not depth.
         light={"day": 1.0, "golden": 0.80, "twilight": 0.40, "night": 0.18},
         weights={"season": 0.26, "temp": 0.20, "current": 0.20,
                  "light": 0.14, "wind": 0.14, "pressure": 0.06},
@@ -269,6 +391,14 @@ def score(species: str, feat: dict, exposed: bool = False,
         "pressure": _pressure_term(p, feat.get("pressure_trend_3h")),
     }
 
+    # Depth only exists as a term for the species that have a published band.
+    # For the other four the key is ABSENT rather than neutral: a 0.6 sitting
+    # in every result would be a number the literature never supplied, and
+    # would report as though depth had been considered and found middling.
+    if p.depth:
+        d = feat.get("depth_ft")
+        terms["depth"] = trapezoid(float(d), *p.depth) if d is not None else 0.6
+
     total = sum(p.weights[k] * v for k, v in terms.items())
 
     # Multiplicative modifiers -- things that gate rather than nudge.
@@ -335,7 +465,7 @@ def explain(result: dict, top_n: int = 3) -> str:
     label = {
         "season": "seasonal timing", "temp": "water temperature",
         "current": "current speed", "light": "light level",
-        "wind": "wind", "pressure": "barometer",
+        "wind": "wind", "pressure": "barometer", "depth": "depth",
     }
     bits = []
     if strong:

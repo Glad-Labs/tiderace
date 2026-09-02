@@ -41,6 +41,13 @@ therefore over-represented on purpose. A "discovery" here may be a
 well-surveyed hazard that every local already knows, which is why every
 candidate reports how close it is to charted rock, wreck and obstruction.
 
+Each candidate also reports `depth_suits`: which species' *published* depth
+band its top falls inside, and what that band actually claims. That labels a
+bump, it does not rank one -- ranking here is by relief, because relief is
+what distinguishes one coordinate from its neighbour. Only two of the six
+scored species have a depth band at all, so an empty `depth_suits` means
+nothing published reaches this depth rather than nothing lives here.
+
 The point of the list is that it is falsifiable. Go, drift it, log what
 happens. That is the loop the whole project is short of.
 """
@@ -205,6 +212,44 @@ def _load_points(name: str):
     return out
 
 
+def depth_suits(depth_ft) -> list[dict]:
+    """Which scored species' published depth band contains this depth.
+
+    Two of the six carry a band (fluke and black sea bass); the other four
+    have no publication behind one and are therefore absent from every answer
+    this returns. That is the point of the shape: an empty list means "no
+    species has a published depth band reaching here", NOT "nothing lives
+    here". A tautog does not appear at any depth, and the reason is in
+    `score.PROFILES` -- the literature says structure decides where they are,
+    so a depth answer for them would be invented.
+
+    `fit` is the band's own trapezoid, so 1.0 is inside the cited plateau and
+    anything between 0 and 1 is on a ramp toward the published edge.
+    """
+    from . import score
+    if depth_ft is None:
+        return []
+    try:
+        d = float(depth_ft)
+    except (TypeError, ValueError):
+        return []
+    out = []
+    for key, prof in score.PROFILES.items():
+        if not prof.depth:
+            continue
+        fit = score.trapezoid(d, *prof.depth)
+        if fit <= 0:
+            continue
+        out.append({"species": key, "name": prof.name, "fit": round(fit, 3),
+                    # Carried with the number, not left behind in score.py.
+                    # The fluke band in particular is a lower bound, and a
+                    # deep bump scoring 1.0 on it has met no upper limit
+                    # rather than met a preference.
+                    "claim": prof.depth_claim})
+    out.sort(key=lambda r: (-r["fit"], r["species"]))
+    return out
+
+
 def annotate(cands: list[dict]) -> list[dict]:
     """How close each candidate sits to something already on the chart.
 
@@ -230,6 +275,10 @@ def annotate(cands: list[dict]) -> list[dict]:
         c["charted_hazard_m"] = min(near) if near else None
         c["novel"] = (c["charted_hazard_m"] is None
                       or c["charted_hazard_m"] > 100)
+        # What the depth alone is worth, per species that has a published
+        # band. This says nothing about the relief above it -- a bump is
+        # structure, and structure is the thing this module measures.
+        c["depth_suits"] = depth_suits(c.get("depth_ft"))
     return cands
 
 
