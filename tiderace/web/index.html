@@ -246,6 +246,32 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 /* Says what the handle does. The handle was drag-only and undiscoverable:
    nothing about a grey bar tells you it is also a button, and a drag that
    has to clear a threshold is the wrong ask with wet hands on a wet screen. */
+/* Whether the season is open, and the size, on the screen that is actually
+   in your hand. This lived only in the desktop sidebar, which is display:none
+   on a phone, so from the tab restructure until now the app never once told
+   Matt on the water whether a fish was legal. He fishes commercially under his
+   father's licence, where that gap is a fine rather than a bad forecast.
+   Above the tabs, so it is on every view including Log. */
+#slegal{flex:none}
+#slegal .lg{
+  display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;
+  padding:9px 16px; border-bottom:1px solid var(--hair);
+  font:12px/1.4 var(--mono); color:var(--ink-2);
+}
+#slegal .lg b{font:700 12px/1 var(--mono); letter-spacing:.08em}
+#slegal .lg.open b{color:var(--ok, #6ee7a8)}
+#slegal .lg.shut{background:rgba(229,62,62,.14)}
+#slegal .lg.shut b{color:#ff8a8a}
+#slegal .lg .sz{font:700 13px/1 var(--display); color:var(--ink)}
+#slegal .lg .ln{color:var(--muted); font-size:11px}
+#slegal .lmore{border-bottom:1px solid var(--hair)}
+#slegal .lmore summary{
+  padding:7px 16px; font:10px/1 var(--mono); letter-spacing:.12em;
+  text-transform:uppercase; color:var(--muted); cursor:pointer;
+}
+#slegal .ld{padding:0 16px 7px; font:11px/1.45 var(--mono); color:var(--ink-2)}
+#slegal .ld.warn{color:var(--warn)}
+#slegal .ld.dim{color:var(--muted)}
 #sheetgrip .gcue{
   font:10px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase;
   color:var(--muted); pointer-events:none;
@@ -1324,7 +1350,8 @@ function heatSection(){
       potential<span class="cnt" id="cnt-heat"></span></label>
     <p class="hint" id="heathint">Current + temperature on this tide.
       Washed-out cells are bound to a distant station — the score is an
-      extrapolation there. Depth is shown, not scored.</p>`;
+      extrapolation there. Depth is shown, and scored only for the species
+      that have a published band.</p>`;
 }
 
 async function loadHeat(){
@@ -1380,8 +1407,13 @@ async function loadHeat(){
     }
     const sd = d.spread || {};
     if (cnt) cnt.textContent = `${sd.cells || 0}/${(d.counts||{}).bindings || 0}`;
+    // The server says per response whether depth was scored for THIS species
+    // -- two of six carry a band. The static hint above cannot know which
+    // case it is, so replace it with what actually came back rather than
+    // leaving a claim the response may contradict.
     const hint = document.querySelector('#heathint');
-    if (hint && d.resolution_note) hint.textContent = d.resolution_note;
+    if (hint && d.resolution_note)
+      hint.textContent = [d.resolution_note, d.depth_note].filter(Boolean).join(' ');
   } catch(e){
     if (cnt) cnt.textContent = '!';
   } finally { HEAT_BUSY = false; }
@@ -2199,11 +2231,61 @@ async function loadGrid(){
                confirm on ${r.hotline} before landing fish.</span>` : ''}
        </div>`;
   } else { $('#regsbox').innerHTML = ''; }
+  paintLegal();
 
   if (SEL && !GRID.spots.some(s => s.key === SEL)) SEL = null;
   paint();
   $('#loading').classList.add('hide');
 }
+
+/* The same facts as #regsbox, but on the surface a phone actually shows.
+   Not folded: this is the one thing in the app that is law rather than a
+   forecast, and folding it would put a tap between Matt and a violation. */
+function paintLegal(){
+  const el = $('#slegal');
+  if (!el) return;
+  // `esc` lives in the sheet's IIFE, not here. Calling it threw a
+  // ReferenceError inside loadGrid, which killed the rest of loadGrid and
+  // blanked #regsbox too -- so the fix for missing regs briefly removed the
+  // regs that were already working. Third scope-split of this shape.
+  const q = t => String(t == null ? '' : t)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const r = (GRID && GRID.regulations) || {};
+  if (!r.known){
+    // Silence here would read as "no limits". It means nobody checked.
+    const sp = $('#species') && $('#species').selectedOptions[0];
+    el.innerHTML = `<div class="lg"><b>RULES NOT MODELLED</b>` +
+      `<span>for ${q((sp && sp.textContent) || 'this species')} — check the ` +
+      `RIDEM table before keeping one.</span></div>`;
+    return;
+  }
+  // The headline is one glance: open or shut, and the size. Everything else
+  // is a tap. The first cut put all of it on screen at once and took 173px --
+  // 44% of the sheet -- which is the same fault the tab restructure fixed:
+  // the most important thing loses by being shown alongside everything else.
+  const size = r.slot ? `slot ${q(r.slot)}`
+             : r.min_inches ? `min ${r.min_inches}"` : null;
+  const diffs = (GRID.regulations_differences || []);
+  const detail =
+    (GRID.license_mode === 'commercial' && diffs.length
+      ? diffs.map(d => `<div class="ld">· ${q(d)}</div>`).join('') : '') +
+    (r.advisory
+      ? `<div class="ld warn">Commercial limits change in-season — confirm on ` +
+        `${q(r.hotline || '')} before landing fish.</div>` : '') +
+    (r.checked_on ? `<div class="ld dim">read from RIDEM ${q(r.checked_on)}` +
+      `${r.days_since_checked > 30 ? ' — stale, re-check' : ''}</div>` : '');
+
+  el.innerHTML =
+    `<div class="lg ${r.open ? 'open' : 'shut'}">` +
+      `<b>${r.open ? 'OPEN' : 'CLOSED'}</b>` +
+      (size ? `<span class="sz">${size}</span>` : '') +
+      `<span class="ln">${q(r.season || GRID.regulations_line || '')}</span>` +
+    `</div>` +
+    (detail ? `<details class="lmore"><summary>commercial detail</summary>`
+              + detail + `</details>` : '');
+}
+window.paintLegal = paintLegal;
 
 $('#time').oninput = e => { TI = +e.target.value; paint(); };
 $('#species').onchange = () => {
@@ -2422,6 +2504,7 @@ map.on('click', e => {
     <span id="sheetwhen"></span>
     <span id="sheetzone"></span>
   </div>
+  <div id="slegal"></div>
   <div id="tabs">
     <button data-view="now" class="on">Now<span class="n"></span></button>
     <button data-view="log">Log<span class="n"></span></button>

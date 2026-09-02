@@ -318,7 +318,11 @@ class Handler(BaseHTTPRequestHandler):
                         prospect.prospects(bbox, sp, n=nn, deep=deep))
                 except (SourceError, ValueError) as exc:
                     return self._send_json({"error": str(exc)}, 502)
-            if url.path == "/api/structure":
+            # /api/bumps, NOT /api/structure -- that name was already taken by
+            # the wind-farm marks below, and inserting this above it shadowed
+            # the route so the turbines 400'd and vanished from the map. Same
+            # fault as /charts/cell/ sitting under startswith("/charts/").
+            if url.path == "/api/bumps":
                 try:
                     bbox = [float(v) for v in q.get("bbox", [""])[0].split(",")]
                 except ValueError:

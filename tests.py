@@ -4018,6 +4018,19 @@ class SheetStructure(unittest.TestCase):
         views = re.findall(r'data-view="(\w+)"', self.page)
         self.assertEqual(views, ["now", "log", "spots", "trips"])
 
+    def test_the_heat_hint_does_not_hard_code_whether_depth_is_scored(self):
+        """The page said "Depth is shown, not scored" as a flat statement. Two
+        species now carry a published band, so whether it is scored depends on
+        the species and only the response knows. Asserted against the source
+        with comments stripped: the paragraph above the line explains exactly
+        this and would satisfy a naive search on its own."""
+        js = self._script()
+        self.assertNotIn("Depth is shown, not scored", js,
+                         "the page states a claim the server may contradict")
+        loader = js.split("async function loadHeat(")[1].split("\nasync function")[0]
+        self.assertIn("d.depth_note", loader,
+                      "the hint never reads what the response said about depth")
+
     def test_the_tabs_are_a_thumb_target(self):
         import re
         css = self.page.split("#tabs button{")[1].split("}")[0]
@@ -4097,6 +4110,102 @@ class SheetStructure(unittest.TestCase):
         line = js[boot:js.index("\n", js.index("setSheet", boot))]
         self.assertNotIn("window.setSheet", line,
                          "boot runs before the window alias exists")
+
+
+class LegalStatusReachesThePhone(unittest.TestCase):
+    """Whether the season is open, on the screen actually in his hand.
+
+    Open/closed and the size limit lived only in #regsbox, which sits in
+    #panel, which is display:none under (max-width:900px),(pointer:coarse).
+    Before the tab restructure `adoptPanel` relocated the sidebar into the
+    sheet and carried the rules along; removing it gave every other part a tab
+    and left the rules with none. So from that commit until now the app never
+    once told Matt on the water whether a fish was legal -- and he fishes
+    commercially under his father's licence, where that is a fine rather than
+    a bad forecast.
+    """
+
+    def setUp(self):
+        import pathlib
+        self.page = (pathlib.Path(__file__).parent
+                     / "tiderace" / "web" / "index.html").read_text()
+
+    def test_the_legal_strip_is_not_inside_the_desktop_sidebar(self):
+        page = self.page
+        self.assertIn('id="slegal"', page)
+        panel = page.split('<aside id="panel">')[1].split("</aside>")[0]
+        self.assertNotIn('id="slegal"', panel,
+                         "the legal strip is inside the sidebar, which is "
+                         "display:none on a phone")
+        sheet = page.split('<div id="sheet"')[1].split('<aside id="panel">')[0]
+        self.assertIn('id="slegal"', sheet, "must live in the sheet")
+
+    def test_it_sits_above_the_tabs_so_it_shows_on_every_view(self):
+        """Including Log, which is the view you are on when you decide
+        whether to keep a fish."""
+        page = self.page
+        self.assertLess(page.index('id="slegal"'), page.index('id="tabs"'))
+
+    def test_silence_is_never_mistaken_for_no_limit(self):
+        """An empty strip reads as "no restrictions". It means nobody
+        checked, which is what species.unregulated_warning exists to say."""
+        js = strip_comments(self.page)
+        fn = js.split("function paintLegal()")[1].split("\nfunction ")[0]
+        self.assertIn("RULES NOT MODELLED", fn)
+
+    def test_paint_legal_does_not_borrow_a_helper_from_another_scope(self):
+        """`esc` lives in the sheet's IIFE. Calling it from here threw a
+        ReferenceError inside loadGrid, which killed the rest of loadGrid and
+        blanked #regsbox too -- so the fix for missing regs briefly deleted
+        the regs that already worked."""
+        js = strip_comments(self.page)
+        fn = js.split("function paintLegal()")[1].split("\nfunction ")[0]
+        self.assertNotIn("esc(", fn,
+                         "paintLegal must escape with its own local helper")
+        self.assertIn("replace(/&/g", fn, "it needs to escape something")
+
+
+class RoutesDoNotShadowEachOther(unittest.TestCase):
+    """Third time in this project. Make it structural, not vigilance.
+
+    The router is a chain of `if url.path == ...` / `startswith`, so a route
+    added above an existing one silently wins and the older one becomes
+    unreachable. It has now happened three times: /charts/cell/ under
+    startswith("/charts/"), and /api/structure -- already serving the wind-farm
+    marks -- shadowed by a new scan endpoint of the same name, which 400'd the
+    turbines off the map with no error anywhere.
+    """
+
+    def _server(self):
+        import pathlib
+        return (pathlib.Path(__file__).parent / "tiderace" / "server.py").read_text()
+
+    def test_no_exact_path_is_handled_twice(self):
+        src = strip_py_comments(self._server())
+        paths = re.findall(r'url\.path == "([^"]+)"', src)
+        self.assertGreater(len(paths), 10, "route walk found almost nothing")
+        dupes = sorted({p for p in paths if paths.count(p) > 1})
+        self.assertEqual(dupes, [], "these paths are handled twice; the "
+                                    "second is unreachable: %s" % dupes)
+
+    def test_no_exact_route_sits_below_a_prefix_that_swallows_it(self):
+        """An `== "/a/b"` placed after a `startswith("/a/")` never runs."""
+        src = strip_py_comments(self._server())
+        prefixes = [(m.start(), m.group(1))
+                    for m in re.finditer(r'url\.path\.startswith\("([^"]+)"', src)]
+        exacts = [(m.start(), m.group(1))
+                  for m in re.finditer(r'url\.path == "([^"]+)"', src)]
+        self.assertTrue(exacts, "route walk found no exact paths")
+        bad = [e for pos, p in prefixes for epos, e in exacts
+               if e.startswith(p) and epos > pos]
+        self.assertEqual(bad, [], "unreachable behind an earlier prefix: %s" % bad)
+
+    def test_the_wind_farm_still_has_its_own_route(self):
+        """The turbines are how the wind farm gets found rather than hunted
+        for, and they went missing for one commit."""
+        src = self._server()
+        self.assertIn('url.path == "/api/structure"', src)
+        self.assertIn('url.path == "/api/bumps"', src)
 
 
 class ProspectsSeparateAreaFromSpot(unittest.TestCase):
@@ -4258,6 +4367,65 @@ class StructureScan(unittest.TestCase):
         call = inspect.getsource(S.scan).split("bathy.sample_grid(")[1].split(")")[0]
         self.assertIn("west, south, east, north", call.replace("(", ""))
 
+    # ---- what a bump's depth is worth, and to which fish ----
+
+    def test_a_bump_reports_only_species_with_a_published_band(self):
+        """Four of the six have no depth literature, so they appear at no
+        depth at all. An empty answer means 'nothing published reaches here',
+        which is a different sentence from 'nothing lives here'."""
+        from tiderace import score, structure as S
+        banded = {k for k, p in score.PROFILES.items() if p.depth}
+        self.assertEqual(banded, {"fluke", "black_sea_bass"})
+        seen = set()
+        for d in range(0, 400, 5):
+            seen |= {r["species"] for r in S.depth_suits(d)}
+        self.assertEqual(
+            seen, banded,
+            "a species with no published depth band was reported as suited to "
+            "some depth")
+
+    def test_the_band_edges_show_up_where_the_source_put_them(self):
+        """40 ft is on the fluke ramp, not on its plateau: the source says the
+        preference starts at 40-50 ft and that few were caught below 30."""
+        from tiderace import structure as S
+        at = lambda d, sp: next(
+            (r["fit"] for r in S.depth_suits(d) if r["species"] == sp), 0.0)
+        self.assertEqual(at(25, "fluke"), 0.0)
+        self.assertGreater(at(40, "fluke"), 0.0)
+        self.assertLess(at(40, "fluke"), 1.0)
+        self.assertEqual(at(60, "fluke"), 1.0)
+        # black sea bass: cited summer plateau 20-80 ft, gone by 120
+        self.assertEqual(at(50, "black_sea_bass"), 1.0)
+        self.assertEqual(at(130, "black_sea_bass"), 0.0)
+
+    def test_a_bump_carries_the_claim_next_to_the_number(self):
+        """A deep bump scores 1.0 for fluke because nothing published bounds
+        them deep, not because deep is good. The number travels with the
+        sentence that says so."""
+        from tiderace import structure as S
+        deep = S.depth_suits(250)
+        self.assertTrue(deep)
+        self.assertEqual(deep[0]["species"], "fluke")
+        self.assertIn("lower bound", deep[0]["claim"])
+        for r in S.depth_suits(45):
+            self.assertTrue(r["claim"].strip(),
+                            "%s reports a fit with no claim beside it"
+                            % r["species"])
+
+    def test_depth_suits_is_attached_to_annotated_candidates(self):
+        from tiderace import structure as S
+        c = [{"lat": 41.44, "lon": -71.42, "depth_ft": 45.0}]
+        S.annotate(c)
+        self.assertIn("depth_suits", c[0])
+        self.assertIn("fluke", [r["species"] for r in c[0]["depth_suits"]])
+
+    def test_a_bump_with_no_depth_says_nothing_rather_than_guessing(self):
+        from tiderace import structure as S
+        self.assertEqual(S.depth_suits(None), [])
+        c = [{"lat": 41.44, "lon": -71.42}]
+        S.annotate(c)
+        self.assertEqual(c[0]["depth_suits"], [])
+
 
 class PotentialSurface(unittest.TestCase):
     """Scoring a lattice, and refusing to claim more than it knows."""
@@ -4285,18 +4453,197 @@ class PotentialSurface(unittest.TestCase):
         call = src.split("bathy.sample_grid(")[1].split(")")[0]
         self.assertIn("west, south, east, north", call.replace("(", ""))
 
-    def test_depth_is_reported_but_never_scored(self):
-        """No species profile carries a depth preference and none may be
-        guessed in. That needs published numbers per species, the way the
-        temperature bands were done."""
+    # ---- depth: a band needs a citation, and the citation has to be real ----
+    #
+    # This replaced `test_depth_is_reported_but_never_scored` on 2026-09-02,
+    # when fluke and black sea bass got bands out of the RIDEM Narragansett
+    # Bay trawl survey. The rule did not soften, it moved: a depth band is
+    # permitted only where the line that sets it names a source, and that
+    # source has to be one the module docstring actually declares.
+
+    @staticmethod
+    def _profile_calls():
+        """Every Profile(...) in score.py, as (species, node, depth comment).
+
+        The third item is the contiguous run of comment lines sitting directly
+        above the `depth=` keyword -- NOT the whole profile. Scoping matters:
+        the fluke profile cites [NEFSC-SF] against its temperature band, and a
+        search over the whole call is satisfied by that no matter what the
+        depth band says for itself. Caught by mutation on 2026-09-02.
+        """
+        import ast, inspect
+        from tiderace import score
+        src = inspect.getsource(score)
+        lines = src.splitlines()
+        tree = ast.parse(src)
+        out = []
+        for node in ast.walk(tree):
+            fn = node.func if isinstance(node, ast.Call) else None
+            if not (isinstance(fn, ast.Name) and fn.id == "Profile"):
+                continue
+            key, comment = None, ""
+            for kw in node.keywords:
+                if kw.arg == "key" and isinstance(kw.value, ast.Constant):
+                    key = kw.value.value
+                if kw.arg == "depth":
+                    # Walk up from the line the band is set on, taking comment
+                    # lines until something that is not one.
+                    block, i = [], kw.value.lineno - 2
+                    while i >= 0 and lines[i].strip().startswith("#"):
+                        block.append(lines[i])
+                        i -= 1
+                    comment = "\n".join(reversed(block))
+            out.append((key, node, comment))
+        return out
+
+    def test_a_depth_band_may_only_exist_where_a_source_is_named(self):
+        """The rule the temperature bands were held to, applied to depth.
+
+        A band is allowed only if the Profile call that sets it names a
+        bracketed source tag, AND that tag is declared in the module
+        docstring's source list, AND the declaration carries a year -- so a
+        bare invented label cannot buy one.
+        """
+        import ast, re, inspect
+        from tiderace import score
+
+        doc = score.__doc__ or ""
+        # Tags as the docstring declares them: "  [TAG] ..." at line start,
+        # with continuation lines folded in -- half these citations carry the
+        # year on the second line, and reading only the first would call a
+        # perfectly good source undated.
+        declared, tag = {}, None
+        for line in doc.splitlines():
+            m = re.match(r"\s{2}\[([A-Z0-9-]+)\]\s+(.*)", line)
+            if m:
+                tag = m.group(1)
+                declared[tag] = m.group(2)
+            elif tag and re.match(r"\s{4,}\S", line):
+                declared[tag] += " " + line.strip()
+            else:
+                tag = None
+        self.assertTrue(declared, "score.py declares no sources at all")
+
+        calls = self._profile_calls()
+        self.assertEqual(len(calls), len(score.PROFILES),
+                         "the AST walk lost a Profile -- it cannot pass on an "
+                         "empty set")
+
+        banded = 0
+        for key, node, comment in calls:
+            has = any(kw.arg == "depth"
+                      and not (isinstance(kw.value, ast.Constant)
+                               and kw.value.value is None)
+                      for kw in node.keywords)
+            self.assertEqual(has, score.PROFILES[key].depth is not None,
+                             "%s: the AST and the loaded profile disagree "
+                             "about having a depth band" % key)
+            if not has:
+                continue
+            banded += 1
+            # Only the comment on the band itself counts. A citation earned
+            # by some other number in the same profile is not a citation for
+            # this one -- the fluke profile cites [NEFSC-SF] against its
+            # temperature band, and a whole-call search is satisfied by that
+            # no matter what the depth band says for itself.
+            #
+            # A citation may carry a locator -- "[NEFSC-SF, Fig 8]" -- so the
+            # tag is what sits before the first comma or space inside the
+            # brackets, not the whole bracketed string.
+            def grab(text):
+                return set(re.findall(r"\[([A-Z0-9-]+)(?:[,\s][^\]]*)?\]",
+                                      text))
+
+            cited = grab(comment) & set(declared)
+            # The band's SOURCE has to lead. Later paragraphs are caveats --
+            # fluke's third names [LANGAN], which qualifies the band without
+            # being where its numbers came from -- and accepting one of those
+            # let a band keep its blessing after the sourcing citation had
+            # been taken off it. Caught by mutation on 2026-09-02.
+            lead = comment.split("\n        #\n")[0]
+            self.assertTrue(
+                grab(lead) & set(declared),
+                "%s has a depth band whose comment does not open by naming a "
+                "source score.py declares. A plausible number without a "
+                "citation does not go in this file -- see the depth section "
+                "of the docstring." % key)
+            for tag in sorted(cited):
+                self.assertRegex(
+                    declared[tag], r"(19|20)\d\d",
+                    "%s cites [%s] for its depth band, and that entry is "
+                    "declared without a year -- a label, not a source"
+                    % (key, tag))
+
+        self.assertEqual(banded, 2,
+                         "exactly two species have a researched depth band "
+                         "(fluke, black_sea_bass). A third appearing means "
+                         "either new literature -- cite it -- or a guess.")
+
+    def test_the_cited_depth_edges_are_the_published_numbers(self):
+        """These came out of a paper, so changing one is a diff someone has to
+        justify. Pinned per edge, with the sentence each came from."""
+        from tiderace import score
+        f = score.PROFILES["fluke"].depth
+        # "few were captured in depths less than 9.1 m (30 ft)" [EFH-SF Fig 8]
+        self.assertEqual(f[0], 30)
+        # "a preference for depths greater than 12.2-15.2 m (40-50 ft)"
+        self.assertEqual(f[1], 50)
+
+        b = score.PROFILES["black_sea_bass"].depth
+        # "20-80 ft (6-24 m) in the summer" [EFH-BSB Fig 31]
+        self.assertEqual((b[1], b[2]), (20, 80))
+        # "waters at depths of less than 120 ft" [ASMFC-BSB]
+        self.assertEqual(b[3], 120)
+
+    def test_the_fluke_upper_bound_is_inert_rather_than_a_claim(self):
+        """Nothing published bounds adult fluke on the deep side inside the
+        bay, so the upper pair is a spacer. Asserted as a property -- it must
+        sit past the deepest water the bay has -- not as a literal, because
+        the point is that it never engages."""
+        import json
+        from tiderace import score
+        with open("data/charts/soundings.geojson") as fh:
+            gj = json.load(fh)
+        deepest = max(float(f["properties"]["depth_ft"])
+                      for f in gj.get("features", [])
+                      if (f.get("properties") or {}).get("depth_ft") is not None)
+        band = score.PROFILES["fluke"].depth
+        self.assertGreater(
+            band[2], deepest,
+            "the fluke plateau now ends inside the charted bay, which turns a "
+            "spacer into a published claim that deep water is worse")
+
+    def test_a_species_without_a_band_gets_no_depth_term_at_all(self):
+        """Absent, not neutral. A 0.6 in every tautog result would read as
+        'depth was considered and came out middling', which is a number
+        nothing measured."""
+        from tiderace import score
+        feat = {"month": 10, "light_phase": "day", "current_speed": 0.6,
+                "water_temp_f": 55, "depth_ft": 40}
+        for key in ("tautog", "scup", "bluefish", "striped_bass"):
+            out = score.score(key, dict(feat))
+            self.assertNotIn("depth", out["terms"],
+                             "%s reported a depth term without a band" % key)
+            self.assertNotIn("depth", out["weighted"], key)
+        self.assertIn("depth", score.score("fluke", dict(feat))["terms"])
+
+    def test_a_banded_species_with_no_depth_reading_scores_neutral(self):
+        """Off the chart is unknown, and unknown is not zero -- the same
+        convention temperature already uses."""
+        from tiderace import score
+        feat = {"month": 7, "light_phase": "day", "current_speed": 1.0,
+                "water_temp_f": 68}
+        self.assertEqual(score.score("fluke", feat)["terms"]["depth"], 0.6)
+
+    def test_every_profile_weights_exactly_the_terms_it_has(self):
+        """A depth weight without a band would score a term that does not
+        exist; a band without a weight would compute one and throw it away."""
         from tiderace import score
         for key, prof in score.PROFILES.items():
-            self.assertNotIn("depth", prof.weights,
-                             "%s gained a depth weight without literature" % key)
-            self.assertFalse(hasattr(prof, "depth"),
-                             "%s gained a depth band without literature" % key)
-        import inspect
-        self.assertNotIn("depth", inspect.getsource(score.score))
+            self.assertEqual("depth" in prof.weights, prof.depth is not None,
+                             "%s: depth weight and depth band disagree" % key)
+            self.assertAlmostEqual(sum(prof.weights.values()), 1.0, places=6,
+                                   msg="%s weights no longer sum to 1" % key)
 
     def test_the_cache_does_not_write_into_the_working_directory(self):
         """A bare filename writes wherever the process happens to be, which
@@ -4325,6 +4672,60 @@ class PotentialSurface(unittest.TestCase):
             heat._limiting({"current": 1.0, "light": 0.2, "temp": 1.0}, weights),
             "light")
         self.assertIsNone(heat._limiting({"current": 1.0}, weights))
+
+    def test_the_surface_says_which_depth_case_it_is(self):
+        """`depth_scored` used to be the constant False. It now tracks whether
+        the species has a band, so a client can tell the two apart without
+        inferring it from whether the numbers happen to vary."""
+        import inspect
+        from tiderace import heat, score
+        src = inspect.getsource(heat.surface)
+        self.assertNotIn('"depth_scored": False', src,
+                         "depth_scored is hard-coded again; it has to follow "
+                         "the profile")
+        self.assertIn("prof.depth is not None", src)
+        self.assertEqual(
+            {k for k, p in score.PROFILES.items() if p.depth is not None},
+            {"fluke", "black_sea_bass"})
+
+    def test_depth_is_the_one_term_scored_per_cell(self):
+        """Everything else a cell knows comes from its stations, which is why
+        cells sharing one are identical. The bottom is measured per cell, so
+        where a band exists two cells on the same station must be able to
+        differ -- and where none exists they must not, because re-scoring
+        would be the same arithmetic twice."""
+        import inspect
+        from tiderace import heat
+        src = inspect.getsource(heat.surface)
+        loop = src.split("for i, j, la, lo, res in members:")[1]
+        self.assertIn("if prof.depth is not None:", loop,
+                      "the per-cell re-score is unguarded, so every species "
+                      "pays for a term four of them do not have")
+        self.assertIn("depth_ft=depth_ft", loop,
+                      "the cell's own depth never reaches the scorer")
+        self.assertIn('"score": cell["score"]', loop,
+                      "cells still publish the group score, so a depth band "
+                      "cannot move one")
+
+    def test_the_binding_record_carries_no_depth(self):
+        """A binding is what two stations say about the water, and depth is
+        the one thing they do not say. `row` has no depth, so a depth key here
+        would publish the neutral placeholder as though it were measured."""
+        import inspect
+        from tiderace import heat
+        # Slice the whole statement, not to the first "}" -- the dict
+        # comprehension inside carries one, and cutting there stopped the
+        # slice before the line under test.
+        binding = inspect.getsource(heat.surface).split("bindings[bkey] = {")[1]
+        binding = binding.split("\n        }")[0]
+        # This is an assertion about CODE, so it runs against the source with
+        # the comments taken out: the paragraph above the line explains
+        # exactly what the line does, and would satisfy a naive search on its
+        # own.
+        code = "\n".join(ln for ln in binding.splitlines()
+                         if not ln.strip().startswith("#"))
+        self.assertIn('k != "depth"', code)
+        self.assertIn("terms", code)
 
     def test_the_surface_admits_its_own_resolution(self):
         """The current at a cell IS the nearest station's prediction, so cells
