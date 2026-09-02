@@ -1255,7 +1255,9 @@ async function scanView(){
     const b = map.getBounds();
     const bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()]
       .map(v => v.toFixed(4)).join(',');
-    const d = await (await fetch(`/api/structure?bbox=${bbox}&n=61`)).json();
+    const sp = ($('#species') && $('#species').value) || 'striped_bass';
+    const d = await (await fetch(
+      `/api/prospects?bbox=${bbox}&species=${encodeURIComponent(sp)}&n=61`)).json();
     if (d.error) throw new Error(d.error);
 
     if (!d.usable){
@@ -1263,25 +1265,34 @@ async function scanView(){
       toast(d.note);
       return;
     }
-    (d.bumps || []).forEach((bump, i) => {
+    const list = d.prospects || d.bumps || [];
+    list.forEach((bump, i) => {
       const el = document.createElement('div');
       el.className = 'bump' + (bump.novel ? ' novel' : '');
       el.textContent = Math.round(bump.relief_ft);
-      el.title = `${bump.relief_ft} ft of relief · top ${bump.depth_ft} ft, `
-        + `around ${bump.surround_ft} ft`
-        + (bump.novel ? '' : ` · ${bump.charted_hazard_m} m from a charted hazard`);
+      el.title = (bump.why || []).join('\n')
+        || `${bump.relief_ft} ft of relief · top ${bump.depth_ft} ft`;
       el.onclick = () => {
         // The tap that finds it is the tap that means "tell me about here",
         // which is also where logging a trip starts.
         if (typeof showConditions === 'function')
           showConditions(bump.lat, bump.lon,
                          `Bump · ${bump.relief_ft} ft relief`);
+        if (bump.why && bump.why.length) toast(bump.why.join(' · '));
       };
       SCAN_MARKERS.push(new maplibregl.Marker({element: el})
         .setLngLat([bump.lon, bump.lat]).addTo(map));
     });
-    btn.textContent = (d.bumps || []).length
-      ? `${d.bumps.length} found` : 'nothing here';
+    btn.textContent = list.length ? `${list.length} found` : 'nothing here';
+    // The area score is one number for the whole box and saying so is the
+    // point: the current station, the SST pixel and the chlorophyll pixel do
+    // not change inside it. Only the bottom does.
+    const a = d.area || {};
+    if (list.length && a.score != null)
+      toast(`Area ${a.score}/100 for ${d.species_name || 'this fish'}`
+            + (a.limiting ? `, held back by ${a.limiting}` : '')
+            + ` · ${list.length} bump${list.length>1?'s':''} in view`
+            + ` · bottom ~${d.sample_m} m, water 1–6 km`);
   } catch(e){
     btn.textContent = 'scan failed';
   } finally {

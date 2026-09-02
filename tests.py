@@ -2756,6 +2756,17 @@ def strip_comments(page):
     return re.sub(r"(?m)^\s*//.*$", " ", js)
 
 
+def strip_py_comments(src):
+    """Python source with its comments and docstrings removed.
+
+    Separate from strip_comments on purpose: stripping lines that start with
+    `#` out of a stylesheet deletes every `#id` selector in it, which is how
+    two passing CSS tests briefly started failing with IndexError.
+    """
+    src = re.sub(r"(?m)^\s*#.*$", " ", src)
+    return re.sub(r'"""..*?"""', " ", src, flags=re.S)
+
+
 class ResponsiveLayout(unittest.TestCase):
     """Which layout you get is decided by what you point with, not by width.
 
@@ -4086,6 +4097,87 @@ class SheetStructure(unittest.TestCase):
         line = js[boot:js.index("\n", js.index("setSheet", boot))]
         self.assertNotIn("window.setSheet", line,
                          "boot runs before the window alias exists")
+
+
+class ProspectsSeparateAreaFromSpot(unittest.TestCase):
+    """Two questions, because only one of them has a fine-grained answer.
+
+    Measured: resolve the current station at Whale Rock and again 50 m, 200 m
+    and 1000 m north and it is the same station every time -- it changes at
+    5 km. The SST pixel is 1 km and the chlorophyll pixel is 4 km. So two
+    coordinates a hundred metres apart get the identical water number, from
+    the same gauge and the same pixel, and a single blended per-coordinate
+    score would let that constant masquerade as local knowledge.
+    """
+
+    def test_the_module_refuses_to_blend_area_into_spot(self):
+        from tiderace import prospect
+        import inspect
+        src = inspect.getsource(prospect)
+        self.assertIn('"area"', src)
+        self.assertIn('"prospects"', src)
+        # a per-prospect blended score would be the thing this must not do
+        self.assertNotIn("blended_score", src)
+        self.assertNotIn("combined_score", src)
+
+    def test_area_facts_are_labelled_as_area(self):
+        """A spot fact and an area fact side by side, unlabelled, reads as
+        though the water were measured at the bump."""
+        from tiderace import prospect
+        why = prospect._why(
+            {"relief_ft": 13.0, "depth_ft": 42.0, "surround_ft": 55.0,
+             "drop_ft": 18.0, "novel": True},
+            {"current_speed": 1.15, "current_stage": "building",
+             "water_temp_f": 70.0, "limiting": "light"})
+        spot_lines = [w for w in why if not w.startswith("area")]
+        area_lines = [w for w in why if w.startswith("area")]
+        self.assertTrue(spot_lines and area_lines)
+        for w in area_lines:
+            self.assertTrue(w.startswith("area"), w)
+        # the structure claims must not be prefixed as area facts
+        self.assertTrue(any("stands" in w for w in spot_lines))
+
+    def test_the_thermal_break_reports_how_far_away_it_is(self):
+        """sst_grid spans 0.25 deg, about 15 nm, so the sharpest break in it
+        can be twenty miles off. "The water changes fast nearby" is worthless
+        without saying how near -- the first run reported one 17.5 nm away."""
+        from tiderace import prospect
+        why = prospect._why({}, {"thermal_break": {
+            "grad_f_per_nm": 0.108, "distance_nm": 17.5, "near": False}})
+        line = [w for w in why if "temperature change" in w]
+        self.assertTrue(line, "thermal break was dropped from the explanation")
+        self.assertIn("17.5", line[0])
+        self.assertIn("too far", line[0])
+
+    def test_the_thermal_break_is_read_in_the_units_it_is_given(self):
+        """`breaks` returns grad_c_per_nm -- CELSIUS per nautical mile.
+        Reading it as a Fahrenheit key dropped the field silently."""
+        import inspect
+        from tiderace import prospect
+        # Stripped: the comment above the fix names the wrong key while
+        # explaining why it was wrong, and satisfied this on its own. Fifth
+        # time today -- see AssertionsCannotPassOnProse.
+        src = strip_py_comments(inspect.getsource(prospect))
+        self.assertIn("grad_c_per_nm", src, "must read the key breaks emits")
+        self.assertIn("1.8", src, "C/nm must be converted before display")
+        self.assertNotIn("gradient_f_per_nm", src)
+
+    def test_chlorophyll_never_blocks_the_request(self):
+        """A cold VIIRS call took 27 s inshore and 110 s offshore and returned
+        None both times. That is a fine answer to wait 0 s for and a terrible
+        one to wait two minutes for while a boat drifts."""
+        import inspect
+        from tiderace import prospect
+        src = inspect.getsource(prospect._area)
+        self.assertIn("if deep:", src, "chlorophyll must be opt-in")
+        head = src.split("if deep:")[0]
+        self.assertNotIn("offshore.chlorophyll", head,
+                         "chlorophyll is fetched before the deep guard")
+
+    def test_depth_is_still_not_scored_here(self):
+        import inspect
+        from tiderace import prospect
+        self.assertIn("depth_scored", inspect.getsource(prospect.prospects))
 
 
 class StructureScan(unittest.TestCase):
