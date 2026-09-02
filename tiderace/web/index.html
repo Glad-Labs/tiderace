@@ -321,6 +321,16 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   font:600 10px/1.1 var(--mono); letter-spacing:.06em;
   box-shadow:0 6px 18px rgba(0,0,0,.45); cursor:pointer;
 }
+/* The reading half of the app. Not on the map, because none of it is
+   something you do with a rod in your hand and the map was decluttered on
+   purpose -- but reachable, because CLI-only meant never looked at. */
+#desklink{
+  display:inline-block; text-decoration:none;
+  padding:6px 10px; border-radius:7px; border:1px solid var(--hair);
+  background:var(--panel); color:var(--ink-2);
+  font:600 11px/1 var(--display);
+}
+#desklink:active{transform:scale(.96)}
 #here:active{transform:scale(.94)}
 #here.busy{opacity:.55}
 /* The desktop side of the same rule: a wide window AND a real pointer. */
@@ -655,6 +665,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
       <span id="mode" title="Which rules apply"></span>
       <button id="layersbtn" title="Chart overlays">charts ▾</button>
       <button id="scanbtn" title="Look for bumps in the water you are looking at">scan ⛰</button>
+      <a id="desklink" href="/desk" title="Log history, reports, review queue, HMS rules">desk →</a>
       <button id="offlinebtn" title="Download the forecast for the water">save ↓</button>
       <span id="netstate"></span>
       <div id="layers"></div>

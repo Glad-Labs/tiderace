@@ -1,0 +1,243 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>tiderace — desk</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0B1518">
+<style>
+/* The reading half of the app.
+
+   These four -- the log's own history, what other people are reporting,
+   claims waiting to be believed, and the federal offshore rules -- were CLI
+   only, which meant nobody ever looked at them. They do not belong on the map
+   either: none is something you do with a rod in your hand, and the map screen
+   was decluttered on purpose. So: a second page, reached from the map and
+   reachable back, scrolling like a document because that is what it is. */
+:root{
+  --ground:#0B1518; --panel:#122126; --panel-2:#16292F; --hair:#274048;
+  --ink:#E4ECEE; --ink-2:#C2D3D7; --muted:#8CA3A8;
+  --accent:#F04FA0; --depth:#4FB3C7;
+  --good:#4FBF89; --warn:#D9A521; --crit:#E0705F;
+  --display:'Archivo','Helvetica Neue',Arial,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0; min-height:100%}
+body{
+  background:var(--ground); color:var(--ink);
+  font-family:var(--display); font-size:15px; line-height:1.5;
+  padding-bottom:env(safe-area-inset-bottom);
+}
+header{
+  position:sticky; top:0; z-index:10; background:var(--ground);
+  border-bottom:1px solid var(--hair);
+  display:flex; align-items:center; gap:10px; padding:12px 16px;
+  padding-top:calc(12px + env(safe-area-inset-top));
+}
+.brand{font:700 17px/1 var(--display); letter-spacing:-.01em}
+.brand span{color:var(--accent)}
+a.back{
+  margin-left:auto; text-decoration:none; color:var(--ink);
+  border:1px solid var(--hair); border-radius:8px;
+  padding:9px 13px; font:600 13px/1 var(--display); background:var(--panel);
+}
+nav{
+  display:flex; gap:0; overflow-x:auto; border-bottom:1px solid var(--hair);
+  position:sticky; top:57px; background:var(--ground); z-index:9;
+}
+nav button{
+  flex:1 0 auto; min-height:48px; padding:0 16px;
+  background:none; border:none; border-bottom:2px solid transparent;
+  color:var(--muted); font:600 13px/1 var(--display); cursor:pointer;
+  white-space:nowrap;
+}
+nav button.on{color:var(--ink); border-bottom-color:var(--accent)}
+main{padding:0 0 40px}
+section{display:none; padding:16px}
+section.on{display:block}
+h2{font:600 13px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
+   color:var(--muted); margin:0 0 12px}
+.big{font:700 30px/1 var(--display); font-variant-numeric:tabular-nums}
+.card{
+  background:var(--panel); border:1px solid var(--hair); border-radius:10px;
+  padding:14px 15px; margin-bottom:11px;
+}
+.row{display:flex; align-items:baseline; gap:10px; padding:8px 0;
+     border-bottom:1px solid rgba(39,64,72,.55); font:13px/1.4 var(--mono)}
+.row:last-child{border-bottom:none}
+.row .k{color:var(--ink-2)}
+.row .v{margin-left:auto; font-variant-numeric:tabular-nums; color:var(--ink)}
+.dim{color:var(--muted); font:12px/1.6 var(--mono)}
+.warn{color:var(--warn)}
+.crit{color:var(--crit)}
+.tag{
+  display:inline-block; font:10px/1 var(--mono); letter-spacing:.08em;
+  text-transform:uppercase; color:var(--depth);
+  border:1px solid var(--hair); border-radius:999px; padding:4px 8px;
+  margin-right:6px;
+}
+.tag.hi{color:var(--good)} .tag.lo{color:var(--warn)}
+.bar{height:7px; border-radius:4px; background:var(--hair); margin:10px 0}
+.bar i{display:block; height:100%; border-radius:4px; background:var(--accent)}
+a{color:var(--depth)}
+.empty{color:var(--muted); font:13px/1.6 var(--mono); padding:8px 0}
+@media (min-width:760px){ main{max-width:760px; margin:0 auto} }
+</style>
+
+<header>
+  <div class="brand">tide<span>race</span> · desk</div>
+  <a class="back" href="/">← map</a>
+</header>
+
+<nav>
+  <button data-s="history" class="on">Log</button>
+  <button data-s="reports">Reports</button>
+  <button data-s="review">Review</button>
+  <button data-s="hms">HMS</button>
+</nav>
+
+<main>
+  <section id="history" class="on"><div class="empty">reading…</div></section>
+  <section id="reports"><div class="empty">reading…</div></section>
+  <section id="review"><div class="empty">reading…</div></section>
+  <section id="hms"><div class="empty">reading…</div></section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = t => String(t == null ? '' : t)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+const LOADED = {};
+async function get(url){
+  const r = await fetch(url);
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  return d;
+}
+
+async function show(name){
+  document.querySelectorAll('nav button').forEach(b =>
+    b.classList.toggle('on', b.dataset.s === name));
+  document.querySelectorAll('section').forEach(s =>
+    s.classList.toggle('on', s.id === name));
+  if (LOADED[name]) return;
+  LOADED[name] = true;
+  try { await RENDER[name](); }
+  catch (e) {
+    LOADED[name] = false;
+    $('#' + name).innerHTML =
+      `<div class="empty">Could not load: ${esc(e.message)}</div>`;
+  }
+}
+
+const RENDER = {
+  async history(){
+    const d = await get('/api/history');
+    const need = Math.max(0, 60 - d.trips);
+    const rows = Object.entries(d.by_species || {}).sort()
+      .map(([sp, b]) =>
+        `<div class="row"><span class="k">${esc(sp.replace(/_/g,' '))}</span>` +
+        `<span class="v">${b.trips} trips · ${b.fish} fish · ${b.blanks} blank</span></div>`)
+      .join('') || '<div class="empty">Nothing logged yet.</div>';
+    $('#history').innerHTML =
+      `<h2>What is on file</h2>
+       <div class="card">
+         <div class="big">${d.trips}</div>
+         <div class="dim">trips · ${d.fish} fish · ${d.blanks} blank</div>
+         <div class="bar"><i style="width:${Math.min(100, d.trips / 60 * 100)}%"></i></div>
+         <div class="dim">${d.ready_to_fit
+           ? 'Enough to fit weights against.'
+           : esc(need + ' more trips before fitting the weights is worth doing.')}</div>
+       </div>
+       <h2>By species</h2>
+       <div class="card">${rows}</div>
+       <div class="dim">Blanks count as much as fish. A model trained only on
+         good days learns that every day is good.</div>`;
+  },
+
+  async reports(){
+    const d = await get('/api/reports');
+    // What other people are seeing that the model has no opinion about. This
+    // is the list that says what the forecast is blind to, which is worth more
+    // than another number about what it already knows.
+    const un = Object.entries(d.unmodelled || {})
+      .sort((a, b) => b[1] - a[1])
+      .map(([sp, n]) => `<span class="tag lo">${esc(sp)} ×${n}</span>`).join('')
+      || '<span class="dim">none</span>';
+    const dis = (d.disagreements || []).map(x =>
+      `<div class="row"><span class="k">${esc(x.species || x.detail || '')}</span>` +
+      `<span class="v">${esc(x.note || x.why || '')}</span></div>`).join('')
+      || '<div class="empty">Nothing contradicting the model right now.</div>';
+    const rows = (d.rows || []).slice(0, 40).map(r =>
+      `<div class="row"><span class="k">${esc(r.species_raw || r.species || '?')}` +
+      `${r.place ? ' · ' + esc(r.place) : ''}</span>` +
+      `<span class="v">${esc(r.day || '')} · ${esc(r.outlet || '')}</span></div>`)
+      .join('') || '<div class="empty">No reports scraped yet.</div>';
+    $('#reports').innerHTML =
+      `<h2>Species the model does not score</h2>
+       <div class="card">${un}
+         <div class="dim" style="margin-top:9px">Turning up in reports with no
+           profile behind them. Reality contradicting the model is the useful
+           kind of disagreement.</div></div>
+       <h2>Disagreements</h2>
+       <div class="card">${dis}</div>
+       <h2>${d.count} reports</h2>
+       <div class="card">${rows}</div>
+       <div class="dim">Second-hand by definition: somebody else's word about
+         somebody else's day, and never a substitute for your own log.</div>`;
+  },
+
+  async review(){
+    const d = await get('/api/review');
+    const rows = (d.pending || []).map(r => {
+      const conf = r.confidence || '?';
+      const cls = conf === 'high' ? 'hi' : conf === 'low' ? 'lo' : '';
+      const bits = [r.license_mode, r.change_type, r.value,
+                    r.effective_date && ('effective ' + r.effective_date)]
+                   .filter(Boolean).map(esc).join(' · ');
+      return `<div class="card">
+        <span class="tag ${cls}">${esc(r.kind || '?')}</span>
+        <span class="tag ${cls}">${esc(conf)} confidence</span>
+        <div style="margin-top:9px"><b>${esc(r.species || r.bait || '—')}</b></div>
+        <div class="dim">${bits}</div>
+        ${r.source ? `<div class="dim"><a href="${esc(r.source)}" rel="noopener"
+           target="_blank">source</a></div>` : ''}
+      </div>`;
+    }).join('') || '<div class="empty">Nothing awaiting review.</div>';
+    $('#review').innerHTML =
+      `<h2>Claims awaiting a human</h2>
+       ${rows}
+       <div class="dim">Read-only. Nothing in the codebase approves these yet,
+         and a button that wrote them into the model with nothing downstream
+         expecting them would be worse than no button. A regulation here is a
+         claim an extractor made, not a rule — check the source before you act
+         on it.</div>`;
+  },
+
+  async hms(){
+    const d = await get('/api/hms');
+    const rows = (d.species || []).map(s =>
+      `<div class="row"><span class="k">${esc(s.key.replace(/_/g,' '))}</span>` +
+      `<span class="v">${esc(s.line)}</span></div>`).join('');
+    $('#hms').innerHTML =
+      `<h2>Federal, not state</h2>
+       <div class="card">
+         <div class="warn">${esc(d.permit)}</div>
+         <div class="dim" style="margin-top:9px">
+           <a href="${esc(d.permit_url)}" rel="noopener" target="_blank">${esc(d.permit_url)}</a>
+         </div>
+       </div>
+       <h2>Species</h2>
+       <div class="card">${rows}</div>
+       <div class="dim">These are the rules for the water you run to for tuna.
+         They are federal and a Rhode Island licence does not touch them.
+         Nothing here is a substitute for the permit conditions you hold.</div>`;
+  },
+};
+
+document.querySelectorAll('nav button').forEach(b =>
+  b.onclick = () => show(b.dataset.s));
+show('history');
+</script>

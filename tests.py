@@ -4120,6 +4120,67 @@ class SheetStructure(unittest.TestCase):
                          "boot runs before the window alias exists")
 
 
+class TheDeskPageIsReachable(unittest.TestCase):
+    """The reading half. history, reports, review and hms were CLI-only, which
+    in practice meant nobody ever looked at them -- and none of them belongs on
+    the map, because none is something you do with a rod in your hand and the
+    map screen was decluttered on purpose.
+    """
+
+    def setUp(self):
+        import pathlib
+        d = pathlib.Path(__file__).parent / "tiderace"
+        self.desk = (d / "web" / "desk.html").read_text()
+        self.page = (d / "web" / "index.html").read_text()
+        self.server = (d / "server.py").read_text()
+        self.sw = (d / "web" / "sw.js").read_text()
+
+    def test_every_cli_only_reading_has_an_endpoint(self):
+        for path in ("/api/history", "/api/reports", "/api/review", "/api/hms"):
+            self.assertIn('url.path == "%s"' % path, self.server, path)
+
+    def test_the_desk_page_is_served_and_linked_both_ways(self):
+        self.assertIn('"/desk"', self.server)
+        self.assertIn('id="desklink"', self.page, "the map must link to it")
+        self.assertIn('href="/desk"', self.page)
+        self.assertIn('href="/"', self.desk, "and it must link back")
+
+    def test_each_section_actually_fetches_its_endpoint(self):
+        """A tab that renders nothing is the same as no tab, which is how
+        /api/log/photo sat unreachable for months."""
+        js = strip_comments(self.desk)
+        for name, path in (("history", "/api/history"), ("reports", "/api/reports"),
+                           ("review", "/api/review"), ("hms", "/api/hms")):
+            self.assertIn(path, js, name)
+            self.assertIn("async %s()" % name, js, name)
+
+    def test_the_review_queue_does_not_pretend_to_approve(self):
+        """No approve action exists anywhere in the codebase. A button that
+        wrote these claims into the model with nothing downstream expecting
+        them would be worse than no button."""
+        self.assertIn("read_only", self.server)
+        # The mechanism, not the vocabulary. The page's own copy says
+        # "nothing in the codebase approves these yet", which is visible text
+        # rather than a comment, so a word search matches the sentence that
+        # promises the opposite of what it is looking for.
+        js = strip_comments(self.desk)
+        for verb in ("POST", "PUT", "DELETE", "method:", "method :"):
+            self.assertNotIn(verb, js,
+                             "the desk page must issue no writes (%s)" % verb)
+        self.assertGreater(js.count("fetch("), 0, "it does fetch something")
+
+    def test_a_queued_regulation_is_labelled_a_claim_not_a_rule(self):
+        """These come out of an extractor. Rendering one beside the real
+        RIDEM limits without saying which is which is how a guess becomes a
+        rule somebody fishes on."""
+        self.assertIn("claim an extractor made, not a rule", self.desk)
+
+    def test_the_desk_works_at_the_mooring(self):
+        """Its four readings are what you catch up on at the dock, which is
+        where the signal is worst."""
+        self.assertIn("'/desk'", self.sw, "desk must be in the precached shell")
+
+
 class EverythingOnTheWaterIsReachable(unittest.TestCase):
     """Two capabilities existed in full and had no way in from the phone.
 

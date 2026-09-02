@@ -322,6 +322,58 @@ class Handler(BaseHTTPRequestHandler):
             # the wind-farm marks below, and inserting this above it shadowed
             # the route so the turbines 400'd and vanished from the map. Same
             # fault as /charts/cell/ sitting under startswith("/charts/").
+            if url.path in ("/desk", "/desk.html"):
+                return self._static("desk.html")
+            if url.path == "/api/history":
+                return self._send_json(catchlog.summary())
+            if url.path == "/api/hms":
+                from . import hms as hmsmod
+                sp = q.get("species", [None])[0]
+                out = {
+                    "permit": hmsmod.PERMIT,
+                    "permit_url": hmsmod.PERMIT_URL,
+                    "species": [{"key": k, "line": hmsmod.summary_line(k)}
+                                for k in hmsmod.RULES],
+                }
+                if sp and sp in hmsmod.RULES:
+                    out["status"] = hmsmod.status(sp)
+                return self._send_json(out)
+            if url.path == "/api/review":
+                from . import extract
+                kind = q.get("kind", [None])[0]
+                try:
+                    rows = extract.pending(kind)
+                except (OSError, ValueError) as exc:
+                    return self._send_json({"error": str(exc)}, 500)
+                # Read-only on purpose: no approve action exists anywhere in
+                # the codebase, and inventing one here would write claims into
+                # the model with nothing downstream expecting them.
+                return self._send_json({"pending": rows, "read_only": True})
+            if url.path == "/api/reports":
+                from . import reports as rep
+                try:
+                    rows = rep.catch_reports()
+                except (OSError, ValueError) as exc:
+                    return self._send_json({"error": str(exc)}, 500)
+                sp = q.get("species", [None])[0]
+                out = {
+                    "count": len(rows),
+                    "rows": rows[:120],
+                    # Species turning up in reports that the model has no
+                    # opinion about. This is the list that says what the
+                    # forecast is blind to.
+                    "unmodelled": rep.unmodelled(rows),
+                }
+                try:
+                    out["disagreements"] = rep.disagreements()
+                except Exception:                                  # noqa: BLE001
+                    out["disagreements"] = []
+                if sp:
+                    try:
+                        out["weekly_presence"] = rep.weekly_presence(sp, rows)
+                    except Exception:                              # noqa: BLE001
+                        pass
+                return self._send_json(out)
             if url.path == "/api/evaluate":
                 # The only endpoint that can tell you the rest of them are
                 # worthless. It lived in the CLI, which means it was never

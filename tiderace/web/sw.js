@@ -34,7 +34,7 @@
 // is genuinely confusing during development -- a browser check against a
 // stale cache proves nothing, which is how a debug probe survived one round
 // of "verification" here.
-const SHELL = 'tiderace-shell-v44';
+const SHELL = 'tiderace-shell-v45';
 const TILES = 'tiderace-tiles-v1';
 
 // About 55 MB of raster tiles: enough for the bay at working zoom plus wherever
@@ -47,7 +47,9 @@ const TILE_MAX_ZOOM = 15;
 const DATA  = 'tiderace-data-v1';
 
 const SHELL_URLS = [
-  '/', '/static/manifest.webmanifest',
+  // The desk page too: its four readings are exactly the things you catch up
+  // on at the dock or on the mooring, which is where the signal is worst.
+  '/', '/desk', '/static/manifest.webmanifest',
   '/static/icon-192.png', '/static/icon-512.png',
   'https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.js',
   'https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.css',
