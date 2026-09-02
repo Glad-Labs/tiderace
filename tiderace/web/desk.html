@@ -94,6 +94,7 @@ a{color:var(--depth)}
   <button data-s="reports">Reports</button>
   <button data-s="review">Review</button>
   <button data-s="hms">HMS</button>
+  <button data-s="sources">Sources</button>
 </nav>
 
 <main>
@@ -101,6 +102,7 @@ a{color:var(--depth)}
   <section id="reports"><div class="empty">reading…</div></section>
   <section id="review"><div class="empty">reading…</div></section>
   <section id="hms"><div class="empty">reading…</div></section>
+  <section id="sources"><div class="empty">reading…</div></section>
 </main>
 
 <script>
@@ -214,6 +216,44 @@ const RENDER = {
          expecting them would be worse than no button. A regulation here is a
          claim an extractor made, not a rule — check the source before you act
          on it.</div>`;
+  },
+
+  async sources(){
+    const d = await get('/api/scrapes');
+    const rows = (d.sources || []).map(r => {
+      const age = r.age_hours == null ? 'never'
+        : r.age_hours < 48 ? Math.round(r.age_hours) + ' h ago'
+        : Math.round(r.age_hours / 24) + ' d ago';
+      const cls = r.stale ? 'crit' : '';
+      const why = !r.ever_ran ? 'no run yet'
+        : !r.ok ? esc(r.detail || 'failed')
+        : esc(r.detail || 'ok');
+      return `<div class="row">
+        <span class="k">${esc(r.source)}</span>
+        <span class="v ${cls}">${age} · ${why}</span></div>`;
+    }).join('') || '<div class="empty">No sources configured.</div>';
+    $('#sources').innerHTML =
+      `<h2>Freshness</h2>
+       <div class="card">
+         <div class="${(d.stale || []).length ? 'warn' : ''}">${esc(d.line)}</div>
+       </div>
+       <h2>Every source</h2>
+       <div class="card">${rows}</div>
+       <div class="dim">Regulations are read daily and go loud after 48 h;
+         the report outlets publish weekly and go loud after 10 days. A source
+         that has never run is shown overdue rather than left blank — a scrape
+         that fails on a timer is worse than one you run by hand, because the
+         manual one at least fails in front of you.</div>
+       <h2>Schedule</h2>
+       <div class="card">
+         <div class="row"><span class="k">RIDEM</span>
+           <span class="v">daily, 06:20 ±40 min</span></div>
+         <div class="row"><span class="k">report outlets</span>
+           <span class="v">Thursdays, 07:10 ±1 h</span></div>
+       </div>
+       <div class="dim">systemd user timers, Persistent=true — a run missed
+         because the machine was off happens when it comes back rather than
+         being skipped in silence.</div>`;
   },
 
   async hms(){

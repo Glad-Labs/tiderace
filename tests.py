@@ -4120,6 +4120,110 @@ class SheetStructure(unittest.TestCase):
                          "boot runs before the window alias exists")
 
 
+class ScrapeFreshness(unittest.TestCase):
+    """A scrape that runs on a timer and fails quietly is worse than one you
+    run by hand, because the manual one at least fails in front of you.
+
+    Proved itself on the first scheduled run: both systemd units exited 0
+    while hooked_ri failed inside the run -- the model returned non-JSON --
+    and without this the weekly timer would have reported success indefinitely
+    over a source producing nothing.
+    """
+
+    def _tmp(self):
+        import tempfile, os
+        fd, p = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        os.unlink(p)
+        self.addCleanup(lambda: os.path.exists(p) and os.unlink(p))
+        return p
+
+    def test_a_failure_does_not_erase_the_last_good_read(self):
+        from tiderace import scrapelog
+        p = self._tmp()
+        scrapelog.record("ridem_limits", "regulation", True, "3 queued", path=p)
+        scrapelog.record("ridem_limits", "regulation", False, "503", path=p)
+        row = [r for r in scrapelog.status(path=p)["sources"]
+               if r["source"] == "ridem_limits"][0]
+        self.assertIsNotNone(row["last_success"],
+                             "a failure must not wipe when the data was last good")
+        self.assertEqual(row["fails_in_a_row"], 1)
+        self.assertFalse(row["ok"])
+
+    def test_a_source_that_never_ran_is_overdue_not_absent(self):
+        """It has no record at all, so listing only what is recorded leaves it
+        out of the interface entirely. The six report outlets were missing
+        from the first status for exactly this reason while the two RIDEM
+        sources looked healthy."""
+        from tiderace import fetch, scrapelog
+        st = scrapelog.status(path=self._tmp())
+        listed = {r["source"] for r in st["sources"]}
+        self.assertEqual(listed, set(fetch.SOURCES),
+                         "every configured source must appear")
+        self.assertTrue(all(r["stale"] for r in st["sources"]))
+
+    def test_never_asked_is_not_reported_as_broken(self):
+        """Calling an unfired timer a failure sends you looking for a fault
+        that is not there."""
+        from tiderace import scrapelog
+        st = scrapelog.status(path=self._tmp())
+        self.assertEqual(st["failing"], [])
+        self.assertTrue(st["stale"])
+
+    def test_regulations_go_loud_sooner_than_reports(self):
+        """A size limit changing under a commercial licence is the one thing
+        here that costs money to miss; the outlets publish weekly."""
+        from tiderace import scrapelog
+        self.assertLess(scrapelog.STALE_AFTER_H["regulation"],
+                        scrapelog.STALE_AFTER_H["report"])
+        self.assertLessEqual(scrapelog.STALE_AFTER_H["regulation"], 48)
+
+    def test_bookkeeping_never_breaks_the_scrape_it_records(self):
+        from tiderace import scrapelog
+        scrapelog.record("x", "report", True, "fine",
+                         path="/nonexistent/dir/that/cannot/exist/runs.json")
+
+    def test_the_scrape_records_every_outcome(self):
+        """Both arms: the success at the end of the block, and each except."""
+        import inspect, pathlib
+        src = (pathlib.Path(__file__).parent / "tiderace" / "cli.py").read_text()
+        fn = src.split("def _cmd_scrape(")[1].split("\ndef ")[0]
+        self.assertGreaterEqual(fn.count("scrapelog.record("), 3,
+                                "success and both failure paths must be recorded")
+        self.assertIn("scrapelog.record(key, kind, False", fn)
+
+    def test_the_scheduled_scrape_does_not_write_bait_by_itself(self):
+        """--apply-bait on a timer with nobody reading the output is how the
+        bait log fills with somebody else's guesses."""
+        import pathlib
+        # The repo copy, so this means something on a clean checkout, and the
+        # ExecStart line only: the comment beside it explains the rule by
+        # naming the flag, and a whole-file search matches the explanation.
+        # Sixth time that shape has bitten -- assert the mechanism.
+        unit = (pathlib.Path(__file__).parent / "systemd"
+                / "tiderace-reports.service").read_text()
+        exec_lines = [l for l in unit.splitlines()
+                      if l.startswith("ExecStart") or l.startswith("  --")]
+        self.assertTrue(exec_lines, "no ExecStart found")
+        self.assertNotIn("--apply-bait", "\n".join(exec_lines))
+
+    def test_the_units_are_in_the_repo_not_just_on_this_machine(self):
+        """They were written straight into ~/.config, where they are not
+        version controlled and nobody else running tiderace gets them."""
+        import pathlib
+        d = pathlib.Path(__file__).parent / "systemd"
+        for name in ("tiderace-regs.service", "tiderace-regs.timer",
+                     "tiderace-reports.service", "tiderace-reports.timer"):
+            self.assertTrue((d / name).exists(), name)
+        for t in ("tiderace-regs.timer", "tiderace-reports.timer"):
+            body = (d / t).read_text()
+            self.assertIn("Persistent=true", body,
+                          "a run missed while the machine was off must not "
+                          "be skipped in silence")
+            self.assertIn("RandomizedDelaySec", body,
+                          "these are public web servers; do not look like a clock")
+
+
 class TheDeskPageIsReachable(unittest.TestCase):
     """The reading half. history, reports, review and hms were CLI-only, which
     in practice meant nobody ever looked at them -- and none of them belongs on

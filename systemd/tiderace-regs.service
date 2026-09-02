@@ -1,0 +1,16 @@
+[Unit]
+Description=Tiderace — read RIDEM for regulation changes
+Documentation=https://github.com/Glad-Labs/tiderace
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/tiderace
+# Only the two RIDEM sources. A size limit changing under a commercial licence
+# is the one thing here that costs money to miss, so it is checked daily while
+# the report outlets are left to their weekly rhythm.
+ExecStart=/usr/bin/python3 -m tiderace scrape --source ridem_amendments --source ridem_limits
+# Nothing is written to the rules by this. Extracted changes land in the review
+# queue and wait for a human, which is what /desk shows.
+Nice=10

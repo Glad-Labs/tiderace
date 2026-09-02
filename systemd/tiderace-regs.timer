@@ -1,0 +1,14 @@
+[Unit]
+Description=Check RIDEM daily
+
+[Timer]
+OnCalendar=*-*-* 06:20:00
+# Not on the hour, and not the same minute every day: this is somebody's public
+# web server and there is no reason to look like a clock.
+RandomizedDelaySec=40m
+# If the machine was off at 06:20 the check still happens once it is back,
+# rather than being skipped in silence until tomorrow.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

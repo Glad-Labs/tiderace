@@ -322,7 +322,7 @@ def _cmd_log(args) -> int:
 
 
 def _cmd_scrape(args) -> int:
-    from . import extract
+    from . import extract, scrapelog
 
     if args.check:
         from . import llm
@@ -386,10 +386,19 @@ def _cmd_scrape(args) -> int:
 
             for inj in out.get("injection_suspected", []):
                 print(f"    ! instruction-shaped text ignored: {inj[:90]}")
+            # On a timer nobody reads the output, so the outcome has to end up
+            # somewhere the interface can show it going stale.
+            scrapelog.record(key, kind, True,
+                             "%d queued" % out.get("queued", 0)
+                             if kind == "regulation"
+                             else "%d bait, %d catch" % (len(out.get("bait", [])),
+                                                         len(out.get("catches", []))))
         except extract.ExtractionUnavailable as e:
             print(f"    ! {e}")
+            scrapelog.record(key, kind, False, str(e))
         except fetch.FetchError as e:
             print(f"    ! fetch failed: {e}")
+            scrapelog.record(key, kind, False, "fetch failed: %s" % e)
     print()
     print("  Nothing above has changed the forecast. Regulations need approval:")
     print("    python3 -m tiderace review\n")

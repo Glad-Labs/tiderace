@@ -1,0 +1,18 @@
+[Unit]
+Description=Tiderace — read the fishing report outlets
+Documentation=https://github.com/Glad-Labs/tiderace
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/tiderace
+# The six report outlets. On The Water and most of the others publish weekly,
+# so reading them daily would be six requests a day to get the same page back.
+ExecStart=/usr/bin/python3 -m tiderace scrape \
+  --source otw_ri_report --source fisherman_ri --source coastal_angler_ri \
+  --source hooked_ri --source eastbay_report --source risaa
+# Deliberately no --apply-bait: a scheduled job that writes sightings into the
+# bait log with nobody reading the output is how the log fills with somebody
+# else's guesses. They queue for review instead.
+Nice=10

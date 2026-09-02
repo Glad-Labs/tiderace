@@ -1,0 +1,12 @@
+[Unit]
+Description=Read the fishing reports weekly
+
+[Timer]
+# Thursday morning: On The Water's Rhode Island report lands midweek, so this
+# reads it while it is still this week's rather than next week's.
+OnCalendar=Thu *-*-* 07:10:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

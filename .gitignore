@@ -50,3 +50,7 @@ data/cache/
 # else's data; it belongs on the machine, not in the history.
 data/pmtiles/
 *.pmtiles
+
+# When each source was last scraped and whether it worked. Machine state, not
+# project state: it says whether THIS install's data is current.
+data/scrape_runs.json

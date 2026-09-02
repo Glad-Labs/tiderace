@@ -324,6 +324,11 @@ class Handler(BaseHTTPRequestHandler):
             # fault as /charts/cell/ sitting under startswith("/charts/").
             if url.path in ("/desk", "/desk.html"):
                 return self._static("desk.html")
+            if url.path == "/api/scrapes":
+                from . import scrapelog
+                st = scrapelog.status()
+                st["line"] = scrapelog.summary_line(st)
+                return self._send_json(st)
             if url.path == "/api/history":
                 return self._send_json(catchlog.summary())
             if url.path == "/api/hms":
