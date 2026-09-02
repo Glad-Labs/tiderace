@@ -4088,6 +4088,61 @@ class SheetStructure(unittest.TestCase):
                          "boot runs before the window alias exists")
 
 
+class ZoomedChromeStaysOnTheGlass(unittest.TestCase):
+    """A viewport unit on a zoomed element is not the size you asked for.
+
+    `zoom` multiplies computed lengths, and vh/vw resolve against the
+    UNZOOMED viewport first -- so the result is scaled twice. This was
+    already known for width (`left:0;right:0` came out 2.4x wider than the
+    screen) and the fix was written down in a comment, but only ever applied
+    to the horizontal axis.
+
+    The vertical case cost more. `max-height:92vh` computed to 1826px, zoom
+    2.379 multiplied it to 2256 visual px in a 1985px viewport, and because
+    the sheet is anchored `bottom:0` the 271px of overflow went off the TOP
+    -- carrying the drag handle 269px above the screen. Every report was
+    "I can't pull the panel down", and the panel was fine: the handle was
+    not on the glass. Measured, not inferred.
+    """
+
+    def setUp(self):
+        import pathlib
+        self.page = (pathlib.Path(__file__).parent
+                     / "tiderace" / "web" / "index.html").read_text()
+
+    def test_no_bare_viewport_unit_on_a_zoomed_element(self):
+        css = strip_comments(self.page)
+
+        # Who is zoomed. Read it, do not hardcode it, or a new zoomed
+        # element joins the stylesheet unguarded.
+        m = re.search(r"([^{}]+)\{[^{}]*zoom:\s*var\(--ui\s*[,)]", css)
+        self.assertTrue(m, "found no `zoom: var(--ui...)` rule to guard")
+        zoomed = {sel.strip() for sel in m.group(1).split(",") if sel.strip()}
+        self.assertTrue(zoomed, "no zoomed selectors parsed")
+
+        offenders, scanned = [], 0
+        for rule in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+            sel, body = rule.group(1), rule.group(2)
+            if not any(z in sel for z in zoomed):
+                continue
+            for decl in body.split(";"):
+                if not re.search(r"\d\s*v[hw]\b", decl):
+                    continue
+                scanned += 1
+                if not re.search(r"var\(--ui\s*[,)]", decl):
+                    offenders.append(sel.strip() + " {" + decl.strip() + "}")
+
+        # The floor: a rename of --ui, or of the selectors, would leave this
+        # walking an empty set and reporting success.
+        self.assertGreater(scanned, 2,
+                           "examined %d viewport-unit declarations on zoomed "
+                           "elements; the walk has stopped matching" % scanned)
+        self.assertEqual(offenders, [],
+                         "vh/vw on a zoomed element must be divided by "
+                         "var(--ui, 1) or it is scaled twice: "
+                         + "; ".join(offenders))
+
+
 class AssertionsCannotPassOnProse(unittest.TestCase):
     """A check that matched only a comment has not passed.
 

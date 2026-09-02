@@ -196,7 +196,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   background:var(--panel); border-top:1px solid var(--hair);
   border-radius:16px 16px 0 0;
   transform:translateY(100%); transition:transform .22s cubic-bezier(.2,.8,.3,1);
-  max-height:86vh; display:flex; flex-direction:column;
+  max-height:calc(86vh / var(--ui, 1)); display:flex; flex-direction:column;
   padding-bottom:env(safe-area-inset-bottom);
   box-shadow:0 -18px 44px rgba(0,0,0,.5);
   /* touch-action deliberately NOT set here. It used to be `none` on the whole
@@ -278,7 +278,8 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 #here.busy{opacity:.55}
 /* The desktop side of the same rule: a wide window AND a real pointer. */
 @media (min-width:901px) and (pointer:fine){
-  #sheet{left:auto; right:0; width:420px; max-height:92vh; border-radius:16px 0 0 0}
+  #sheet{left:auto; right:0; width:420px;
+         max-height:calc(92vh / var(--ui, 1)); border-radius:16px 0 0 0}
   #here{display:none}
 }
 
@@ -335,7 +336,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
      here; its parts each have a tab. */
   #app{grid-template-columns:1fr; grid-template-rows:1fr}
   #panel{display:none}
-  #sheet{max-height:92vh}
+  #sheet{max-height:calc(92vh / var(--ui, 1))}
   #sheet.peek{transform:translateY(calc(100% - 210px))}
   /* Everything a thumb has to hit, sized for a thumb. */
   .srow{padding:14px 16px}
@@ -415,7 +416,15 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 /* A zoomed fixed element still resolves left/right against the UNZOOMED
    viewport, then multiplies the result -- so `left:0;right:0` came out 2.4x
    wider than the screen. Width has to be stated in the zoomed coordinate
-   space, which is viewport / scale. */
+   space, which is viewport / scale.
+
+   The same is true of every vh, and missing that cost more than the width
+   did: `max-height:92vh` computed to 1826px, `zoom:2.379` multiplied it to
+   2256 visual px in a 1985px viewport, and since the sheet is anchored
+   bottom:0 the overflow went off the TOP -- taking the drag handle 269px
+   above the screen with it. The panel could not be pulled down because the
+   thing you pull was not on the glass. Every vh on a zoomed element is now
+   divided, and a test refuses a bare one. */
 #sheet{ right:auto; width:calc(100vw / var(--ui, 1)); }
 /* Offsets are multiplied by the zoom as well as sizes, so a 12px inset would
    land at 29px. Divide anything that has to stay put on the glass. */
