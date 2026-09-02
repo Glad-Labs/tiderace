@@ -2733,6 +2733,18 @@ class DoubleTap(unittest.TestCase):
 
 
 
+def comments_only(page):
+    """Just the commentary, with the code taken out.
+
+    The inverse of strip_comments, and the thing an assertion must NOT be
+    satisfiable by on its own.
+    """
+    out = re.findall(r"/\*.*?\*/", page, re.S)
+    out += re.findall(r"(?m)^\s*//.*$", page)
+    out += re.findall(r"<!--.*?-->", page, re.S)
+    return "\n".join(out)
+
+
 def strip_comments(page):
     """A page with its comments removed.
 
@@ -2947,7 +2959,9 @@ class ViewportLies(unittest.TestCase):
 
     def test_the_cause_is_reported_not_just_papered_over(self):
         # Compensating silently would leave a blurry app and no way to know why.
-        self.assertIn("Desktop site", self.page)
+        # Against the stripped page: the comment above the clamp says
+        # "Desktop site" too, and would satisfy this on its own.
+        self.assertIn("Desktop site", strip_comments(self.page))
 
 
 class ChartCells(unittest.TestCase):
@@ -4072,6 +4086,64 @@ class SheetStructure(unittest.TestCase):
         line = js[boot:js.index("\n", js.index("setSheet", boot))]
         self.assertNotIn("window.setSheet", line,
                          "boot runs before the window alias exists")
+
+
+class AssertionsCannotPassOnProse(unittest.TestCase):
+    """A check that matched only a comment has not passed.
+
+    Carried over from poindexter's "a check that scanned nothing has not
+    passed" (`scripts/ci/lib_scan_floor.py`), earned there when an audit
+    copied every lint into an empty tree and ten of twelve printed "clean"
+    and exited 0. The mechanism differs; the failure is identical.
+
+    Every assertion about index.html is a string search over a file that
+    also carries the comments explaining the bug the assertion guards.
+    Search for "touch-action" to prove touch-action is gone and you find
+    the paragraph saying it must be gone -- green test, broken app. That
+    has now happened four times here: "gzip", "write", "osm", and
+    "touch-action", the last of them in the commit that added this class.
+
+    So: an assertion whose needle also occurs in the commentary must run
+    against `strip_comments(...)`, which removes the place it could hide.
+    """
+
+    def test_no_page_assertion_is_satisfiable_by_commentary(self):
+        import ast
+        import pathlib
+        here = pathlib.Path(__file__)
+        page = (here.parent / "tiderace" / "web" / "index.html").read_text()
+        prose = comments_only(page)
+        self.assertTrue(prose.strip(), "found no comments; the check would be vacuous")
+
+        tree = ast.parse(here.read_text())
+        offenders, checked = [], 0
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("assertIn", "assertNotIn")
+                    and len(node.args) >= 2):
+                continue
+            # only raw-page assertions; a stripped page is already safe
+            hay = node.args[1]
+            if not (isinstance(hay, ast.Attribute) and hay.attr == "page"):
+                continue
+            needle = node.args[0]
+            if not (isinstance(needle, ast.Constant)
+                    and isinstance(needle.value, str)):
+                continue
+            checked += 1
+            if needle.value in prose:
+                offenders.append("tests.py:%d %r" % (node.lineno, needle.value[:60]))
+
+        # The floor. If the walk stopped matching -- a rename, a refactor --
+        # this passes while checking nothing, which is the very fault it exists
+        # to catch.
+        self.assertGreater(checked, 8,
+                           "examined %d page assertions; the walk has stopped "
+                           "finding them" % checked)
+        self.assertEqual(offenders, [],
+                         "these can be satisfied by comment text alone; run them "
+                         "against strip_comments(): " + "; ".join(offenders))
 
 
 if __name__ == "__main__":
