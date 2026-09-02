@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import bait as baitmod
-from . import birds, charts, config as cfgmod, features, point, regs, score, spots
+from . import birds, charts, config as cfgmod, features, heat, point, regs, score, spots
 from . import log as catchlog
 from .sources import SourceError
 
@@ -296,6 +296,27 @@ class Handler(BaseHTTPRequestHandler):
                 hours = min(int(q.get("hours", ["48"])[0]), 96)
                 start = datetime.now().replace(minute=0, second=0, microsecond=0)
                 return self._send_json(build_grid(species, start, hours))
+            if url.path == "/api/heat":
+                species = q.get("species", ["striped_bass"])[0]
+                if species not in score.PROFILES:
+                    return self._send_json({"error": f"unknown species {species}"}, 400)
+                try:
+                    bbox = [float(v) for v in q.get("bbox", [""])[0].split(",")]
+                except ValueError:
+                    bbox = []
+                if len(bbox) != 4:
+                    return self._send_json(
+                        {"error": "bbox=south,west,north,east required"}, 400)
+                try:
+                    n = int(q.get("n", [str(heat.DEFAULT_N)])[0])
+                except ValueError:
+                    n = heat.DEFAULT_N
+                try:
+                    surf = heat.surface(species, bbox, n=n)
+                except (SourceError, ValueError) as exc:
+                    return self._send_json({"error": str(exc)}, 502)
+                surf["spread"] = heat.spread(surf)
+                return self._send_json(surf)
             if url.path == "/api/at":
                 try:
                     lat = float(q.get("lat", [""])[0])

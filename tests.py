@@ -4088,6 +4088,75 @@ class SheetStructure(unittest.TestCase):
                          "boot runs before the window alias exists")
 
 
+class PotentialSurface(unittest.TestCase):
+    """Scoring a lattice, and refusing to claim more than it knows."""
+
+    def test_elevation_becomes_depth_in_the_right_units_and_sign(self):
+        """bathy returns seafloor ELEVATION in metres, negative down. Reading
+        it as depth in feet put the bottom of Narragansett Bay at 2125 ft --
+        absurd enough to catch, which a subtler mix-up would not have been."""
+        from tiderace import heat
+        self.assertAlmostEqual(heat._depth_ft(-20.0), 65.6, places=1)
+        self.assertAlmostEqual(heat._depth_ft(-30.0), 98.4, places=1)
+        # Land and the waterline are not shallow water; a 0 would paint them
+        # as the shallowest, most attractive cells on the map.
+        self.assertIsNone(heat._depth_ft(0.0))
+        self.assertIsNone(heat._depth_ft(12.5))
+        self.assertIsNone(heat._depth_ft(None))
+        self.assertIsNone(heat._depth_ft("shoal"))
+
+    def test_bathy_is_called_with_its_own_bbox_order(self):
+        """This module carries (south, west, north, east); bathy takes
+        (west, south, east, north). Crossing them samples the wrong ocean."""
+        import inspect
+        from tiderace import heat
+        src = inspect.getsource(heat.surface)
+        call = src.split("bathy.sample_grid(")[1].split(")")[0]
+        self.assertIn("west, south, east, north", call.replace("(", ""))
+
+    def test_depth_is_reported_but_never_scored(self):
+        """No species profile carries a depth preference and none may be
+        guessed in. That needs published numbers per species, the way the
+        temperature bands were done."""
+        from tiderace import score
+        for key, prof in score.PROFILES.items():
+            self.assertNotIn("depth", prof.weights,
+                             "%s gained a depth weight without literature" % key)
+            self.assertFalse(hasattr(prof, "depth"),
+                             "%s gained a depth band without literature" % key)
+        import inspect
+        self.assertNotIn("depth", inspect.getsource(score.score))
+
+    def test_the_limiting_factor_is_the_one_costing_most_points(self):
+        """A number invites "the app says 41 here". The factor behind it
+        invites "the tide is wrong, come back on the ebb"."""
+        from tiderace import heat
+        weights = {"current": 0.28, "light": 0.22, "temp": 0.15}
+        # current is only slightly down but carries the most weight
+        self.assertEqual(
+            heat._limiting({"current": 0.5, "light": 0.9, "temp": 0.95}, weights),
+            "current")
+        # a term at full value costs nothing, however heavy
+        self.assertEqual(
+            heat._limiting({"current": 1.0, "light": 0.2, "temp": 1.0}, weights),
+            "light")
+        self.assertIsNone(heat._limiting({"current": 1.0}, weights))
+
+    def test_the_surface_admits_its_own_resolution(self):
+        """The current at a cell IS the nearest station's prediction, so cells
+        sharing a station are identical by construction. A smooth raster would
+        be drawing the interpolation rather than the ocean."""
+        import inspect
+        from tiderace import heat
+        src = inspect.getsource(heat)
+        self.assertIn("resolution_note", src)
+        self.assertIn("depth_scored", src)
+        # every cell carries its confidence, so a station miles away cannot be
+        # painted as though you were sitting on it
+        cell = inspect.getsource(heat.surface).split("cells.append(")[1]
+        self.assertIn("confidence", cell)
+
+
 class ZoomedChromeStaysOnTheGlass(unittest.TestCase):
     """A viewport unit on a zoomed element is not the size you asked for.
 

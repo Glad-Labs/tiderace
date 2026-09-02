@@ -1187,6 +1187,92 @@ function ABOVE_BASEMAP(){
   return ids[0];
 }
 
+/* ---- potential surface -------------------------------------------------
+   The obvious build is a smooth gradient. It would be a lie, and the numbers
+   say why: sample the bay and 168 cells resolve to 32 current stations,
+   because there are only 38 in-bay CO-OPS current stations in existence. The
+   current at a cell IS the nearest station's prediction -- nothing measures
+   the water between them -- so the true resolution is the station Voronoi and
+   a smooth raster would be drawing the interpolation, not the ocean.
+
+   So it renders as discrete cells with visible edges, and confidence drives
+   opacity: a third of the bay is bound to a station miles away and washes out
+   to nearly nothing. The patchiness is the honest picture, not a rough draft
+   of a prettier one. */
+let HEAT_ON = false, HEAT_BUSY = false;
+const HEAT_ALPHA = {good: 0.55, fair: 0.30, poor: 0.12};
+
+function heatSection(){
+  return `<h4 style="margin-top:10px">Potential</h4>
+    <label title="Score the water on the current tide">
+      <span class="sw ramp" style="background:linear-gradient(90deg,#2b6cb0,#38a169,#d69e2e,#e53e3e)"></span>
+      <input type="checkbox" id="heaton" ${HEAT_ON?'checked':''}>
+      potential<span class="cnt" id="cnt-heat"></span></label>
+    <p class="hint" id="heathint">Current + temperature on this tide.
+      Washed-out cells are bound to a distant station — the score is an
+      extrapolation there. Depth is shown, not scored.</p>`;
+}
+
+async function loadHeat(){
+  if (!MAP_READY || HEAT_BUSY) return;
+  HEAT_BUSY = true;
+  const cnt = document.querySelector('#cnt-heat');
+  if (cnt) cnt.textContent = '…';
+  try{
+    const b = map.getBounds();
+    const bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()]
+      .map(v => v.toFixed(4)).join(',');
+    const sp = ($('#species') && $('#species').value) || 'striped_bass';
+    const r = await fetch(`/api/heat?species=${encodeURIComponent(sp)}&bbox=${bbox}&n=16`);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+
+    // Squares sized to the lattice step, so cells meet without overlapping.
+    const cells = d.cells || [];
+    const dy = (d.bbox[2] - d.bbox[0]) / (d.n - 1) / 2;
+    const dx = (d.bbox[3] - d.bbox[1]) / (d.n - 1) / 2;
+    const gj = {type:'FeatureCollection', features: cells.map(c => ({
+      type:'Feature',
+      properties:{score:c.score, alpha:HEAT_ALPHA[c.confidence] ?? 0.12,
+                  conf:c.confidence, limiting:c.limiting, depth:c.depth_ft},
+      geometry:{type:'Polygon', coordinates:[[
+        [c.lon-dx, c.lat-dy], [c.lon+dx, c.lat-dy],
+        [c.lon+dx, c.lat+dy], [c.lon-dx, c.lat+dy], [c.lon-dx, c.lat-dy]]]}
+    }))};
+
+    if (map.getSource('heat')) map.getSource('heat').setData(gj);
+    else {
+      map.addSource('heat', {type:'geojson', data:gj});
+      map.addLayer({
+        id:'heat', type:'fill', source:'heat',
+        layout:{visibility: HEAT_ON ? 'visible' : 'none'},
+        paint:{
+          'fill-color':['interpolate',['linear'],['get','score'],
+            20,'#2b6cb0', 40,'#38a169', 55,'#d69e2e', 70,'#e53e3e'],
+          'fill-opacity':['get','alpha']
+        }
+      });   // spot marks are DOM markers, so they already sit above the canvas;
+            // passing a beforeId that does not exist throws and loses the layer
+      map.on('click','heat', e => {
+        const p = e.features[0].properties;
+        const bits = [`${p.score} potential`,
+          p.limiting ? `held back by ${p.limiting}` : null,
+          p.depth ? `${Math.round(p.depth)} ft` : null,
+          `${p.conf} confidence`].filter(Boolean);
+        const msg = bits.join(' · ');
+        if (typeof showConditions === 'function') showConditions(e.lngLat.lat, e.lngLat.lng, msg);
+        else console.log(msg);
+      });
+    }
+    const sd = d.spread || {};
+    if (cnt) cnt.textContent = `${sd.cells || 0}/${(d.counts||{}).bindings || 0}`;
+    const hint = document.querySelector('#heathint');
+    if (hint && d.resolution_note) hint.textContent = d.resolution_note;
+  } catch(e){
+    if (cnt) cnt.textContent = '!';
+  } finally { HEAT_BUSY = false; }
+}
+
 async function loadCharts(){
   let meta;
   try{ meta = await (await fetch('/api/charts')).json(); }
@@ -1205,7 +1291,7 @@ async function loadCharts(){
             style="background:${st.swatch||'#8CA3A8'}"></span>
       <input type="checkbox" data-layer="${l.name}" ${CHART_ON[l.name]?'checked':''}>
       ${l.name}<span class="cnt" id="cnt-${l.name}"></span></label>`;
-  }).join('') + depthLegend()
+  }).join('') + depthLegend() + heatSection()
     + `<p class="hint">NOAA ENC · public domain<br>click any feature for detail</p>`;
 
   for (const l of meta.layers){
@@ -1315,6 +1401,14 @@ async function loadCharts(){
     map.on('mouseenter', 'c-' + l.name, () => map.getCanvas().style.cursor = 'pointer');
     map.on('mouseleave', 'c-' + l.name, () => map.getCanvas().style.cursor = '');
   }
+
+  const hb = box.querySelector('#heaton');
+  if (hb) hb.onchange = async () => {
+    HEAT_ON = hb.checked;
+    if (HEAT_ON && !map.getSource('heat')) await loadHeat();
+    if (map.getLayer('heat'))
+      map.setLayoutProperty('heat','visibility', HEAT_ON ? 'visible':'none');
+  };
 
   box.querySelectorAll('input[data-layer]').forEach(cb => cb.onchange = () => {
       const name = cb.dataset.layer;
