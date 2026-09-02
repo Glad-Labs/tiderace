@@ -494,6 +494,30 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   display:flex; align-items:center; justify-content:center; gap:10px;
 }
 #slogmic:active{transform:scale(.99)}
+/* Same shape as the mic, because it does the same job by another route: it
+   fills the form and never saves. The endpoint has existed since photolog
+   landed and nothing in the UI ever called it, so a fish photo could only be
+   read by running the CLI at the dock. */
+#slogcam{
+  display:block; text-align:center; cursor:pointer;
+  padding:13px 14px; margin-top:8px; border-radius:10px;
+  border:1px solid var(--hair); background:var(--panel-2, rgba(255,255,255,.04));
+  color:var(--ink); font:600 14px/1 var(--display);
+}
+#slogcam:active{transform:scale(.99)}
+#slogcam.busy{opacity:.55}
+/* The scorecard. Deliberately plain and deliberately first: it is the only
+   thing in the app allowed to say the rest of it does not work yet. */
+.ev{padding:14px 16px; border-bottom:1px solid var(--hair)}
+.ev .evhead{font:600 15px/1.2 var(--display); color:var(--ink)}
+.ev .evbar{height:6px; border-radius:3px; background:var(--hair); margin:8px 0 10px}
+.ev .evbar i{display:block; height:100%; border-radius:3px; background:var(--accent)}
+.ev.notyet .evbar i{background:var(--muted)}
+.ev .evverdict{font:12px/1.5 var(--mono); color:var(--muted)}
+.ev .evrow{display:flex; gap:10px; padding:6px 0 0; font:12px/1.3 var(--mono)}
+.ev .evrow span{color:var(--ink-2)}
+.ev .evrow b{margin-left:auto; font-variant-numeric:tabular-nums; color:var(--ink)}
+.ev .evrow.dim span, .ev .evrow.dim b{color:var(--muted)}
 #slogmic.live{
   background:var(--accent); color:#fff; border-color:transparent;
   animation:pulse 1.4s ease-in-out infinite;
@@ -1954,16 +1978,44 @@ async function showTrips(){
   body.innerHTML = '<div class="sdim">reading trips…</div>';
   window.setSheet('full');
 
+  // How the model is doing, above the trips it is judged on. This lived only
+  // in the CLI, so the one number that can say the other sixteen data sources
+  // are worthless was the one number never looked at.
+  let scorecard = '';
+  try{
+    const ev = await (await fetch('/api/evaluate')).json();
+    if (!ev.error){
+      const pct = v => v == null ? 'n/a' : (v >= 0 ? '+' : '') + v.toFixed(2);
+      const rows = ev.ready ? `
+        <div class="evrow"><span>tiderace</span><b>${pct(ev.model_rho)}</b></div>
+        <div class="evrow"><span>moving water + low light</span><b>${pct(ev.baseline_rho)}</b></div>
+        <div class="evrow"><span>solunar</span><b>${pct(ev.solunar_rho)}</b></div>
+        <div class="evrow"><span>random</span><b>${pct(ev.random_rho)}</b></div>` : '';
+      // The share of trips the app picked. A model validated on water it chose
+      // is grading its own homework, and this is the number that shows it.
+      const chosen = ev.app_chosen_share
+        ? `<div class="evrow dim"><span>trips the app chose</span>` +
+          `<b>${Math.round(ev.app_chosen_share * 100)}%</b></div>` : '';
+      scorecard =
+        `<div class="ev ${ev.ready ? '' : 'notyet'}">` +
+          `<div class="evhead">${ev.usable} of ${ev.min_trips} trips</div>` +
+          `<div class="evbar"><i style="width:${Math.min(100, Math.round(ev.usable / ev.min_trips * 100))}%"></i></div>` +
+          `<div class="evverdict">${tesc(ev.verdict || '')}</div>` +
+          rows + chosen +
+        `</div>`;
+    }
+  } catch(_){ /* offline: the trips below still work */ }
+
   const ts = await loadTrips();
   if (!ts.length){
-    body.innerHTML = '<div class="sdim">No trips recorded yet. Hit REC at the ' +
+    body.innerHTML = scorecard + '<div class="sdim">No trips recorded yet. Hit REC at the ' +
       'ramp and stop at the dock — a trip is kept whether or not you log a fish, ' +
       'and the blanks are the half everyone throws away.</div>';
     return;
   }
   const fish = ts.reduce((n,t) => n + (t.fish||0), 0);
   const blanks = ts.filter(t => !t.fish).length;
-  body.innerHTML =
+  body.innerHTML = scorecard +
     `<div class="sgroup">${ts.length} trip${ts.length===1?'':'s'} · ` +
     `${fish} fish · ${blanks} blank${blanks===1?'':'s'}</div>` +
     ts.map(tripRow).join('') +
@@ -2674,6 +2726,9 @@ window.surveyURL = (lat, lon) =>
         </button>
         <form id="slogform" novalidate>
           <button id="slogmic" type="button">🎙 Say the trip</button>
+          <label id="slogcam">📷 Photo of the fish
+            <input type="file" accept="image/*" capture="environment" multiple hidden>
+          </label>
           <div id="slogheard"></div>
           <select id="slogsp" name="species"></select>
           <div id="slogwarn"></div>
@@ -2705,6 +2760,137 @@ window.surveyURL = (lat, lon) =>
      "four fish" would otherwise write a fish that never existed into the one
      irreplaceable file in this project, and a wrong row is worse than a
      missing one -- months later it is indistinguishable from a real trip. */
+  /* Photographs, not audio. Kept out of wireMic so the privacy test
+     there still slices only the speech path: it bans `blob` among
+     other audio-capture tokens, and a canvas toBlob for an image
+     tripped it while proving nothing about the microphone. */
+  function wirePhoto(form){
+    if (!form) return;
+    /* A phone photo is 3-12 MB and base64 adds a third on top, which on LTE
+       from a boat is a request that does not finish. Downscaled to 1280 px on
+       the long edge: still plenty for the vision model to name a fish, about a
+       fortieth of the bytes.
+
+       But a canvas re-encode throws EXIF away, and EXIF is the entire reason
+       photolog can say where and when. The first cut did exactly that and the
+       server answered "no EXIF block" and skipped every frame -- a photo
+       feature that silently discarded every photo. So the original's APP1
+       segment is spliced back into the shrunk JPEG: small upload, real
+       coordinate. */
+    function findApp1(bytes){
+      if (bytes[0] !== 0xFF || bytes[1] !== 0xD8) return null;   // not a JPEG
+      let i = 2;
+      while (i + 4 < bytes.length){
+        if (bytes[i] !== 0xFF) break;
+        const marker = bytes[i + 1];
+        const len = (bytes[i + 2] << 8) | bytes[i + 3];
+        if (marker === 0xE1 &&
+            String.fromCharCode(...bytes.slice(i + 4, i + 8)) === 'Exif'){
+          return bytes.slice(i, i + 2 + len);
+        }
+        if (marker === 0xDA) break;            // start of scan: no more headers
+        i += 2 + len;
+      }
+      return null;
+    }
+
+    async function shrink(file, max = 1280, quality = 0.85){
+      const raw = new Uint8Array(await file.arrayBuffer());
+      const app1 = findApp1(raw);
+
+      const img = await new Promise((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = rej;
+        i.src = URL.createObjectURL(file);
+      });
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * scale);
+      c.height = Math.round(img.height * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(img.src);
+
+      const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', quality));
+      let out = new Uint8Array(await blob.arrayBuffer());
+      if (app1){
+        // SOI, then the original EXIF, then the rest of the re-encoded frame.
+        const merged = new Uint8Array(out.length + app1.length);
+        merged.set(out.slice(0, 2), 0);
+        merged.set(app1, 2);
+        merged.set(out.slice(2), 2 + app1.length);
+        out = merged;
+      }
+      let bin = '';
+      for (let i = 0; i < out.length; i += 0x8000)
+        bin += String.fromCharCode.apply(null, out.subarray(i, i + 0x8000));
+      return {b64: btoa(bin), hadExif: !!app1};
+    }
+
+    const cam = document.getElementById('slogcam');
+    const camIn = cam && cam.querySelector('input[type=file]');
+    if (camIn) camIn.onchange = async () => {
+      const files = Array.from(camIn.files || []).slice(0, 12);
+      if (!files.length) return;
+      const heard = document.getElementById('slogheard');
+      cam.classList.add('busy');
+      cam.firstChild.nodeValue = `📷 reading ${files.length} photo…`;
+      try{
+        const photos = [];
+        let missing = 0;
+        for (const f of files){
+          const r = await shrink(f);
+          photos.push(r.b64);
+          if (!r.hadExif) missing++;
+        }
+        const r = await fetch('/api/log/photo', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({photos})
+        });
+        const p = await r.json();
+        if (p.error) throw new Error(p.error);
+        const trip = (p.trips || [])[0];
+        if (!trip) throw new Error(
+          missing === files.length
+            ? 'those photos carry no EXIF, so there is no time or place in them'
+            : 'nothing recognisable in those');
+
+        // Species and place only. `count` is deliberately left alone: a
+        // photograph cannot honestly say how many fish were caught, and
+        // photolog refuses to guess it. You fill that in.
+        const spSel = document.getElementById('slogsp');
+        const sp = ((trip.catch || [])[0] || {}).species;
+        if (sp && spSel){ spSel.value = sp; spSel.dispatchEvent(new Event('change')); }
+        if (trip.lat != null && trip.lon != null && typeof showConditions === 'function')
+          window.PHOTO_AT = [trip.lat, trip.lon];
+        if (trip.started_at){
+          const el = form.querySelector('[name=started_at]');
+          if (el) el.value = trip.started_at.slice(0, 16);
+        }
+        heard.className = 'show';
+        heard.innerHTML = '<b>saw:</b> ' +
+          (sp ? esc(sp.replace(/_/g,' ')) : 'no fish it could name') +
+          (trip.lat != null
+            ? ` · ${trip.lat.toFixed(4)}, ${trip.lon.toFixed(4)} from EXIF` : '') +
+          (trip.started_at ? ` · ${esc(trip.started_at.replace('T',' '))}` : '') +
+          '<br><span class="sdim">Count is yours to fill in — a photo cannot ' +
+          'say how many.' +
+          (missing ? ` ${missing} of ${files.length} had no EXIF and were skipped.`
+                   : '') + '</span>';
+      } catch(e){
+        const heard = document.getElementById('slogheard');
+        heard.className = 'show';
+        heard.innerHTML = 'Could not read those: ' + esc(e.message) +
+          '<br>Type it in instead.';
+      } finally {
+        cam.classList.remove('busy');
+        cam.firstChild.nodeValue = '📷 Photo of the fish';
+        camIn.value = '';
+      }
+    };
+
+  }
+
   function wireMic(d){
     const btn = document.getElementById('slogmic');
     const form = document.getElementById('slogform');
@@ -3071,6 +3257,7 @@ window.surveyURL = (lat, lon) =>
       `<div class="sgroup">logging at ${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}</div>`
       + logSection(d).replace('<div id="slog">', '<div id="slog" style="border-top:0">');
     wireLog(d); wireMic(d); wireSpeciesPicker();
+    wirePhoto(document.getElementById('slogform'));
     const f = document.getElementById('slogform');
     if (f) f.classList.add('open');            // no second tap to open it
     const t = document.getElementById('slogtoggle');

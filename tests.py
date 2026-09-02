@@ -2733,13 +2733,21 @@ class DoubleTap(unittest.TestCase):
 
 
 
+# `accept="image/*"` opens a comment as far as a naive /\*.*?\*/ is concerned,
+# and the match then runs to the next */ anywhere in the file. That swallowed
+# 1,200 characters of real markup -- the log form's select, its warning, its
+# count input -- so strip_comments DELETED them and any assertion about them
+# passed on absence. The guard against vacuous passes had one of its own.
+BLOCK_COMMENT = r"(?<![\w/])/\*.*?\*/"
+
+
 def comments_only(page):
     """Just the commentary, with the code taken out.
 
     The inverse of strip_comments, and the thing an assertion must NOT be
     satisfiable by on its own.
     """
-    out = re.findall(r"/\*.*?\*/", page, re.S)
+    out = re.findall(BLOCK_COMMENT, page, re.S)
     out += re.findall(r"(?m)^\s*//.*$", page)
     out += re.findall(r"<!--.*?-->", page, re.S)
     return "\n".join(out)
@@ -2752,7 +2760,7 @@ def strip_comments(page):
     for inside a comment explaining the bug, and passed while the code was
     still wrong.
     """
-    js = re.sub(r"/\*.*?\*/", " ", page, flags=re.S)
+    js = re.sub(BLOCK_COMMENT, " ", page, flags=re.S)
     return re.sub(r"(?m)^\s*//.*$", " ", js)
 
 
@@ -4110,6 +4118,85 @@ class SheetStructure(unittest.TestCase):
         line = js[boot:js.index("\n", js.index("setSheet", boot))]
         self.assertNotIn("window.setSheet", line,
                          "boot runs before the window alias exists")
+
+
+class EverythingOnTheWaterIsReachable(unittest.TestCase):
+    """Two capabilities existed in full and had no way in from the phone.
+
+    /api/log/photo has been implemented since photolog landed and nothing in
+    the UI ever called it, so a fish photo could only be read by running the
+    CLI at the dock. `evaluate` -- the one thing that can say the other sixteen
+    data sources are worthless -- had no endpoint at all.
+    """
+
+    def setUp(self):
+        import pathlib
+        self.page = (pathlib.Path(__file__).parent
+                     / "tiderace" / "web" / "index.html").read_text()
+        self.server = (pathlib.Path(__file__).parent
+                       / "tiderace" / "server.py").read_text()
+
+    def test_the_photo_endpoint_has_a_caller(self):
+        self.assertIn("/api/log/photo", strip_comments(self.page),
+                      "the endpoint exists and nothing reaches it")
+        self.assertIn('id="slogcam"', self.page)
+        self.assertIn('capture="environment"', self.page,
+                      "should open the camera, not just the gallery")
+
+    def test_shrinking_a_photo_keeps_its_exif(self):
+        """A canvas re-encode throws EXIF away, and EXIF is the entire reason
+        photolog can say where and when. The first cut did exactly that: the
+        server answered "no EXIF block" and skipped every frame, so the photo
+        feature silently discarded every photo. The original's APP1 segment is
+        spliced back into the shrunk JPEG."""
+        js = strip_comments(self.page)
+        self.assertIn("findApp1", js)
+        self.assertIn("0xE1", js, "must locate the APP1 marker")
+        self.assertIn("'Exif'", js, "must confirm the segment is EXIF")
+        fn = js.split("async function shrink(")[1].split("\n    }")[0]
+        # Not merely that app1 is read -- that survives `if (false)`. The
+        # splice itself has to be reachable.
+        self.assertIn("merged.set(app1", fn, "the EXIF must be spliced back in")
+        self.assertIn("if (app1)", fn, "the splice must be guarded on finding one")
+        self.assertNotIn("if (false)", fn)
+        self.assertIn("hadExif", fn, "callers need to know when EXIF was absent")
+
+    def test_the_photo_handler_is_actually_invoked(self):
+        """wirePhoto defined and never called is the same as not having it,
+        and is exactly how /api/log/photo sat unreachable for so long."""
+        js = strip_comments(self.page)
+        calls = [m for m in re.findall(r"wirePhoto\s*\(", js)]
+        self.assertGreaterEqual(len(calls), 2,
+                                "wirePhoto is defined but never called")
+        self.assertIn("wirePhoto(document.getElementById('slogform'))", js)
+
+    def test_a_photo_never_fills_in_the_count(self):
+        """photolog refuses to guess it and so must the form: a camera roll
+        cannot honestly say how many fish were caught."""
+        js = strip_comments(self.page)
+        handler = js.split("camIn.onchange")[1].split("const btn =")[0]
+        self.assertNotIn("[name=count]", handler)
+        self.assertNotIn("set('count'", handler)
+
+    def test_evaluate_is_reachable_without_a_terminal(self):
+        self.assertIn('url.path == "/api/evaluate"', self.server)
+        self.assertIn("/api/evaluate", strip_comments(self.page),
+                      "the endpoint must have a caller in the UI")
+
+    def test_the_scorecard_shows_on_both_trip_states(self):
+        """It is most worth reading when there are no trips yet, which is
+        exactly the branch an early-return would skip."""
+        js = strip_comments(self.page)
+        fn = js.split("async function showTrips()")[1].split("\nasync function ")[0]
+        self.assertGreaterEqual(fn.count("body.innerHTML = scorecard"), 1)
+        self.assertGreaterEqual(
+            len(re.findall(r"body\.innerHTML = scorecard", fn)), 2,
+            "the empty-log branch and the populated branch both need it")
+
+    def test_the_scorecard_reports_how_many_trips_the_app_chose(self):
+        """A model validated on water it recommended is grading its own
+        homework. app_chosen_share is the number that shows it."""
+        self.assertIn("app_chosen_share", strip_comments(self.page))
 
 
 class LegalStatusReachesThePhone(unittest.TestCase):

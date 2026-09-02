@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import bait as baitmod
 from . import birds, charts, config as cfgmod, features, heat, point, regs, score, spots
-from . import prospect, structure
+from . import evaluate, prospect, structure
 from . import log as catchlog
 from .sources import SourceError
 
@@ -322,6 +322,16 @@ class Handler(BaseHTTPRequestHandler):
             # the wind-farm marks below, and inserting this above it shadowed
             # the route so the turbines 400'd and vanished from the map. Same
             # fault as /charts/cell/ sitting under startswith("/charts/").
+            if url.path == "/api/evaluate":
+                # The only endpoint that can tell you the rest of them are
+                # worthless. It lived in the CLI, which means it was never
+                # looked at from the boat -- or, in practice, at all.
+                try:
+                    res = evaluate.evaluate()
+                except (OSError, ValueError) as exc:
+                    return self._send_json({"error": str(exc)}, 500)
+                res["report"] = evaluate.report(res)
+                return self._send_json(res)
             if url.path == "/api/bumps":
                 try:
                     bbox = [float(v) for v in q.get("bbox", [""])[0].split(",")]
