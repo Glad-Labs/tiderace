@@ -39,6 +39,7 @@ reported, not scored, and `depth_scored` says so on every response.
 from __future__ import annotations
 
 import math
+import os
 from datetime import datetime
 
 from . import bathy, cache, features, score, spots, stations
@@ -51,10 +52,17 @@ MAX_N = 40
 DEFAULT_N = 20
 
 
+# Under data/cache/, which is gitignored. A bare filename here writes the
+# surface into whatever directory the process happens to be in -- for the
+# server that is the repo root, which is how 142 cache files were once swept
+# into a commit by `git add -A`.
+HEAT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "cache", "heat")
+
+
 def _key(species: str, bbox, n: int, when: datetime) -> str:
     s, w, nn, e = (round(float(v), 3) for v in bbox)
-    return "heat-%s-%s-%s-%s-%s-%d-%s" % (
-        species, s, w, nn, e, n, when.strftime("%Y%m%dT%H"))
+    return os.path.join(HEAT_DIR, "heat-%s-%s-%s-%s-%s-%d-%s.json" % (
+        species, s, w, nn, e, n, when.strftime("%Y%m%dT%H")))
 
 
 def _limiting(terms: dict, weights: dict) -> str | None:

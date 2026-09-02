@@ -4127,6 +4127,19 @@ class PotentialSurface(unittest.TestCase):
         import inspect
         self.assertNotIn("depth", inspect.getsource(score.score))
 
+    def test_the_cache_does_not_write_into_the_working_directory(self):
+        """A bare filename writes wherever the process happens to be, which
+        for the server is the repo root. That is how 142 cache files were
+        once swept into a commit by `git add -A`."""
+        import os
+        from tiderace import heat
+        key = heat._key("striped_bass", (41.4, -71.4, 41.6, -71.2), 8,
+                        __import__("datetime").datetime(2026, 9, 2, 15))
+        self.assertTrue(os.path.isabs(key) or os.sep in key,
+                        "cache key %r is a bare filename" % key)
+        self.assertIn("cache", key.replace(os.sep, "/"),
+                      "heat surfaces must cache under the gitignored data/cache")
+
     def test_the_limiting_factor_is_the_one_costing_most_points(self):
         """A number invites "the app says 41 here". The factor behind it
         invites "the tide is wrong, come back on the ebb"."""
