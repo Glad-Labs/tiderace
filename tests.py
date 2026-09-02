@@ -4088,6 +4088,85 @@ class SheetStructure(unittest.TestCase):
                          "boot runs before the window alias exists")
 
 
+class StructureScan(unittest.TestCase):
+    """Finding bumps, and refusing to when the grid cannot see one."""
+
+    def _grid(self, n, flat=-20.0, bump=None):
+        g = [[flat] * n for _ in range(n)]
+        if bump:
+            i, j, h = bump
+            g[i][j] = flat + h          # elevation is negative down: up = less negative
+        return g
+
+    def test_a_bump_is_found_and_measured(self):
+        from tiderace import structure as S
+        n = 41
+        g = self._grid(n, -20.0, (20, 20, 6.0))        # 6 m proud of a flat bottom
+        out = S.scan((41.40, -71.44, 41.42, -71.42), n=n, grid=g,
+                     min_relief_ft=3.0, min_depth_ft=10.0)
+        self.assertTrue(out, "a 6 m bump on flat bottom was not found")
+        top = out[0]
+        self.assertAlmostEqual(top["relief_ft"], 6.0 * 3.28084, places=1)
+        self.assertAlmostEqual(top["depth_ft"], 14.0 * 3.28084, places=1)
+        self.assertTrue(top["model"], "modelled bathymetry must say so")
+
+    def test_flat_bottom_yields_nothing(self):
+        from tiderace import structure as S
+        n = 41
+        out = S.scan((41.40, -71.44, 41.42, -71.42), n=n, grid=self._grid(n),
+                     min_relief_ft=3.0)
+        self.assertEqual(out, [])
+
+    def test_the_edge_of_the_box_is_not_a_bump(self):
+        """A cell within one ring of the edge has a one-sided ring, and a ring
+        missing its deep half reports relief that is an artefact of where the
+        box was drawn. The first run put four finds on the western boundary."""
+        from tiderace import structure as S
+        n = 41
+        g = self._grid(n, -20.0, (0, 0, 6.0))          # bump in the corner
+        out = S.scan((41.40, -71.44, 41.42, -71.42), n=n, grid=g,
+                     min_relief_ft=3.0, min_depth_ft=1.0)
+        self.assertEqual(out, [], "an edge cell was reported as structure")
+
+    def test_the_shoreline_is_not_structure(self):
+        """You cannot drift a bump that is a foot under the surface. Without a
+        floor the first run came back with tops at 0.5, 0.9 and 1.2 ft, which
+        are drying rocks."""
+        from tiderace import structure as S
+        n = 41
+        g = self._grid(n, -20.0, (20, 20, 19.9))       # top at 0.1 m
+        out = S.scan((41.40, -71.44, 41.42, -71.42), n=n, grid=g,
+                     min_relief_ft=3.0, min_depth_ft=10.0)
+        self.assertEqual(out, [], "a drying rock was reported as a bump")
+
+    def test_it_refuses_a_box_too_wide_to_hold_an_answer(self):
+        """Zoomed to the bay, samples are 800 m apart and every bump in Rhode
+        Island falls between two of them. An empty list there is blindness,
+        not flat bottom, and must not be returned as though it were data."""
+        from tiderace import structure as S
+        out = S.scan_view((41.30, -71.60, 41.80, -71.10), n=61)
+        self.assertFalse(out["usable"])
+        self.assertEqual(out["bumps"], [])
+        self.assertIn("step over", out["note"])
+        self.assertGreater(out["sample_m"], S.USABLE_SAMPLE_M)
+
+    def test_hazard_distance_does_not_pick_up_the_sample_spacing(self):
+        """Globbing every key ending in "_m" swept up sample_m -- the grid
+        resolution -- and reported the 36 m sample step as the distance to the
+        nearest rock, which made every candidate look like a charted hazard."""
+        from tiderace import structure as S
+        c = [{"lat": 41.44, "lon": -71.42, "sample_m": 36.0, "spacing_m": 150.0}]
+        S.annotate(c)
+        self.assertNotEqual(c[0].get("charted_hazard_m"), 36.0)
+        self.assertNotEqual(c[0].get("charted_hazard_m"), 150.0)
+
+    def test_bathy_is_called_with_its_own_bbox_order(self):
+        import inspect
+        from tiderace import structure as S
+        call = inspect.getsource(S.scan).split("bathy.sample_grid(")[1].split(")")[0]
+        self.assertIn("west, south, east, north", call.replace("(", ""))
+
+
 class PotentialSurface(unittest.TestCase):
     """Scoring a lattice, and refusing to claim more than it knows."""
 

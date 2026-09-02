@@ -206,6 +206,27 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
      finger. The gesture only ever happens on the handle, so the restriction
      lives on the handle. */
 }
+/* A bump marker carries its relief in feet, because the number is the whole
+   reason to go and look. Novel ones -- more than 100 m from any charted rock,
+   wreck or obstruction -- are brighter: a chart exists to keep boats off the
+   shallow spots, so the ones already on it are not discoveries. */
+.bump{
+  min-width:26px; height:26px; padding:0 5px; border-radius:13px;
+  display:grid; place-items:center; cursor:pointer;
+  font:600 11px/1 var(--mono); color:#04121a;
+  background:#7f9aa3; border:2px solid rgba(0,0,0,.45);
+  box-shadow:0 2px 8px rgba(0,0,0,.5);
+}
+.bump.novel{background:#ffd166}
+#toast{
+  position:fixed; left:50%; bottom:calc(96px + env(safe-area-inset-bottom));
+  transform:translateX(-50%) translateY(8px); z-index:60;
+  max-width:min(92vw, 440px); padding:11px 15px; border-radius:10px;
+  background:var(--panel); color:var(--ink); border:1px solid var(--hair);
+  font:13px/1.45 var(--display); box-shadow:0 10px 30px rgba(0,0,0,.55);
+  opacity:0; pointer-events:none; transition:opacity .18s, transform .18s;
+}
+#toast.on{opacity:1; transform:translateX(-50%) translateY(0)}
 #sheet.up{transform:translateY(0)}
 #sheet.peek{transform:translateY(calc(100% - 168px))}
 /* While a finger is down the sheet tracks it directly; the easing is for
@@ -583,6 +604,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
       <label class="chk"><input type="checkbox" id="labels" checked> labels</label>
       <span id="mode" title="Which rules apply"></span>
       <button id="layersbtn" title="Chart overlays">charts ▾</button>
+      <button id="scanbtn" title="Look for bumps in the water you are looking at">scan ⛰</button>
       <button id="offlinebtn" title="Download the forecast for the water">save ↓</button>
       <span id="netstate"></span>
       <div id="layers"></div>
@@ -1185,6 +1207,87 @@ function ABOVE_BASEMAP(){
   // appending is still directly above it.
   if (j !== -1) return ids[j + 1];
   return ids[0];
+}
+
+/* ---- scan for structure ------------------------------------------------
+   The potential surface cannot answer "where is there a bump" -- its
+   resolution is the current-station Voronoi, about 38 patches for the bay,
+   and a hump is a hundred metres across. This reads the bottom instead, off
+   the ~3 m NCEI model, and reports places that stand up out of the water
+   around them.
+
+   It refuses rather than guesses when the view is too wide: at bay zoom the
+   samples are 800 m apart and every bump in Rhode Island falls between two of
+   them, so an empty list would read as "flat bottom" when it means "blind".
+   The server says `usable:false` and the reason gets shown. */
+/* Called from two places and defined in none until now, so every message
+   sent through it -- including "Too short to keep" when a track is discarded
+   -- went nowhere. Both call sites guarded with `typeof toast === 'function'`,
+   which is why it failed silently instead of loudly for so long. */
+let TOAST_T = null;
+function toast(msg){
+  let el = document.getElementById('toast');
+  if (!el){
+    el = document.createElement('div');
+    el.id = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add('on');
+  clearTimeout(TOAST_T);
+  TOAST_T = setTimeout(() => el.classList.remove('on'), 5200);
+}
+window.toast = toast;
+
+let SCAN_MARKERS = [];
+
+function clearScan(){
+  SCAN_MARKERS.forEach(m => m.remove());
+  SCAN_MARKERS = [];
+}
+
+async function scanView(){
+  const btn = document.getElementById('scanbtn');
+  if (!MAP_READY) return;
+  btn.disabled = true; btn.textContent = 'scanning…';
+  clearScan();
+  try{
+    const b = map.getBounds();
+    const bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()]
+      .map(v => v.toFixed(4)).join(',');
+    const d = await (await fetch(`/api/structure?bbox=${bbox}&n=61`)).json();
+    if (d.error) throw new Error(d.error);
+
+    if (!d.usable){
+      btn.textContent = 'zoom in';
+      toast(d.note);
+      return;
+    }
+    (d.bumps || []).forEach((bump, i) => {
+      const el = document.createElement('div');
+      el.className = 'bump' + (bump.novel ? ' novel' : '');
+      el.textContent = Math.round(bump.relief_ft);
+      el.title = `${bump.relief_ft} ft of relief · top ${bump.depth_ft} ft, `
+        + `around ${bump.surround_ft} ft`
+        + (bump.novel ? '' : ` · ${bump.charted_hazard_m} m from a charted hazard`);
+      el.onclick = () => {
+        // The tap that finds it is the tap that means "tell me about here",
+        // which is also where logging a trip starts.
+        if (typeof showConditions === 'function')
+          showConditions(bump.lat, bump.lon,
+                         `Bump · ${bump.relief_ft} ft relief`);
+      };
+      SCAN_MARKERS.push(new maplibregl.Marker({element: el})
+        .setLngLat([bump.lon, bump.lat]).addTo(map));
+    });
+    btn.textContent = (d.bumps || []).length
+      ? `${d.bumps.length} found` : 'nothing here';
+  } catch(e){
+    btn.textContent = 'scan failed';
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = 'scan ⛰'; }, 4000);
+  }
 }
 
 /* ---- potential surface -------------------------------------------------
@@ -1878,6 +1981,7 @@ async function loadBait(){
   map.on('mouseleave','bait',()=>map.getCanvas().style.cursor='');
 }
 
+$('#scanbtn').onclick = () => scanView();
 $('#layersbtn').onclick = e => { e.stopPropagation(); $('#layers').classList.toggle('open'); };
 document.addEventListener('click', e => {
   if (!$('#layers').contains(e.target) && e.target !== $('#layersbtn'))
