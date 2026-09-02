@@ -4853,8 +4853,18 @@ class PotentialSurface(unittest.TestCase):
         sit past the deepest water the bay has -- not as a literal, because
         the point is that it never engages."""
         import json
+        import pathlib
         from tiderace import score
-        with open("data/charts/soundings.geojson") as fh:
+        # Off __file__, not the working directory: this was the only test in
+        # the file opening a cwd-relative path, so it failed whenever the
+        # suite ran from anywhere but the repo root. And soundings.geojson is
+        # a gitignored 4 MB regenerable file, so a clean checkout does not
+        # have one -- absent means unrunnable, not failing.
+        chart = (pathlib.Path(__file__).parent / "data" / "charts"
+                 / "soundings.geojson")
+        if not chart.exists():
+            self.skipTest("soundings not downloaded (python3 -m tiderace charts)")
+        with chart.open() as fh:
             gj = json.load(fh)
         deepest = max(float(f["properties"]["depth_ft"])
                       for f in gj.get("features", [])
