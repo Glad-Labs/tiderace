@@ -20,9 +20,10 @@ running and cannot read a file. If the app is up but everything 404s, check
 `WorkingDirectory` in `~/.config/systemd/user/tiderace*.service` first.
 
 ```bash
-python3 -m tiderace serve          # the app (systemd user unit, port 8765)
-python3 tests.py                   # 400 tests, no runner needed
-python3 -m tiderace evaluate       # does the model beat the free baseline?
+python3 -m tiderace serve             # the app (systemd user unit, port 8765)
+python3 tests.py                      # the suite, no runner needed
+node tools/browser-check/preflight.mjs  # LOOK AT IT — required before commit
+python3 -m tiderace evaluate          # does the model beat the free baseline?
 ```
 
 Subcommands: `forecast spots at stations log photos bait config scrape review
@@ -176,6 +177,56 @@ enabled, so it survives logout.
 Test data landed in Matt's actual `catch_log.jsonl` three times, and a test
 track in `tracks.jsonl` once. Tests use temp paths. The catch log is the
 scarcest thing in the project and the only irreplaceable one.
+
+---
+
+## Look at it before you commit
+
+**Any change that touches the UI runs `node tools/browser-check/preflight.mjs`
+before it is committed, and the run is reported.** Not after Matt finds it. This
+is a standing instruction from him, given on 2 September 2026, and it exists
+because of what that day looked like:
+
+Nine self-inflicted regressions shipped and were found by him, not by me — the
+wind-farm marks knocked off the map by a shadowed route, open/closed invisible
+on the phone for several commits, the desktop layout stretched to a strip, the
+contour numbers erased by a global replace reaching into MapLibre paint, a CSS
+token defined as itself, the stale-build banner crying wolf on every desktop
+load. Every one was obvious on screen and none was subtle in the diff.
+
+**The whole suite was green through all of it.** That is the point, and it is not an
+argument against the suite: a unit test checks what I thought I built, and
+every one of those bugs lived in the gap between that and what the page did.
+Roughly eight of the tests written that day could not fail at all — matching a
+comment instead of code, `"sheetLeft + 4"` inside `"sheetLeft + 400"`, a
+condition surviving `if (false)`.
+
+The preflight covers what actually broke: both viewports, both themes,
+uncaught page errors, the wind-farm route, sheet geometry, CSS vars leaking
+into MapLibre paint, tokens that resolve to nothing, labels drawn on the panel
+or on each other, the legal strip's presence and share of the sheet, the top
+bar clipping, the species picker, false staleness warnings, and WCAG AA
+contrast composited over what is actually behind the text.
+
+It is `tools/`, not `tests.py`: the suite stays stdlib-only, hermetic and about
+a second, and this needs a real browser and about ninety. See that directory's
+README for why the built-in preview pane cannot do it — it blocks the hosts the
+basemap style needs, so the map never loads, `MARKERS` stays empty, and a check
+for "no labels overlap the panel" passes against nothing. That happened twice
+before the harness existed.
+
+Two habits that go with it, both learned the same day:
+
+- **A check that found nothing has not passed.** Every geometry check reports
+  how many candidates it examined, and sets its own precondition. The
+  panel-overlap check drives a marker behind the panel on purpose, because the
+  desktop rail overlaps the map by a ~60 px sliver and a default view finds
+  nothing to fail on. It failed loudly twice while being written, which is the
+  behaviour to preserve.
+- **Measure the thing before changing it.** "Clunky" was 2,590 px in an 812 px
+  viewport. "Labels clipping" was a sheet covering the whole window. "I can't
+  pull it down" was a drag handle 269 px above the top of the screen. In each
+  case the first guess was wrong and the measurement was one command away.
 
 ---
 

@@ -5,8 +5,12 @@ that way. This is separate and optional: it drives a real Chromium so the map
 actually renders, which is the only way to check anything about markers,
 labels or the panel covering them.
 
-    node tools/browser-check/check.mjs            # exits non-zero if a label
-                                                  # is drawn behind the panel
+    node tools/browser-check/preflight.mjs   # REQUIRED before any UI commit
+    node tools/browser-check/check.mjs       # just the panel-overlap check
+
+`preflight` is the one to run. Thirty checks across both viewports and both
+themes, each built from something that shipped broken on 2 September 2026 and
+was found by Matt rather than by the 503 green tests.
 
 Needs playwright. It resolves `playwright` from node_modules if present, and
 otherwise falls back to a sibling checkout — edit `CANDIDATES` in check.mjs if
