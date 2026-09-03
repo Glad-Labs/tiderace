@@ -272,6 +272,19 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 #slegal .ld{padding:0 16px 7px; font:11px/1.45 var(--mono); color:var(--ink-2)}
 #slegal .ld.warn{color:var(--warn)}
 #slegal .ld.dim{color:var(--muted)}
+#slegal .ld.ap{padding-bottom:9px}
+#slegal .apv{font:700 13px/1.3 var(--display); color:var(--ink)}
+#slegal .apm{color:var(--muted)}
+#slegal .rl{color:var(--warn); font-weight:600}
+#slegal .apl{
+  display:inline-block; margin-left:4px; color:var(--depth);
+  text-decoration:none; border-bottom:1px solid currentColor;
+  font:600 11px/1 var(--mono); padding-bottom:1px;
+}
+#slegal .apq{
+  color:var(--muted); font:11px/1.5 var(--mono);
+  margin-top:4px; padding-left:9px; border-left:2px solid var(--hair);
+}
 #sheetgrip .gcue{
   font:10px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase;
   color:var(--muted); pointer-events:none;
@@ -2330,7 +2343,29 @@ function paintLegal(){
   const size = r.slot ? `slot ${q(r.slot)}`
              : r.min_inches ? `min ${r.min_inches}"` : null;
   const diffs = (GRID.regulations_differences || []);
+  /* Rules RIDEM published that this app applied on its own, each with the
+     notice behind it. This is the trade made instead of an approval step:
+     nothing waits for a human, and every number is one tap from the sentence
+     it was read out of. A limit with no link would be a number of unknown
+     origin sitting on top of a cited one. */
+  const app = (r.applied || []).map(a => {
+    const way = a.relaxes === true ? '<b class="rl">more room</b>'
+              : a.relaxes === false ? 'tighter' : '';
+    return `<div class="ld ap">` +
+      `<span class="apv">${q(a.value)}</span> ` +
+      `<span class="apm">${q((a.change_type||'').replace(/_/g,' '))}` +
+      `${a.sub_fishery ? ' · ' + q(a.sub_fishery.replace(/_/g,' ')) : ''}` +
+      `${a.effective_date ? ' · from ' + q(a.effective_date) : ''}` +
+      `${a.reopens_on ? ' · until ' + q(a.reopens_on) : ''} ${way}</span>` +
+      (a.source_url
+        ? ` <a class="apl" href="${q(a.source_url)}" target="_blank"
+             rel="noopener">check notice ↗</a>` : '') +
+      (a.quote ? `<div class="apq">“${q(a.quote.slice(0,190))}”</div>` : '') +
+    `</div>`;
+  }).join('');
+
   const detail =
+    (app ? `<div class="ld dim">applied automatically from RIDEM:</div>` + app : '') +
     (GRID.license_mode === 'commercial' && diffs.length
       ? diffs.map(d => `<div class="ld">· ${q(d)}</div>`).join('') : '') +
     (r.advisory

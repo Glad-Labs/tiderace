@@ -4120,6 +4120,122 @@ class SheetStructure(unittest.TestCase):
                          "boot runs before the window alias exists")
 
 
+class RulesApplyThemselves(unittest.TestCase):
+    """RIDEM published it, the app uses it, and the notice is one tap away.
+
+    The queue held 44 regulation claims and the only path into the rules the
+    app enforced was somebody editing `regs.py` by hand. So it served a black
+    sea bass limit of 300 lb/day for three days after RIDEM raised it to 400.
+    """
+
+    TAUTOG = ("Beginning 12:00AM on Saturday, May 30, 2026, the commercial "
+              "Tautog fishery will close, until the next sub-period begins on "
+              "August 1, 2026 at ten (10) fish per day.")
+
+    def test_the_parser_reads_a_closure_with_its_end(self):
+        from tiderace import ridem
+        n = ridem.parse_notice(self.TAUTOG)
+        self.assertEqual(n["change_type"], "season_close")
+        self.assertEqual(n["effective_date"], "2026-05-30")
+        self.assertEqual(n["reopens_on"], "2026-08-01",
+                         "the reopening is in the same sentence as the closure")
+
+    def test_the_queue_record_keeps_the_reopening(self):
+        """The parser read it correctly and the hand-off to the queue dropped
+        it, so a bounded closure reached the reconciler as open-ended and
+        tautog was reported shut on 2 September when it reopened on 1 August.
+        A closure without its end is a different claim from the one made."""
+        import inspect
+        from tiderace import extract
+        src = strip_py_comments(inspect.getsource(extract.extract_regulations))
+        body = src.split('out["changes"].append(')[1]
+        for field in ("reopens_on", "successor", "superseded_on", "source_url"):
+            self.assertIn(field, body, "queue record drops %s" % field)
+
+    def test_a_closure_whose_end_has_passed_is_not_in_force(self):
+        from datetime import date
+        from tiderace import applied
+        p = self._tmp()
+        applied.apply_state({("tautog",): {
+            "species_key": "tautog", "license_mode": "commercial",
+            "change_type": "season_close", "effective_date": "2026-05-30",
+            "reopens_on": "2026-08-01", "quote": self.TAUTOG,
+            "source_url": "https://dem.ri.gov/x"}}, path=p)
+        during = applied.overlay_for("tautog", "commercial", date(2026, 6, 15), p)
+        after = applied.overlay_for("tautog", "commercial", date(2026, 9, 2), p)
+        self.assertEqual(len(during), 1, "closed in June")
+        self.assertEqual(after, [], "reopened on 1 August; not closed in September")
+
+    def _tmp(self):
+        import os, tempfile
+        fd, p = tempfile.mkstemp(suffix=".json"); os.close(fd); os.unlink(p)
+        self.addCleanup(lambda: os.path.exists(p) and os.unlink(p))
+        return p
+
+    def test_every_applied_rule_carries_the_notice_behind_it(self):
+        """The trade made instead of an approval step. A number with no link
+        is a claim of unknown origin sitting on top of a cited one."""
+        from tiderace import applied
+        p = self._tmp()
+        out = applied.apply_state({("bsb",): {
+            "species_key": "black_sea_bass", "license_mode": "commercial",
+            "change_type": "possession_limit", "effective_date": "2026-08-30",
+            "amount": {"value": 400, "unit": "pounds"}, "period": "per day",
+            "quote": "Beginning 12:00AM on Sunday, August 30, 2026 ...",
+            "source_url": "https://dem.ri.gov/programs/marine-fisheries/fishamnd.php"}},
+            path=p)
+        rec = list(out["rules"].values())[0]
+        self.assertTrue(rec["source_url"], "no source to check the number against")
+        self.assertTrue(rec["quote"], "no sentence to check the number against")
+        self.assertEqual(rec["effective_date"], "2026-08-30")
+
+    def test_a_loosening_is_flagged_rather_than_hidden(self):
+        """A parse error that makes a rule looser is the one that costs money,
+        so the direction is reported and unknown is not filed as harmless."""
+        from tiderace import applied
+        self.assertIs(applied._relaxes("possession_limit",
+                                       {"value": 400}, {"value": 300}), True)
+        self.assertIs(applied._relaxes("possession_limit",
+                                       {"value": 200}, {"value": 300}), False)
+        self.assertIs(applied._relaxes("minimum_size",
+                                       {"value": 14}, {"value": 16}), True)
+        self.assertIs(applied._relaxes("season_close", None, None), False)
+        self.assertIsNone(applied._relaxes("possession_limit", None, None),
+                          "unknown direction must not be filed as harmless")
+
+    def test_the_overlay_is_written_once_for_all_sources(self):
+        """Applying per source overwrote it: ridem_amendments applied six
+        changes and ridem_limits, which had nothing to say, ran second and
+        erased them. Current state is a function of all the notices."""
+        import inspect
+        from tiderace import cli
+        src = strip_py_comments(inspect.getsource(cli._cmd_scrape))
+        self.assertIn("all_changes", src)
+        loop = src.split("for key, url, kind in targets:")[1]
+        self.assertNotIn("apply_state", loop.split("if all_changes:")[0],
+                         "apply_state must run after the loop, not inside it")
+
+    def test_the_hand_written_rules_file_is_never_written_to(self):
+        """`regs.py` stays hand-edited. The overlay layers on top of it; an
+        automated writer into that file would undo the one discipline it has."""
+        import inspect
+        from tiderace import applied
+        src = strip_py_comments(inspect.getsource(applied))
+        self.assertNotIn("regs.py", src.replace("`regs.py`", ""))
+        self.assertIn("regs_applied.json", src)
+
+    def test_the_interface_shows_the_notice_link(self):
+        import pathlib
+        page = (pathlib.Path(__file__).parent / "tiderace" / "web"
+                / "index.html").read_text()
+        js = strip_comments(page)
+        self.assertIn("source_url", js, "the link must reach the page")
+        self.assertIn("check notice", js)
+        fn = js.split("function paintLegal()")[1].split("\nfunction ")[0]
+        self.assertIn("r.applied", fn, "applied rules must be rendered")
+        self.assertIn('target="_blank"', fn)
+
+
 class ScrapeFreshness(unittest.TestCase):
     """A scrape that runs on a timer and fails quietly is worse than one you
     run by hand, because the manual one at least fails in front of you.

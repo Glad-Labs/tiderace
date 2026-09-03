@@ -356,6 +356,12 @@ def _cmd_scrape(args) -> int:
             src = fetch.SOURCES[key]
             targets.append((key, src["url"], src["kind"]))
 
+    # Accumulated across every regulation source, then applied once. Applying
+    # per source overwrote the overlay: ridem_amendments applied six changes
+    # and ridem_limits, which had nothing to say, ran second and erased them.
+    # Current state is a function of ALL the notices, not the last file written.
+    all_changes: list[dict] = []
+
     print()
     for key, url, kind in targets:
         print(f"  {key}  ({kind})")
@@ -388,6 +394,8 @@ def _cmd_scrape(args) -> int:
                 print(f"    ! instruction-shaped text ignored: {inj[:90]}")
             # On a timer nobody reads the output, so the outcome has to end up
             # somewhere the interface can show it going stale.
+            if kind == "regulation":
+                all_changes.extend(out.get("changes", []))
             scrapelog.record(key, kind, True,
                              "%d queued" % out.get("queued", 0)
                              if kind == "regulation"
@@ -399,8 +407,27 @@ def _cmd_scrape(args) -> int:
         except fetch.FetchError as e:
             print(f"    ! fetch failed: {e}")
             scrapelog.record(key, kind, False, "fetch failed: %s" % e)
+
+    if all_changes:
+        try:
+            from . import applied, reconcile
+            st = reconcile.effective_state(all_changes)
+            ap = applied.apply_state(st)
+            ch = [r for r in ap["rules"].values() if r.get("changed")]
+            print(f"\n  applied {len(ap['rules'])} rule(s) to the overlay"
+                  f", {len(ch)} changed")
+            for r in ch[:8]:
+                way = ("relaxes" if r.get("relaxes") is True
+                       else "tightens" if r.get("relaxes") is False
+                       else "direction unknown")
+                print(f"    {r['species']:<16} {r.get('previous') or '—'}"
+                      f" -> {r['value']}  ({way})")
+        except Exception as e:                                    # noqa: BLE001
+            print(f"\n  ! could not apply: {type(e).__name__}: {e}")
     print()
-    print("  Nothing above has changed the forecast. Regulations need approval:")
+    print("  Applied to the overlay above. `regs.py` itself is unchanged —\n"
+          "  it stays hand-written. Check any applied number against its\n"
+          "  notice from the app, or with:")
     print("    python3 -m tiderace review\n")
     return 0
 

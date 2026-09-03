@@ -247,6 +247,15 @@ def extract_regulations(url: str, force: bool = False,
             value = f"{value} {r['period']}".strip()
         if r.get("until_further_notice"):
             value = f"{value} until further notice".strip()
+        # Everything the parser resolved, not a chosen subset. This record used
+        # to keep nine fields and drop the rest, and one of the dropped ones was
+        # `reopens_on` -- so "the commercial Tautog fishery will close, until the
+        # next sub-period begins on August 1, 2026" reached the queue as an
+        # open-ended closure. `ridem.parse_notice` had read the reopening
+        # correctly; the hand-off threw it away, and the reconciler then
+        # reported tautog shut on 2 September when it had reopened on 1 August.
+        # A closure without its end is a different claim from the one the notice
+        # made.
         out["changes"].append({
             "species": r["species"] or "", "species_key": r.get("species_key"),
             "change_type": r["change_type"], "license_mode": r["license_mode"],
@@ -255,6 +264,16 @@ def extract_regulations(url: str, force: bool = False,
             "cross_checked": a.get("cross_checked", False),
             "confidence": ("high" if a.get("agrees")
                            else "low" if a.get("agrees") is False else "medium"),
+            "reopens_on": r.get("reopens_on"),
+            "superseded_on": r.get("superseded_on"),
+            "successor": r.get("successor"),
+            "sub_fishery": r.get("sub_fishery"),
+            "aggregate_program": r.get("aggregate_program"),
+            "until_further_notice": r.get("until_further_notice"),
+            "state_vessels_only": r.get("state_vessels_only"),
+            "amount": r.get("amount"),
+            "period": r.get("period"),
+            "source_url": doc.get("url"),
         })
 
     if use_model and rule["unparsed"]:

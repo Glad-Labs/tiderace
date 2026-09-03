@@ -275,6 +275,24 @@ def commercial_status(species: str, when: date | None = None,
         return {"known": False}
     age = (date.today() - COMMERCIAL_CHECKED_ON).days
     closed_reason = r.why_closed(when)
+
+    # The machine-managed overlay sits on top of the hand-written rule above.
+    # `regs.py` is still only edited by a person; this is what RIDEM published
+    # since, applied automatically and carrying the notice it came from.
+    applied_rules, limit, applied_note = [], r.limit, None
+    try:
+        from . import applied as appliedmod
+        applied_rules = appliedmod.overlay_for(species, "commercial", when)
+        for a in applied_rules:
+            if a.get("change_type") in ("season_close", "quota_closure"):
+                closed_reason = closed_reason or (
+                    "closed by RIDEM notice effective %s" % a.get("effective_date"))
+            elif a.get("change_type") == "possession_limit" and a.get("value"):
+                limit = a["value"]
+                applied_note = a
+    except Exception:                                             # noqa: BLE001
+        applied_rules = []
+
     return {
         "known": True,
         "mode": "commercial",
@@ -282,8 +300,28 @@ def commercial_status(species: str, when: date | None = None,
         "season": closed_reason or "open",
         "min_inches": r.min_inches,
         "slot": None,
-        "bag": r.limit,
+        "bag": limit,
         "note": r.note,
+        # Everything the overlay changed, with its source. The interface shows
+        # the link so a number can be checked against the notice in one tap,
+        # which is the trade made instead of an approval step.
+        # Every applied rule, not the one that happened to win. RIDEM states
+        # black sea bass as 400 lb/day AND 2800 lb/week in a single notice, and
+        # the reconciler treats those as one rule by design, so displaying a
+        # single number drops a real constraint. The list is what gets shown.
+        "applied": [{
+            "value": a.get("value"),
+            "change_type": a.get("change_type"),
+            "period": a.get("period"),
+            "sub_fishery": a.get("sub_fishery"),
+            "effective_date": a.get("effective_date"),
+            "reopens_on": a.get("reopens_on"),
+            "relaxes": a.get("relaxes"),
+            "source_url": a.get("source_url"),
+            "quote": a.get("quote"),
+        } for a in applied_rules],
+        "applied_source": (applied_note or {}).get("source_url") or COMMERCIAL_SOURCE,
+        "applied_effective": (applied_note or {}).get("effective_date"),
         "quota_closed": r.quota_closed,
         "source": COMMERCIAL_SOURCE,
         "hotline": COMMERCIAL_HOTLINE,
