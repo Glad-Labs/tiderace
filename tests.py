@@ -4144,9 +4144,9 @@ class TheDesktopLayoutSurvivesTheZoomBlock(unittest.TestCase):
 
     def setUp(self):
         import pathlib
-        self.css = strip_comments(
-            (pathlib.Path(__file__).parent / "tiderace" / "web"
-             / "index.html").read_text())
+        self.page = (pathlib.Path(__file__).parent / "tiderace" / "web"
+                     / "index.html").read_text()
+        self.css = strip_comments(self.page)
 
     def test_the_zoom_block_is_inside_the_touch_media_query(self):
         # Brace containment, not "the nearest @media above it". The first
@@ -4201,6 +4201,63 @@ class TheDesktopLayoutSurvivesTheZoomBlock(unittest.TestCase):
         self.assertTrue(line, "stale detector not found")
         self.assertIn("mob &&", line[0],
                       "the size heuristic is only evidence on the touch layout")
+
+    def test_the_dot_sits_on_the_coordinate_not_the_middle_of_the_name(self):
+        """The marker was a flex row of [dot, label] with anchor:'center', so
+        MapLibre centred the WHOLE ROW on the point -- the dot sat left of the
+        spot by half the width of its own name, and a long name pushed its dot
+        further off than a short one. A zero-size root puts the origin on the
+        coordinate and the children hang off it."""
+        js = strip_comments(self.page)
+        fn = js.split("function makeMarker(")[1].split("\n}")[0]
+        self.assertIn("width:0;height:0", fn.replace(" ", ""),
+                      "the root must be zero-size so its origin is the point")
+        self.assertIn("position:absolute", fn, "children hang off that origin")
+        self.assertNotIn("display:flex", fn,
+                         "a flex row centres the row, not the dot")
+
+    def test_paint_never_writes_the_marker_root_transform(self):
+        """MapLibre owns it. paint() setting it threw all 21 markers back to
+        the top-left corner on every time-slider tick, and they only came back
+        when the map next moved -- which is what "they go away when I move the
+        map" was describing."""
+        js = strip_comments(self.page)
+        fn = js.split("function paint()")[1].split("\nfunction ")[0]
+        self.assertNotIn("el.style.transform", fn,
+                         "paint() must not touch the marker root transform")
+        self.assertIn("dot.style.margin", fn,
+                      "the dot centres itself instead")
+
+    def test_two_names_in_the_same_place_do_not_both_draw(self):
+        """Charlestown Breachway publishes an inside and an east-side mark a
+        few hundred metres apart, so at bay zoom their labels land on top of
+        each other. Measured before the fix: three overlapping pairs."""
+        js = strip_comments(self.page)
+        fn = js.split("function clampLabels()")[1].split("\nfunction ")[0]
+        # The expression, not its ingredients. `kept` and `hits(` both survive
+        # replacing the condition with `if (false)`, so asserting they merely
+        # appear passed with the collision pass switched off.
+        self.assertIn("kept.some(k => hits(lb, k))", fn,
+                      "the collision test itself must be reachable")
+        self.assertIn("kept.push(", fn, "and it must record what it drew")
+        self.assertNotIn("if (false)", fn)
+        # The best spot wins the label, and a selected spot outranks everything.
+        self.assertIn("SEL", fn, "the selected spot must keep its name")
+        self.assertIn("zIndex", fn, "score decides the rest")
+
+    def test_the_time_bar_occludes_labels_too(self):
+        """It sits over the bottom-left of the map and had no say, so names
+        under it were drawn into it -- three of them, measured."""
+        js = strip_comments(self.page)
+        fn = js.split("function clampLabels()")[1].split("\nfunction ")[0]
+        self.assertIn("timebar", fn)
+
+    def test_labels_are_reclamped_when_the_webfont_lands(self):
+        """A webfont changes every label's width when it arrives and no map
+        event fires for it, so a layout clamped against fallback metrics comes
+        apart underneath."""
+        js = strip_comments(self.page)
+        self.assertIn("fonts.ready", js)
 
     def test_marker_visibility_against_the_desktop_right_rail(self):
         """`markerVisibility` is a pure function and had no test, so the rule

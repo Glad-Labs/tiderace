@@ -876,6 +876,13 @@ addEventListener('resize', clampLabels);
    An observer rather than another call site, because the list of things that
    resize the sheet keeps growing and every new render path would have to
    remember. */
+/* A webfont changes every label's width when it lands, and no map event
+   fires for that -- so a layout clamped against fallback metrics can come
+   apart the moment IBM Plex Mono arrives. One run showed a name back under
+   the time bar for exactly this reason. */
+if (document.fonts && document.fonts.ready)
+  document.fonts.ready.then(() => clampLabels()).catch(() => {});
+
 if (typeof ResizeObserver === 'function'){
   const sheetEl = document.getElementById('sheet');
   if (sheetEl) new ResizeObserver(() => clampLabels()).observe(sheetEl);
@@ -897,16 +904,32 @@ function syncMarkers(){
 }
 
 function makeMarker(sp){
+  /* A zero-size root, so the DOT lands on the coordinate.
+     It used to be a flex row of [dot, label] with anchor:'center', which
+     centres the WHOLE ROW on the point -- so the dot sat left of the spot by
+     half the width of its own name and the label straddled the position. A
+     long name pushed its dot further off than a short one. The root is 0x0
+     now; MapLibre centres nothing on the point, and the children hang off
+     that origin, so the dot is the thing at the coordinate and the name sits
+     beside it.
+
+     Nothing here writes to the root's transform either. MapLibre owns it, and
+     paint() setting it was wiping the position of all 21 markers on every
+     time-slider tick until the next map move put them back. */
   const el = document.createElement('div');
-  el.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;transform:translate(-9px,-9px)';
+  el.style.cssText = 'position:relative;width:0;height:0;cursor:pointer';
   el.innerHTML =
-    `<div class="dot" style="width:18px;height:18px;border-radius:50%;border:2px solid #0B1518;
-        box-shadow:0 0 0 1px rgba(228,236,238,.35);flex:none"></div>
-     <div class="lbl" style="font-family:var(--mono);font-size:10px;font-weight:600;
-        color:#E4ECEE;text-shadow:0 1px 3px #0B1518,0 0 6px #0B1518;white-space:nowrap">${sp.name}</div>`;
+    `<div class="dot" style="position:absolute;left:0;top:0;width:18px;height:18px;
+        margin:-9px 0 0 -9px;border-radius:50%;border:2px solid #0B1518;
+        box-shadow:0 0 0 1px rgba(228,236,238,.35)"></div>
+     <div class="lbl" style="position:absolute;left:15px;top:0;transform:translateY(-50%);
+        font-family:var(--mono);font-size:10px;font-weight:600;
+        color:#E4ECEE;text-shadow:0 1px 3px #0B1518,0 0 6px #0B1518;
+        white-space:nowrap;pointer-events:none">${sp.name}</div>`;
   // Markers live inside the map's canvas container, so a tap on one also
   // reaches the map's own click handler -- selecting the spot AND dropping a
   // mark pin on top of it, with a report request behind it.
+  el.dataset.key = sp.key;
   el.onclick = ev => { ev.stopPropagation(); select(sp.key); };
   const m = new maplibregl.Marker({element:el, anchor:'center'})
       .setLngLat([sp.lon, sp.lat]).addTo(map);
@@ -957,14 +980,50 @@ function clampLabels(){
   const sheetTop = up ? r.top : Infinity;
   const sheetLeft = up ? r.left : Infinity;
 
-  for (const m of Object.values(MARKERS)){
+  // The root is 0x0 now, so its rect is a point. The dot is the thing at the
+  // coordinate and the one the chrome test is about.
+  const kept = [];
+  const entries = Object.values(MARKERS).filter(m => m.el);
+  // Best spot wins the label. paint() already puts the score in zIndex, and
+  // the selected spot outranks everything -- if you have picked a place, its
+  // name is the one you need on screen.
+  entries.sort((a, b) => {
+    const sa = a.el.dataset.key === SEL ? 1e6 : (+a.el.style.zIndex || 0);
+    const sb = b.el.dataset.key === SEL ? 1e6 : (+b.el.style.zIndex || 0);
+    return sb - sa;
+  });
+
+  const tb = document.getElementById('timebar');
+  const tbox = tb && tb.offsetParent !== null ? tb.getBoundingClientRect() : null;
+  const hits = (a, b) => a.right > b.left && a.left < b.right
+                      && a.bottom > b.top && a.top < b.bottom;
+
+  for (const m of entries){
     const el = m.el;
-    if (!el) continue;
-    const v = markerVisibility(el.getBoundingClientRect(),
-                               barBottom, sheetTop, sheetLeft);
-    el.style.visibility = v.marker;
+    const dot = el.querySelector('.dot');
     const lbl = el.querySelector('.lbl');
-    if (lbl) lbl.style.visibility = wanted ? v.label : 'hidden';
+    const dotBox = (dot || el).getBoundingClientRect();
+    const v = markerVisibility(dotBox, barBottom, sheetTop, sheetLeft);
+    el.style.visibility = v.marker;
+    if (!lbl) continue;
+
+    let show = wanted && v.marker !== 'hidden' && v.label !== 'hidden';
+    if (show){
+      // Measure the label where it will actually be, which means unhiding it
+      // first -- a hidden element still has a box, but one left over from the
+      // last layout.
+      lbl.style.visibility = '';
+      const lb = lbl.getBoundingClientRect();
+      // The time bar sits over the map bottom-left and had no say here, so
+      // names under it were drawn into it.
+      if (tbox && hits(lb, tbox)) show = false;
+      // And the real complaint: two names on top of each other. Charlestown
+      // Breachway publishes an inside and an east-side mark a few hundred
+      // metres apart, so at bay zoom their labels land in the same place.
+      else if (kept.some(k => hits(lb, k))) show = false;
+      else kept.push(lb);
+    }
+    lbl.style.visibility = show ? '' : 'hidden';
   }
 }
 
@@ -987,7 +1046,12 @@ function paint(){
     dot.style.background = colour(s);
     const size = s == null ? 12 : 12 + (s/100)*12;
     dot.style.width = dot.style.height = size + 'px';
-    m.el.style.transform = `translate(${-size/2}px,${-size/2}px)`;
+    // The dot centres itself on the origin. This used to set the ROOT's
+    // transform, which is MapLibre's -- every tick of the time slider threw
+    // all 21 markers back to the top-left corner until the map next moved.
+    dot.style.margin = `${-size/2}px 0 0 ${-size/2}px`;
+    const lbl = m.el.querySelector('.lbl');
+    if (lbl) lbl.style.left = (size/2 + 6) + 'px';
     m.el.style.zIndex = Math.round(s || 0);
   });
   renderRank(); renderDetail();
