@@ -462,8 +462,8 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 #slogtoggle:active{transform:scale(.99)}
 #slogform{display:none; margin-top:12px}
 #slogform.open{display:block}
-#slogform .two{display:grid; grid-template-columns:1fr 1fr; gap:8px}
-#slogform input, #slogform select{
+#slogform .two, .cedit .two{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+#slogform input, #slogform select, .cedit input{
   width:100%; margin-top:8px; padding:13px 12px; border-radius:10px;
   border:1px solid var(--hair); background:var(--ground); color:var(--ink);
   font:15px/1.2 var(--mono);
@@ -471,7 +471,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
      focus and you lose the map behind the sheet. */
   font-size:16px;
 }
-#slogform .two input{margin-top:0}
+#slogform .two input, .cedit .two input{margin-top:0}
 #slogsave{
   width:100%; min-height:54px; margin-top:12px; border:none; border-radius:12px;
   background:var(--accent); color:#fff; font:600 16px/1 var(--display);
@@ -694,6 +694,13 @@ body.sheet-peek #trip{
 #slogshots img{width:56px; height:56px; object-fit:cover; border-radius:8px;
                border:1px solid var(--hair); cursor:pointer}
 #slogshots .sdim{padding:0; flex-basis:100%}
+/* The row is a grid of when / fish / meta; the form has to take the whole
+   row or it is squeezed into the first column, which is what shipped for a
+   screenshot: "Wed, Aug 12" wrapped onto four lines beside the inputs. */
+.cedit{grid-column:1 / -1; width:100%; margin-top:8px; padding-top:4px;
+       border-top:1px dashed var(--hair)}
+.cedit .cmsg{margin-top:6px}
+.catch .fixed{color:var(--muted); font-size:11px}
 .trip .shots{display:flex; gap:4px; margin-top:6px}
 .trip .shots img{width:44px; height:44px; object-fit:cover; border-radius:6px;
                  border:1px solid var(--hair)}
@@ -765,12 +772,12 @@ body.sheet-peek #trip{
   font:600 15px/1 var(--display); cursor:pointer;
 }
 #tripsbtn:active{transform:scale(.99)}
-.trip{
+.trip, .catch{
   display:grid; grid-template-columns:1fr auto; gap:4px 12px;
   padding:14px 16px; border-bottom:1px solid var(--hair-a);
   cursor:pointer; align-items:baseline;
 }
-.trip:active{background:var(--panel-2)}
+.trip:active, .catch:active{background:var(--panel-2)}
 .trip.on{background:var(--panel-2); box-shadow:inset 3px 0 0 var(--accent)}
 .trip .when{font:600 15px/1.2 var(--display); color:var(--ink)}
 .trip .fish{
@@ -2316,6 +2323,96 @@ function clearTrip(){
   TRIP_SHOWN = null;
 }
 
+/* ---- the catch log, row by row ---------------------------------------
+ * Trips above are tracks; this is what was written down, and it carries the
+ * one thing a form on a boat needs and never had: a way to fix a slip
+ * afterwards. "11 fluke" for an 11-inch fluke. Tap a row, change the
+ * numbers, save. The old values stay on the row (`amended`), the server
+ * keeps a backup, and it will not guess which row: logged_at plus species
+ * must match exactly one. */
+function catchRow(r, i){
+  const d = new Date(r.started_at);
+  const when = isNaN(d) ? tesc(r.started_at || '')
+    : d.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'})
+      + ' · ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  const sp = (r.species || '').replace(/_/g, ' ');
+  // Older rows carry only the key; an at: key is a coordinate in disguise.
+  const at = /^at:(-?[\d.]+),(-?[\d.]+)$/.exec(r.spot || '');
+  const where = (r.lat != null && r.lon != null)
+    ? `${(+r.lat).toFixed(4)}, ${(+r.lon).toFixed(4)}`
+    : at ? `${(+at[1]).toFixed(4)}, ${(+at[2]).toFixed(4)}` : (r.spot || '');
+  const big = (r.biggest_in != null && r.biggest_in !== '')
+    ? ` · biggest ${tesc(r.biggest_in)}"` : '';
+  const fixed = (r.amended || []).length
+    ? ` · <span class="fixed">corrected ${(r.amended || []).length}×</span>` : '';
+  const n = +r.count || 0;
+  return `<div class="catch" data-i="${i}">
+      <div class="when">${when} · ${tesc(sp)}</div>
+      ${n > 0 ? `<div class="fish">${n}</div>` : '<div class="fish blank">blank</div>'}
+      <div class="meta">${tesc(where)}${big}${r.method ? ' · ' + tesc(r.method) : ''}${fixed}</div>
+    </div>`;
+}
+
+function catchForm(r){
+  const v = k => tesc(r[k] == null ? '' : r[k]).replace(/"/g, '&quot;');
+  return `<form class="cedit">
+      <div class="two">
+        <input type="number" name="count" min="0" inputmode="numeric" value="${v('count')}" placeholder="fish">
+        <input type="number" name="biggest_in" min="0" step="0.5" inputmode="decimal" value="${v('biggest_in')}" placeholder="biggest (in)">
+      </div>
+      <input type="text" name="method" value="${v('method')}" placeholder="method">
+      <input type="text" name="notes" value="${v('notes')}" placeholder="notes">
+      <button class="primary" type="submit">Save correction</button>
+      <div class="cmsg sdim"></div>
+    </form>`;
+}
+
+async function renderCatches(body){
+  let rows = [];
+  try { rows = (await (await fetch('/api/log')).json()).entries || []; }
+  catch (_) { return; }                    // offline: the trips above still work
+  if (!rows.length) return;
+  rows = rows.slice().reverse().slice(0, 40);
+  const box = document.createElement('div');
+  box.innerHTML =
+    `<div class="sgroup">${rows.length} logged catch${rows.length === 1 ? '' : 'es'}` +
+    ` · tap one to correct it</div>` + rows.map(catchRow).join('');
+  body.appendChild(box);
+  box.querySelectorAll('.catch').forEach(el => el.onclick = ev => {
+    if (ev.target.closest('form')) return;          // typing, not toggling
+    const r = rows[+el.dataset.i];
+    const open = el.querySelector('form');
+    if (open){ open.remove(); return; }
+    box.querySelectorAll('.cedit').forEach(f => f.remove());
+    el.insertAdjacentHTML('beforeend', catchForm(r));
+    const f = el.querySelector('form');
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const fd = new FormData(f);
+      const changes = {};
+      for (const k of ['count', 'biggest_in', 'method', 'notes']){
+        const v = fd.get(k);
+        if (v === null) continue;
+        const was = r[k] == null ? '' : String(r[k]);
+        if (String(v) !== was) changes[k] = (v === '' ? null : v);
+      }
+      if (changes.count === null) delete changes.count;   // a blank count is not zero
+      const msg = f.querySelector('.cmsg');
+      if (!Object.keys(changes).length){ msg.textContent = 'nothing changed'; return; }
+      msg.textContent = 'saving…';
+      try{
+        const res = await fetch('/api/log/amend', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({logged_at: r.logged_at, species: r.species, changes})
+        });
+        const j = await res.json();
+        if (j.error) throw new Error(j.error);
+        showTrips();                                    // redraw from what was saved
+      } catch(err){ msg.textContent = 'could not save: ' + err.message; }
+    };
+  });
+}
+
 async function showTrips(){
   const body = document.getElementById('sheetbody');
   const head = document.getElementById('sheettitle');
@@ -2360,6 +2457,7 @@ async function showTrips(){
     body.innerHTML = scorecard + '<div class="sdim">No trips recorded yet. Hit REC at the ' +
       'ramp and stop at the dock — a trip is kept whether or not you log a fish, ' +
       'and the blanks are the half everyone throws away.</div>';
+    await renderCatches(body);
     return;
   }
   const fish = ts.reduce((n,t) => n + (t.fish||0), 0);
@@ -2371,6 +2469,7 @@ async function showTrips(){
     `<div class="sdim">Tap a trip to put its drifts on the map. ` +
     `Pink is drifting, amber is trolling; green dots are logged catches.</div>`;
 
+  await renderCatches(body);
   body.querySelectorAll('.trip').forEach(el => el.onclick = () => {
     const t = ts[+el.dataset.trip];
     body.querySelectorAll('.trip').forEach(x => x.classList.remove('on'));

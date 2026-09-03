@@ -830,6 +830,42 @@ class Handler(BaseHTTPRequestHandler):
                 traceback.print_exc()
                 return self._send_json({"error": str(exc)}, 500)
 
+        if url.path == "/api/log/amend":
+            # One row, corrected in place, old values kept on the row. The
+            # only write path in the app that touches an existing line of
+            # the log, and it will not guess which line: the key must match
+            # exactly one.
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                data = json.loads(self.rfile.read(n) or b"{}")
+            except Exception as exc:                              # noqa: BLE001
+                return self._send_json({"error": str(exc)}, 400)
+            changes = data.get("changes")
+            if not isinstance(changes, dict) or not data.get("logged_at"):
+                return self._send_json(
+                    {"error": "needs logged_at and a changes object"}, 400)
+            if "species" in changes:
+                from . import species as spmod
+                sp = changes["species"]
+                if sp not in spmod.BY_KEY:
+                    sp = spmod.resolve(sp)
+                    if not sp:
+                        return self._send_json(
+                            {"error": f"unknown species {changes['species']!r}"}, 400)
+                changes["species"] = sp
+            try:
+                row = catchlog.amend(data["logged_at"], changes,
+                                     species=data.get("species"))
+            except KeyError as exc:
+                return self._send_json({"error": str(exc).strip("'")}, 404)
+            except ValueError as exc:
+                return self._send_json({"error": str(exc)}, 409)
+            except Exception as exc:                              # noqa: BLE001
+                traceback.print_exc()
+                return self._send_json({"error": str(exc)}, 500)
+            return self._send_json({"ok": True, "entry": row,
+                                    "summary": catchlog.summary()})
+
         if url.path == "/api/log/voice":
             # Transcript in, draft fields out. Deliberately does NOT write to
             # the log: the form is filled and a human presses save, because a

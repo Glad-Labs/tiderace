@@ -81,6 +81,18 @@ def run(argv=None) -> int:
     lg.add_argument("--photo", action="append", metavar="JPEG",
                     help="a photo of the fish to keep with the entry (repeatable); "
                          "stays on this machine")
+
+    am = sub.add_parser("amend", help="correct one logged trip, keeping what it said")
+    am.add_argument("--logged-at", required=True, metavar="ISO",
+                    help="the entry's logged_at, to the second (see `tiderace history`)")
+    am.add_argument("--species", help="which row, when one save wrote several")
+    am.add_argument("--count", type=int)
+    am.add_argument("--biggest-in", type=float)
+    am.add_argument("--method")
+    am.add_argument("--bait")
+    am.add_argument("--notes")
+    am.add_argument("--started-at", metavar="ISO")
+    am.add_argument("--to-species", metavar="KEY", help="it was a different fish")
     lg.add_argument("--source", default="manual",
                     choices=("manual", "voice", "report", "photo"))
 
@@ -222,6 +234,8 @@ def run(argv=None) -> int:
 
     if args.cmd == "spots":
         return _cmd_spots()
+    if args.cmd == "amend":
+        return _cmd_amend(args)
     if args.cmd == "at":
         return _cmd_at(args)
     if args.cmd == "stations":
@@ -278,6 +292,28 @@ def run(argv=None) -> int:
         return serve("tailscale" if args.tailscale else args.host, args.port)
 
     return _cmd_forecast(args)
+
+
+def _cmd_amend(args) -> int:
+    from . import log as catchlog
+    changes = {k: v for k, v in (
+        ("count", args.count), ("biggest_in", args.biggest_in),
+        ("method", args.method), ("bait_observed", args.bait),
+        ("notes", args.notes), ("started_at", args.started_at),
+        ("species", args.to_species)) if v is not None}
+    try:
+        row = catchlog.amend(args.logged_at, changes, species=args.species)
+    except (KeyError, ValueError) as exc:
+        print(f"  {str(exc).strip(chr(39))}", file=sys.stderr)
+        return 2
+    last = (row.get("amended") or [{}])[-1]
+    print(f"  amended {row['species']} logged {row['logged_at']}:")
+    for k, old in (last.get("was") or {}).items():
+        print(f"    {k}: {old!r} → {row.get(k)!r}")
+    if not last:
+        print("    (already said that; nothing changed)")
+    print(f"  backup at {catchlog.LOG_PATH}.bak")
+    return 0
 
 
 def _cmd_spots() -> int:

@@ -2068,6 +2068,104 @@ class FishPhotos(unittest.TestCase):
         self.assertIn('src="/photos/', page, "the trips tab shows what was attached")
 
 
+class AmendingTheLog(unittest.TestCase):
+    """The log was append-only and nothing listed its rows, so "11 fluke"
+    typed for an 11-inch fluke could only be fixed with a text editor on the
+    one irreplaceable file. amend() corrects one row, keeps the old values on
+    it, backs the file up, and refuses to guess which row."""
+    ROWS = [
+        {"spot": "at:41.45040,-71.31600", "species": "fluke", "count": 2,
+         "biggest_in": "11", "started_at": "2026-08-30T00:00",
+         "logged_at": "2026-08-30T23:00:32", "conditions": {"x": 1}},
+        {"spot": "at:41.47720,-71.34300", "species": "fluke", "count": 11,
+         "biggest_in": None, "started_at": "2026-08-12T18:45",
+         "logged_at": "2026-09-03T18:41:44", "conditions": {}},
+        {"spot": "at:41.47720,-71.34300", "species": "black_sea_bass", "count": 12,
+         "biggest_in": "16", "started_at": "2026-08-12T18:39",
+         "logged_at": "2026-09-03T18:41:44", "conditions": {}},
+    ]
+
+    def _log(self, d):
+        import json
+        path = os.path.join(d, "catch_log.jsonl")
+        with open(path, "w") as fh:
+            for r in self.ROWS:
+                fh.write(json.dumps(r) + "\n")
+        return path
+
+    def test_one_row_changes_and_the_rest_are_untouched(self):
+        import json
+        import tempfile
+        from tiderace import log as catchlog
+        with tempfile.TemporaryDirectory() as d:
+            path = self._log(d)
+            before = open(path).read()
+            row = catchlog.amend("2026-09-03T18:41:44", {"count": 2, "biggest_in": 11},
+                                 species="fluke", path=path)
+            self.assertEqual((row["count"], row["biggest_in"]), (2, 11.0))
+            self.assertEqual(row["amended"][0]["was"], {"count": 11, "biggest_in": None})
+            self.assertTrue(row["amended"][0]["at"].startswith("20"))
+            rows = catchlog.load(path)
+            self.assertEqual(len(rows), 3)
+            self.assertEqual(rows[0], self.ROWS[0], "another row was touched")
+            self.assertEqual(rows[2], self.ROWS[2], "the sibling row was touched")
+            self.assertEqual(rows[1]["count"], 2)
+            self.assertEqual(open(path + ".bak").read(), before,
+                             "the backup is the file as it was")
+            self.assertEqual([f for f in os.listdir(d) if ".tmp" in f], [],
+                             "temp files must be replaced, not left")
+            # Twice is a second entry in the audit, not a rewrite of the first.
+            catchlog.amend("2026-09-03T18:41:44", {"notes": "small bites"},
+                           species="fluke", path=path)
+            self.assertEqual(len(catchlog.load(path)[1]["amended"]), 2)
+
+    def test_it_will_not_guess_which_row_and_writes_nothing_when_it_refuses(self):
+        import tempfile
+        from tiderace import log as catchlog
+        with tempfile.TemporaryDirectory() as d:
+            path = self._log(d)
+            before = open(path).read()
+            with self.assertRaises(ValueError):         # two rows share the second
+                catchlog.amend("2026-09-03T18:41:44", {"count": 2}, path=path)
+            with self.assertRaises(KeyError):
+                catchlog.amend("2026-09-03T18:41:45", {"count": 2}, path=path)
+            with self.assertRaises(KeyError):
+                catchlog.amend("2026-09-03T18:41:44", {"count": 2},
+                               species="tautog", path=path)
+            with self.assertRaises(ValueError):         # not an amendable field
+                catchlog.amend("2026-09-03T18:41:44", {"logged_at": "x"},
+                               species="fluke", path=path)
+            with self.assertRaises(ValueError):
+                catchlog.amend("2026-09-03T18:41:44", {}, species="fluke", path=path)
+            self.assertEqual(open(path).read(), before)
+            self.assertFalse(os.path.exists(path + ".bak"), "refusals do not write")
+            # Saying what it already says is a no-op, not an audit entry.
+            row = catchlog.amend("2026-09-03T18:41:44", {"count": 11},
+                                 species="fluke", path=path)
+            self.assertNotIn("amended", row)
+            self.assertEqual(open(path).read(), before)
+
+    def test_the_route_the_page_and_the_cli_reach_it(self):
+        import pathlib
+        root = pathlib.Path(__file__).parent
+        srv = strip_py_comments((root / "tiderace" / "server.py").read_text())
+        route = srv.split('if url.path == "/api/log/amend":')[1].split("\n        if url.path")[0]
+        self.assertIn("catchlog.amend(", route)
+        self.assertIn("except KeyError", route)
+        self.assertIn("404", route)
+        page = strip_comments((root / "tiderace" / "web" / "index.html").read_text())
+        fn = page.split("async function renderCatches(body){")[1].split("\nasync function showTrips")[0]
+        self.assertIn("fetch('/api/log/amend'", fn)
+        self.assertIn("logged_at: r.logged_at, species: r.species", fn,
+                      "the key must be exact, not a guess")
+        trips = page.split("async function showTrips(){")[1].split("\n}\n")[0]
+        self.assertEqual(trips.count("await renderCatches(body)"), 2,
+                         "catches are listed with and without tracks")
+        cli = strip_py_comments((root / "tiderace" / "cli.py").read_text())
+        self.assertIn('sub.add_parser("amend"', cli)
+        self.assertIn("catchlog.amend(args.logged_at", cli)
+
+
 class DepthLayer(unittest.TestCase):
     def setUp(self):
         from tiderace import charts

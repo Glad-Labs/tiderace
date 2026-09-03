@@ -296,6 +296,77 @@ def photo_path(rel: str, root: str | None = None) -> str | None:
     return p
 
 
+AMENDABLE = ("count", "biggest_in", "method", "bait_observed", "notes",
+             "started_at", "species")
+
+
+def amend(logged_at: str, changes: dict, species: str | None = None,
+          path: str = LOG_PATH) -> dict:
+    """Correct one row of the log, keeping what it said before.
+
+    "11 fluke" when you meant "an 11-inch fluke" is the kind of slip a form
+    on a boat produces, and the log is append-only by design, so until this
+    the only fix was a text editor on the one irreplaceable file. Rows have
+    no id; `logged_at` is written to the second and is the natural key, with
+    `species` to split the rows record_trip writes together. Exactly one row
+    must match -- none is a 404, two is a refusal, never a guess.
+
+    The old values are kept on the row under `amended`, so a corrected entry
+    still shows what was first written and when it changed. The file is
+    rewritten through a temp and os.replace, after a copy to `<path>.bak`,
+    because this is the scarcest thing in the project and a torn rewrite
+    would be the one way to lose it.
+    """
+    import shutil
+    import tempfile
+    bad = sorted(set(changes) - set(AMENDABLE))
+    if bad:
+        raise ValueError(f"cannot amend {', '.join(bad)}; "
+                         f"amendable: {', '.join(AMENDABLE)}")
+    if not changes:
+        raise ValueError("nothing to change")
+    rows = load(path)
+    hits = [i for i, r in enumerate(rows)
+            if r.get("logged_at") == logged_at
+            and (species is None or r.get("species") == species)]
+    if not hits:
+        raise KeyError(f"no entry logged at {logged_at}"
+                       + (f" for {species}" if species else ""))
+    if len(hits) > 1:
+        raise ValueError(f"{len(hits)} entries logged at {logged_at}; "
+                         "say which species")
+    row = rows[hits[0]]
+    was = {}
+    for k, v in changes.items():
+        if k == "count":
+            v = int(v)
+        elif k == "biggest_in":
+            v = None if v in (None, "") else float(v)
+        if row.get(k) != v:
+            was[k] = row.get(k)
+            row[k] = v
+    if not was:
+        return row
+    row.setdefault("amended", []).append(
+        {"at": datetime.now().isoformat(timespec="seconds"), "was": was})
+
+    shutil.copyfile(path, path + ".bak")
+    folder = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(prefix=".catch_log-", suffix=".tmp", dir=folder)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            for r in rows:
+                fh.write(json.dumps(r) + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return row
+
+
 def load(path: str = LOG_PATH) -> list[dict]:
     if not os.path.exists(path):
         return []
