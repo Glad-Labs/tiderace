@@ -26,7 +26,8 @@
      chrome over a light map with a dark bar floating on it. */
   --panel-a:rgba(18,33,38,.94); --panel-b:rgba(18,33,38,.97);
   --hair-a:rgba(39,64,72,.5); --halo:rgba(11,21,24,.9);
-  --scrim:rgba(11,21,24,.86);
+  --scrim:rgba(11,21,24,.86); --crit-wash:rgba(229,62,62,.14);
+  --chart-ink:#8FDCEA; --chart-ink-2:#B7C6CB;
   --display:'Archivo','Helvetica Neue',Arial,sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;
 }
@@ -46,7 +47,8 @@
   --mk-ink:#06171C; --mk-halo:#FFFFFF; --mk-edge:#FFFFFF;
   --panel-a:rgba(255,255,255,.95); --panel-b:rgba(255,255,255,.98);
   --hair-a:rgba(80,105,113,.34); --halo:rgba(255,255,255,.92);
-  --scrim:rgba(242,245,246,.9);
+  --scrim:rgba(242,245,246,.9); --crit-wash:rgba(155,35,23,.13);
+  --chart-ink:#0A5567; --chart-ink-2:#3D5257;
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
@@ -299,9 +301,14 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   font:12px/1.4 var(--mono); color:var(--ink-2);
 }
 #slegal .lg b{font:700 12px/1 var(--mono); letter-spacing:.08em}
-#slegal .lg.open b{color:var(--ok, #6ee7a8)}
-#slegal .lg.shut{background:rgba(229,62,62,.14)}
-#slegal .lg.shut b{color:#ff8a8a}
+/* OPEN or CLOSED is the most important word in the app and it was the least
+   readable thing on the screen in daylight: 1.82:1, a pale pink on a pale red
+   tint. `var(--ok, ...)` referenced a token that has never existed, so it
+   always fell through to its hardcoded light green, and the shut colour was a
+   literal. Both are per-theme tokens now. */
+#slegal .lg.open b{color:var(--good)}
+#slegal .lg.shut{background:var(--crit-wash)}
+#slegal .lg.shut b{color:var(--crit)}
 #slegal .lg .sz{font:700 13px/1 var(--display); color:var(--ink)}
 #slegal .lg .ln{color:var(--muted); font-size:11px}
 #slegal .lmore{border-bottom:1px solid var(--hair)}
@@ -553,7 +560,17 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 /* Offsets are multiplied by the zoom as well as sizes, so a 12px inset would
    land at 29px. Divide anything that has to stay put on the glass. */
 #bar{ left:calc(12px / var(--ui, 1)); top:calc(12px / var(--ui, 1));
-      width:calc((100vw - 24px) / var(--ui, 1)); }
+      width:calc((100vw - 24px) / var(--ui, 1));
+      /* One scrolling row, not a wrapping block. Wrapped, the bar grew to
+         three rows and the sheet at 92vh left about 60px above it, so the
+         species picker was sliced in half by the sheet's top edge -- the app
+         looked broken before you touched it. Scrolling sideways keeps every
+         control reachable in the height there actually is. */
+      flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
+      scrollbar-width:none; -webkit-overflow-scrolling:touch; }
+#bar::-webkit-scrollbar{display:none}
+#bar > *{flex:none}
+#layers{position:fixed; left:12px; right:12px; width:auto; max-width:none}
 #here{ right:calc(14px / var(--ui, 1));
        bottom:calc((20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
 #timebar{ right:calc(12px / var(--ui, 1)); bottom:calc(44px / var(--ui, 1));
@@ -855,6 +872,21 @@ const SEAMARK = {type:'raster',
      OSM raster     the old path, kept so a fresh clone still shows a map
    The basemap is vector now, so the dark look comes from a flavor rather than
    from raster filters beaten into an unwilling image. */
+/* MapLibre paint and layout values are not CSS -- `var(--halo)` in a
+   text-halo-color is not a colour, it is a string MapLibre cannot parse, and
+   the layer stops drawing. Tokenising the stylesheet with a global replace put
+   five of them into map layers and took the contour numbers off the chart.
+   Resolve the token to its computed value instead, at the moment the layer is
+   built; applyTheme rebuilds every layer, so they pick up the new palette. */
+function themeColour(name, fallback){
+  try {
+    const v = getComputedStyle(document.documentElement)
+      .getPropertyValue(name).trim();
+    if (v) return v;
+  } catch (_) {}
+  return fallback;
+}
+
 function basemapStyle() {
   if (BASEMAP.local || BASEMAP.hosted_key) {
     const src = BASEMAP.local
@@ -1716,8 +1748,14 @@ async function loadCharts(){
                   'symbol-placement':'line', 'text-field': st.label,
                   'text-font':['Noto Sans Regular'], 'text-size':10,
                   'text-max-angle':30, 'symbol-spacing':180},
-          paint:{'text-color': st.colour, 'text-halo-color':'var(--halo)',
-                 'text-halo-width':1.2}
+          // Not st.colour. The line is deliberately faint -- 55% cyan -- and a
+          // number inherited from it measured about 1.4:1 on the daylight
+          // chart, which is drawn but unreadable. A hairline may be subtle;
+          // the depth it is labelling may not.
+          paint:{'text-color': themeColour(st.model ? '--chart-ink-2' : '--chart-ink',
+                                           st.colour),
+                 'text-halo-color': themeColour('--halo', 'rgba(11,21,24,.9)'),
+                 'text-halo-width':1.4}
         }, ABOVE_BASEMAP());
       }
       continue;
@@ -1730,7 +1768,7 @@ async function loadCharts(){
         layout:{visibility: CHART_ON[l.name] ? 'visible' : 'none',
                 'text-field': st.label, 'text-font':['Noto Sans Regular'],
                 'text-size':10, 'text-allow-overlap':false},
-        paint:{'text-color': st.colour, 'text-halo-color':'var(--halo)',
+        paint:{'text-color': st.colour, 'text-halo-color': themeColour('--halo', 'rgba(11,21,24,.9)'),
                'text-halo-width':1.1}
       }, ABOVE_BASEMAP());
       continue;
@@ -1826,15 +1864,16 @@ async function loadStructure(){
   map.addSource('structure', {type:'geojson', data:gj});
   map.addLayer({
     id:'structure', type:'circle', source:'structure',
-    paint:{'circle-color':'#E4ECEE', 'circle-radius':4,
-           'circle-stroke-width':1.4, 'circle-stroke-color':'#0B1518'}
+    paint:{'circle-color': themeColour('--mk-ink', '#E4ECEE'), 'circle-radius':4,
+           'circle-stroke-width':1.4,
+           'circle-stroke-color': themeColour('--mk-edge', '#0B1518')}
   });
   map.addLayer({
     id:'structure-lbl', type:'symbol', source:'structure',
     minzoom:10,
     layout:{'text-field':['get','name'], 'text-font':['Noto Sans Regular'],
             'text-size':10, 'text-offset':[0,1.1], 'text-anchor':'top'},
-    paint:{'text-color':'#E4ECEE', 'text-halo-color':'var(--halo)',
+    paint:{'text-color': themeColour('--mk-ink', '#E4ECEE'), 'text-halo-color': themeColour('--halo', 'rgba(11,21,24,.9)'),
            'text-halo-width':1.2}
   });
 }
@@ -2130,7 +2169,7 @@ function drawTrip(t){
       filter:['==',['get','fish'],true], minzoom:10,
       layout:{'text-field':['get','label'],'text-font':['Noto Sans Regular'],
               'text-size':11,'text-offset':[0,1.2],'text-anchor':'top'},
-      paint:{'text-color':'#E4ECEE','text-halo-color':'var(--halo)',
+      paint:{'text-color': themeColour('--mk-ink', '#E4ECEE'),'text-halo-color': themeColour('--halo', 'rgba(11,21,24,.9)'),
              'text-halo-width':1.2}});
   }
 
@@ -2244,7 +2283,7 @@ async function loadBait(){
         'loaded',9,'decent',7,'scattered',5,'trace',4,'none',5, 6],
       'circle-opacity':['max',0.25,['get','freshness']],
       'circle-stroke-width':1.2,
-      'circle-stroke-color':'var(--halo)'
+      'circle-stroke-color': themeColour('--halo', 'rgba(11,21,24,.9)')
     }
   });
   map.on('click','bait', e => {

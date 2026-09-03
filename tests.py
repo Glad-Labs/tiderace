@@ -4189,6 +4189,43 @@ class DaylightAndEveryFish(unittest.TestCase):
         self.assertIn("'symbol-placement':'line'", self.js.replace(" ", "").replace(
             "'symbol-placement':'line'", "'symbol-placement':'line'"))
 
+    # ---- the regression that tokenising caused ----
+    def test_no_map_style_value_is_a_css_var(self):
+        """MapLibre paint and layout values are not CSS. `var(--halo)` in a
+        text-halo-color is a string MapLibre cannot parse, so the layer stops
+        drawing -- tokenising the stylesheet with a global replace put five of
+        them into map layers and took the contour numbers off the chart."""
+        import re
+        bad = []
+        for m in re.finditer(r"'([a-z-]*(?:color|width|opacity|radius))'\s*:\s*'([^']*var\(--[^']*)'",
+                             self.js):
+            bad.append("%s: %s" % (m.group(1), m.group(2)))
+        self.assertEqual(bad, [],
+                         "MapLibre cannot parse a CSS var: %s" % bad)
+        self.assertIn("function themeColour(", self.js,
+                      "resolve the token to a value before handing it to MapLibre")
+
+    def test_a_contour_number_does_not_inherit_the_hairline_colour(self):
+        """The line is deliberately faint -- 55% cyan -- and a number
+        inheriting it measured about 1.4:1 on the daylight chart: drawn, and
+        unreadable. A hairline may be subtle; the depth it labels may not."""
+        block = self.js.split("'symbol-placement':'line'")[1][:500]
+        self.assertNotIn("'text-color': st.colour", block,
+                         "the label must not take the line's colour")
+        self.assertIn("--chart-ink", block)
+        for theme in (self.css.split(":root{")[1].split("}")[0],
+                      self.css.split(':root[data-theme="light"]{')[1].split("}")[0]):
+            self.assertIn("--chart-ink", theme)
+
+    def test_the_top_bar_is_one_row_on_a_phone(self):
+        """Wrapped, it grew to three rows and the sheet at 92vh left about
+        60px above it, so the species picker was sliced in half by the sheet's
+        top edge -- the app looked broken before you touched it."""
+        i = self.css.index("#bar{ left:calc(12px / var(--ui")
+        rule = self.css[i:self.css.index("}", i)]
+        self.assertIn("flex-wrap:nowrap", rule)
+        self.assertIn("overflow-x:auto", rule)
+
     # ---- daylight ----
     def test_a_daylight_palette_exists_and_is_not_an_inversion(self):
         """Reading a phone at noon on open water is a contrast fight against
