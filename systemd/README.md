@@ -6,7 +6,7 @@ weekly, because On The Water and most of the others publish weekly and reading
 them daily is six requests a day to get the same page back.
 
     cp systemd/*.service systemd/*.timer ~/.config/systemd/user/
-    # WorkingDirectory is %h/tiderace; edit it if the checkout lives elsewhere
+    # WorkingDirectory is %h/glad-labs-products/tiderace; edit it if the checkout lives elsewhere
     systemctl --user daemon-reload
     systemctl --user enable --now tiderace-regs.timer tiderace-reports.timer
     loginctl enable-linger "$USER"   # so they run when you are not logged in

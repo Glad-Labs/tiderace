@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/tiderace
+WorkingDirectory=%h/glad-labs-products/tiderace
 # Only the two RIDEM sources. A size limit changing under a commercial licence
 # is the one thing here that costs money to miss, so it is checked daily while
 # the report outlets are left to their weekly rhythm.

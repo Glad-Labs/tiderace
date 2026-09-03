@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/mattm/Glad Labs Products/tiderace
+WorkingDirectory=%h/glad-labs-products/tiderace
 # Port 8765 is what `tailscale serve` proxies to. Changing it here without
 # changing the serve config takes the app off the tailnet.
 ExecStart=/usr/bin/python3 -m tiderace serve --port 8765

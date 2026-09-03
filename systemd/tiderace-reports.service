@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/tiderace
+WorkingDirectory=%h/glad-labs-products/tiderace
 # The six report outlets. On The Water and most of the others publish weekly,
 # so reading them daily would be six requests a day to get the same page back.
 ExecStart=/usr/bin/python3 -m tiderace scrape \
