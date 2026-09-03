@@ -467,6 +467,35 @@ class Handler(BaseHTTPRequestHandler):
                     ap = appliedmod.summary()
                 except Exception:                                  # noqa: BLE001
                     ap = {}
+                # Did the pages change at all? The question Matt asks of a
+                # regulation source, answered per page: the notices, which the
+                # reconciler plays forward on its own, and the limits table,
+                # which is the annual baseline regs.py is typed in from -- a
+                # change THERE is the one event that still needs a person.
+                sources = {}
+                baseline_moved = False
+                try:
+                    from . import fetch as fetchmod, scrapelog
+                    by = {r["source"]: r for r in scrapelog.status()["sources"]}
+                    for key, label in (("ridem_amendments", "notices"),
+                                       ("ridem_limits", "limits table")):
+                        r = by.get(key) or {}
+                        sources[key] = {
+                            "label": label,
+                            "url": fetchmod.SOURCES.get(key, {}).get("url"),
+                            "last_success": r.get("last_success"),
+                            "stale": r.get("stale", True),
+                            "content_first_seen": r.get("content_first_seen"),
+                            "content_changed_on": r.get("content_changed_on"),
+                            "change_observed": r.get("change_observed", False),
+                            "unchanged_days": r.get("unchanged_days"),
+                            "changed_today": r.get("changed_today", False),
+                            "diff": r.get("diff", ""),
+                        }
+                    baseline_moved = scrapelog.baseline_moved(
+                        by.get("ridem_limits") or {}, regsmod.COMMERCIAL_CHECKED_ON)
+                except Exception:                                  # noqa: BLE001
+                    pass
                 return self._send_json({
                     "as_of": when.isoformat(),
                     "rows": rows,
@@ -475,6 +504,9 @@ class Handler(BaseHTTPRequestHandler):
                     "applied_at": ap.get("applied_at"),
                     "applied_count": ap.get("count"),
                     "relaxed": ap.get("relaxed") or [],
+                    "sources": sources,
+                    "baseline_moved": baseline_moved,
+                    "transcribed_on": regsmod.COMMERCIAL_CHECKED_ON.isoformat(),
                 })
             if url.path == "/api/reports":
                 from . import reports as rep

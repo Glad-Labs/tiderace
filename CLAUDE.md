@@ -146,6 +146,18 @@ claimed:
   silent. The two tests that asserted scored ⊆ regulated were rewritten to
   assert that.
 
+Two paths carry rules into the app, and the difference is who read them.
+The in-season RIDEM notices are parsed by template (`ridem.py`), played
+forward (`reconcile.py`) and applied as an overlay beside `regs.py`
+(`applied.py`) with the notice and the sentence attached — that is mirroring
+a source, and it runs unattended. The annual limits table is what `regs.py`
+is typed in from by a person, and nothing automates that. What the app does
+instead is fingerprint both pages daily (`scrapelog.record(content=...)`) and
+say on the desk whether either changed; **a limits-table change after
+`COMMERCIAL_CHECKED_ON` is the signal to re-transcribe `regs.py`**, and it is
+the only regulation event that still needs a human. A number the *model*
+read (`parser="model"`, from `--use-model`) never reaches the overlay.
+
 A wrong size limit is not a bad forecast, it is a fine — and under Matt's
 father's commercial licence it is worse than a fine. When the app says a rule
 is not modelled, that is a fact about the app, not permission to keep the fish.

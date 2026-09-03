@@ -202,12 +202,22 @@ async function walk(url) {
                offsite: links.filter(a => /^https?:/.test(a.href)).length,
                verify: links.filter(a => /verify/i.test(a.textContent)).length,
                quotes: (sec.textContent.match(/[\u201c]/g) || []).length,
-               saysNotModelled: /not modelled/i.test(sec.textContent) };
+               saysNotModelled: /not modelled/i.test(sec.textContent),
+               // One verdict per RIDEM page, and it must be one of the three
+               // states -- a blank there reads as "fine so far".
+               pages: [...sec.querySelectorAll('.chg')].map(e => e.textContent.trim()),
+               verdicts: [...sec.querySelectorAll('.chg')].filter(e =>
+                 // Four states, and the fourth was added after this check was
+                 // written: a first sighting is "watched since", not "unchanged".
+                 // Missing it here reported verdicts:0 and failed -- the check has teeth.
+                 /unchanged since|CHANGED today|watched since|not fingerprinted/.test(e.textContent)).length };
     });
     step('desk regs: every rule links to its notice',
          r.offsite >= 6 && r.verify >= 6, JSON.stringify(r));
     step('desk regs: names the species it has no rule for',
          r.saysNotModelled, JSON.stringify(r));
+    step('desk regs: says whether each RIDEM page changed',
+         r.pages.length === 2 && r.verdicts === 2, r.pages.join(' | '));
   }
   await page.screenshot({ path: 'walkthrough-desk.png' });
 

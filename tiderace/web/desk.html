@@ -80,6 +80,16 @@ h2{font:600 13px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
 #regs .rv{font:13px/1.5 var(--mono); color:var(--ink); margin-top:5px}
 #regs .rv.shut{color:var(--crit)}
 #regs .names{font:13px/1.9 var(--mono); color:var(--ink-2)}
+#regs .chg{font:13px/1.5 var(--mono)}
+#regs .chg .k{color:var(--ink-2); display:inline-block; min-width:13ch;
+              padding-right:1ch}  /* "limits table" is 12ch; 9 ran it into its value */
+#regs details.diff{margin-top:6px}
+#regs details.diff summary{cursor:pointer; color:var(--depth); font:12px/1.6 var(--mono)}
+#regs pre.diff{margin:6px 0 0; padding:9px; max-height:320px; overflow:auto;
+               white-space:pre-wrap; word-break:break-word;
+               font:11px/1.5 var(--mono); border:1px solid var(--hair);
+               border-radius:6px; background:rgba(0,0,0,.18)}
+#regs pre.diff .add{color:var(--good)} #regs pre.diff .del{color:var(--crit)}
 .warn{color:var(--warn)}
 .crit{color:var(--crit)}
 .tag{
@@ -277,8 +287,38 @@ const RENDER = {
              RIDEM table before keeping one.</div>
          </div>`
       : '';
+    /* Did the pages change at all? One line per RIDEM page. This is the
+     * outer loop Matt asked for -- check whether anything moved, then verify
+     * it yourself -- and it was missing: the scrape re-read both pages every
+     * morning with no memory of yesterday. */
+    const day = iso => (iso || '').slice(0, 10);
+    const diffHtml = t => esc(t).split('\n').map(l =>
+      l.startsWith('+') && !l.startsWith('+++') ? `<span class="add">${l}</span>`
+      : l.startsWith('-') && !l.startsWith('---') ? `<span class="del">${l}</span>`
+      : l).join('\n');
+    const pages = Object.entries(d.sources || {}).map(([key, p]) => {
+      let v;
+      if (!p.content_changed_on) v = '<span class="dim">not fingerprinted yet — runs at 06:20</span>';
+      // Seen once is not "unchanged since": nothing has been compared yet.
+      else if (!p.change_observed) v = `watched since ${esc(day(p.content_first_seen))} · no change seen`;
+      else if (p.changed_today) v = `<b class="crit">CHANGED today</b>`;
+      else v = `unchanged since ${esc(day(p.content_changed_on))}`
+               + (p.unchanged_days != null ? ` · ${Math.round(p.unchanged_days)} d` : '');
+      const link = p.url ? ` · <a href="${esc(p.url)}" rel="noopener" target="_blank">open</a>` : '';
+      const stale = p.stale ? ' <span class="crit">· not read in 48 h</span>' : '';
+      const diff = p.diff ? `<details class="diff"><summary>what changed</summary>
+          <pre class="diff">${diffHtml(p.diff)}</pre></details>` : '';
+      return `<div class="chg"><span class="k">${esc(p.label)}</span>${v}${link}${stale}</div>${diff}`;
+    }).join('');
+    const baseline = d.baseline_moved
+      ? `<div class="warn" style="margin-top:9px">The limits table changed after
+           regs.py was transcribed (${esc(d.transcribed_on || '')}). The
+           reconciler only plays notices forward — a change to the table is the
+           one thing that still needs a person. Read the diff above.</div>`
+      : '';
     $('#regs').innerHTML =
       `<h2>Rules in force ${esc(d.as_of || '')}</h2>
+       <div class="card">${pages || '<div class="empty">no RIDEM sources configured</div>'}${baseline}</div>
        ${d.applied_at ? `<div class="dim">${esc(String(d.applied_count || 0))}
           applied automatically from RIDEM notices, last run
           ${esc(d.applied_at)}.${(d.relaxed || []).length
@@ -299,9 +339,15 @@ const RENDER = {
         : r.age_hours < 48 ? Math.round(r.age_hours) + ' h ago'
         : Math.round(r.age_hours / 24) + ' d ago';
       const cls = r.stale ? 'crit' : '';
-      const why = !r.ever_ran ? 'no run yet'
+      const why = (!r.ever_ran ? 'no run yet'
         : !r.ok ? esc(r.detail || 'failed')
-        : esc(r.detail || 'ok');
+        : esc(r.detail || 'ok'))
+        // Seen once is "watched since", not "unchanged 0 d": nothing has been
+        // compared yet, and the word claims a comparison happened.
+        + (r.content_changed_on == null ? ''
+           : !r.change_observed ? ` · watched since ${(r.content_first_seen || '').slice(0, 10)}`
+           : r.changed_today ? ' · changed today'
+           : ` · unchanged ${Math.round(r.unchanged_days)} d`);
       return `<div class="row">
         <span class="k">${esc(r.source)}</span>
         <span class="v ${cls}">${age} · ${why}</span></div>`;

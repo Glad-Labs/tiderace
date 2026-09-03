@@ -372,8 +372,7 @@ def _cmd_scrape(args) -> int:
                                                   use_model=args.use_model)
                 n = len(out.get("changes", []))
                 print(f"    {out['rule_parsed']} parsed by rule, "
-                      f"{out['rule_unparsed']} unparsed · {out['queued']} queued "
-                      f"({out['backend']})")
+                      f"{out['rule_unparsed']} unparsed ({out['backend']})")
                 for c in out.get("changes", [])[:6]:
                     x = "✓" if c.get("cross_checked") else " "
                     print(f"      {x} [{c['confidence']:<6}] {c['effective_date']} "
@@ -396,12 +395,18 @@ def _cmd_scrape(args) -> int:
             # On a timer nobody reads the output, so the outcome has to end up
             # somewhere the interface can show it going stale.
             if kind == "regulation":
-                all_changes.extend(out.get("changes", []))
+                # Only what the template parser read. With --use-model the
+                # extractor also returns the model's reading of the sentences
+                # the template missed, and those are claims: a number a model
+                # read must not become a limit the phone shows in red.
+                all_changes.extend(c for c in out.get("changes", [])
+                                   if c.get("parser") == "rule")
             scrapelog.record(key, kind, True,
-                             "%d queued" % out.get("queued", 0)
+                             "%d notices" % out.get("rule_parsed", 0)
                              if kind == "regulation"
                              else "%d bait, %d catch" % (len(out.get("bait", [])),
-                                                         len(out.get("catches", []))))
+                                                         len(out.get("catches", []))),
+                             content=out.get("text"))
         except extract.ExtractionUnavailable as e:
             print(f"    ! {e}")
             scrapelog.record(key, kind, False, str(e))
@@ -427,9 +432,9 @@ def _cmd_scrape(args) -> int:
             print(f"\n  ! could not apply: {type(e).__name__}: {e}")
     print()
     print("  Applied to the overlay above. `regs.py` itself is unchanged —\n"
-          "  it stays hand-written. Check any applied number against its\n"
-          "  notice from the app, or with:")
-    print("    python3 -m tiderace review\n")
+          "  it stays hand-written. Every applied number links to its notice\n"
+          "  on the desk's Regs tab; `scrape --diff` shows where regs.py\n"
+          "  disagrees with RIDEM.\n")
     return 0
 
 

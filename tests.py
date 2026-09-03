@@ -5009,12 +5009,17 @@ class ScrapeFreshness(unittest.TestCase):
     """
 
     def _tmp(self):
-        import tempfile, os
-        fd, p = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        os.unlink(p)
-        self.addCleanup(lambda: os.path.exists(p) and os.unlink(p))
-        return p
+        # A directory, not a file: record() keeps a snapshot of the page
+        # beside the runs file, and that has to be cleaned up with it.
+        import tempfile, os, shutil
+        d = tempfile.mkdtemp(prefix="tiderace-runs-")
+        self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
+        return os.path.join(d, "runs.json")
+
+    def _row(self, path, source, now=None):
+        from tiderace import scrapelog
+        return [r for r in scrapelog.status(path=path, now=now)["sources"]
+                if r["source"] == source][0]
 
     def test_a_failure_does_not_erase_the_last_good_read(self):
         from tiderace import scrapelog
@@ -5060,6 +5065,145 @@ class ScrapeFreshness(unittest.TestCase):
         from tiderace import scrapelog
         scrapelog.record("x", "report", True, "fine",
                          path="/nonexistent/dir/that/cannot/exist/runs.json")
+
+    def test_a_first_sighting_starts_the_clock_without_calling_it_a_change(self):
+        """Matt: "just go in and see if anything's changed at all." The scrape
+        could not answer that -- it re-read both RIDEM pages every morning
+        with no memory of yesterday. The first run has nothing to compare
+        against, and reporting it as a change put "CHANGED today" on the
+        desk and a false alarm about the limits table."""
+        from datetime import datetime
+        from tiderace import scrapelog
+        p = self._tmp()
+        d1 = datetime(2026, 9, 1, 6)
+        scrapelog.record("ridem_limits", "regulation", True, "ok", path=p,
+                         content="min 34 inches\nbag 1", at=d1)
+        r = self._row(p, "ridem_limits", now=d1)
+        self.assertEqual(r["content_first_seen"], r["content_changed_on"])
+        self.assertFalse(r["change_observed"])
+        self.assertFalse(r["changed_today"], "seen once is not a change")
+        self.assertEqual(r["diff"], "")
+
+    def test_unchanged_content_carries_the_date_it_last_changed(self):
+        from datetime import datetime
+        from tiderace import scrapelog
+        p = self._tmp()
+        d1, d3 = datetime(2026, 9, 1, 6), datetime(2026, 9, 3, 6)
+        scrapelog.record("ridem_limits", "regulation", True, "ok", path=p,
+                         content="min 34 inches\nbag 1", at=d1)
+        scrapelog.record("ridem_limits", "regulation", True, "ok", path=p,
+                         content="min 34 inches\nbag 1", at=d3)
+        r = self._row(p, "ridem_limits", now=d3)
+        self.assertEqual(r["content_changed_on"][:10], "2026-09-01",
+                         "same text two days later keeps the first date")
+        self.assertAlmostEqual(r["unchanged_days"], 2.0, places=1)
+        self.assertFalse(r["changed_today"])
+
+    def test_changed_content_moves_the_date_and_keeps_the_diff(self):
+        """What moved, not just that something did -- and the diff of the
+        last change stays readable through the unchanged runs after it."""
+        from datetime import datetime
+        from tiderace import scrapelog
+        p = self._tmp()
+        d1, d2, d3 = (datetime(2026, 9, 1, 6), datetime(2026, 9, 3, 6),
+                      datetime(2026, 9, 4, 6))
+        scrapelog.record("ridem_limits", "regulation", True, "ok", path=p,
+                         content="Black Sea Bass\nmin 11 inches\n300 lb/day", at=d1)
+        scrapelog.record("ridem_limits", "regulation", True, "ok", path=p,
+                         content="Black Sea Bass\nmin 11 inches\n400 lb/day", at=d2)
+        r = self._row(p, "ridem_limits", now=d2)
+        self.assertEqual(r["content_changed_on"][:10], "2026-09-03")
+        self.assertTrue(r["change_observed"])
+        self.assertTrue(r["changed_today"])
+        self.assertIn("-300 lb/day", r["diff"])
+        self.assertIn("+400 lb/day", r["diff"])
+        scrapelog.record("ridem_limits", "regulation", True, "ok", path=p,
+                         content="Black Sea Bass\nmin 11 inches\n400 lb/day", at=d3)
+        r = self._row(p, "ridem_limits", now=d3)
+        self.assertEqual(r["content_changed_on"][:10], "2026-09-03")
+        self.assertFalse(r["changed_today"])
+        self.assertIn("+400 lb/day", r["diff"], "the last change stays readable")
+        self.assertAlmostEqual(r["unchanged_days"], 1.0, places=1)
+
+    def test_a_failed_read_is_not_a_change(self):
+        """RIDEM returning a 503 is not the rules moving."""
+        from datetime import datetime
+        from tiderace import scrapelog
+        p = self._tmp()
+        d1, d2 = datetime(2026, 9, 1, 6), datetime(2026, 9, 2, 6)
+        scrapelog.record("ridem_limits", "regulation", True, "ok", path=p,
+                         content="min 34", at=d1)
+        scrapelog.record("ridem_limits", "regulation", False, "503", path=p, at=d2)
+        r = self._row(p, "ridem_limits", now=d2)
+        self.assertEqual(r["content_changed_on"][:10], "2026-09-01")
+        self.assertEqual(r["content_sha"], scrapelog.fingerprint("min 34"))
+        self.assertFalse(r["changed_today"])
+
+    def test_a_table_change_after_transcription_is_flagged(self):
+        """The limits table is what regs.py is typed in from. The reconciler
+        only plays notices forward, so a change to the table is the one event
+        that still needs a person, and nothing watched for it."""
+        from datetime import date
+        from tiderace import scrapelog
+        seen = "2026-06-01T06:24:00"
+        self.assertTrue(scrapelog.baseline_moved(
+            {"content_first_seen": seen, "content_changed_on": "2026-09-03T06:24:00"},
+            date(2026, 8, 28)))
+        self.assertFalse(scrapelog.baseline_moved(
+            {"content_first_seen": seen, "content_changed_on": "2026-08-20T06:24:00"},
+            date(2026, 8, 28)))
+        self.assertFalse(scrapelog.baseline_moved(
+            {"content_first_seen": seen, "content_changed_on": "2026-08-28T06:24:00"},
+            date(2026, 8, 28)), "the day of transcription is what was transcribed")
+        self.assertFalse(scrapelog.baseline_moved({}, date(2026, 8, 28)),
+                         "never fingerprinted is not evidence of a change")
+        today = "2026-09-03T06:24:00"
+        self.assertFalse(scrapelog.baseline_moved(
+            {"content_first_seen": today, "content_changed_on": today}, date(2026, 8, 28)),
+            "seen once is not a change, even if that once is after the transcription")
+
+    def test_regulations_no_longer_land_in_the_review_queue(self):
+        """By September 2026 the queue held 110 regulation rows -- the same
+        notices applied.py had already applied, pending forever with no
+        approve action anywhere. Matt: "I shouldn't be reviewing that stuff."
+        The rule parser's output goes to the overlay and nowhere else."""
+        from tiderace import extract
+        doc = {"url": "https://dem.ri.gov/t", "status": 200,
+               "fetched_at": "2026-09-03T06:24:35", "title": "t",
+               "text": ("Beginning 12:00AM on Sunday, August 30, 2026, the "
+                        "commercial possession limit for Black Sea Bass will be "
+                        "four hundred (400) pounds per day until further notice.")}
+        queued = []
+        real_fetch, real_queue = extract.fetch.fetch, extract._queue
+        extract.fetch.fetch = lambda url, **kw: doc
+        extract._queue = lambda rec, path=None: queued.append(rec)
+        try:
+            out = extract.extract_regulations("https://dem.ri.gov/t")
+        finally:
+            extract.fetch.fetch, extract._queue = real_fetch, real_queue
+        self.assertEqual(len(out["changes"]), 1, "the notice was read")
+        self.assertEqual(out["changes"][0]["parser"], "rule")
+        self.assertEqual(queued, [], "and not queued")
+        self.assertEqual(out["text"], doc["text"],
+                         "the page rides along so the caller can fingerprint it")
+
+    def test_the_scrape_hands_the_page_to_the_bookkeeping(self):
+        """Fingerprinting lives in scrapelog and only the scrape has the page.
+        Without this the two RIDEM sources can never say "unchanged"."""
+        import pathlib
+        src = (pathlib.Path(__file__).parent / "tiderace" / "cli.py").read_text()
+        fn = strip_py_comments(src.split("def _cmd_scrape(")[1].split("\ndef ")[0])
+        self.assertIn('content=out.get("text")', fn)
+
+    def test_only_the_rule_parser_reaches_the_overlay(self):
+        """With --use-model the extractor also returns the model's reading of
+        the sentences the template missed, marked parser="model". A number a
+        model read is a claim; the overlay is what the phone shows in red."""
+        import pathlib
+        src = (pathlib.Path(__file__).parent / "tiderace" / "cli.py").read_text()
+        fn = strip_py_comments(src.split("def _cmd_scrape(")[1].split("\ndef ")[0])
+        gate = fn.split("all_changes.extend(")[1].split("scrapelog.record")[0]
+        self.assertIn('c.get("parser") == "rule"', gate)
 
     def test_the_scrape_records_every_outcome(self):
         """Both arms: the success at the end of the block, and each except."""
@@ -5237,6 +5381,25 @@ class TheDeskPageIsReachable(unittest.TestCase):
         self.assertIn('"warning"', route)
         self.assertIn("RULES NOT MODELLED", self.page,
                       "the phone still says it per species")
+
+    def test_the_regs_tab_says_whether_each_page_changed(self):
+        """Matt: "just go in and see if anything's changed at all." One
+        verdict per RIDEM page, and the limits table gets its own flag,
+        because a change there is the one that still needs a person."""
+        route = self.server.split('url.path == "/api/regs"')[1].split("if url.path ==")[0]
+        for key in ('"sources":', '"baseline_moved":', "ridem_amendments",
+                    "ridem_limits", "scrapelog.baseline_moved(", "COMMERCIAL_CHECKED_ON"):
+            self.assertIn(key, route, key)
+        regs = self._regs_renderer()
+        for key in ("change_observed", "changed_today", "unchanged since",
+                    "watched since", "baseline_moved", "p.diff"):
+            self.assertIn(key, regs, key)
+        # The Sources tab tells the same fact in miniature, and "unchanged 0 d"
+        # on a first sighting is the same false claim the regs tab avoids.
+        js = strip_comments(self.desk)
+        sources = js.split("async sources()")[1].split("\n  async ")[0]
+        self.assertIn("change_observed", sources)
+        self.assertIn("watched since", sources)
 
     def test_the_desk_works_at_the_mooring(self):
         """Its four readings are what you catch up on at the dock, which is
