@@ -28,6 +28,15 @@ from . import features, spots
 LOG_PATH = os.environ.get(
     "TIDERACE_LOG", os.path.join(os.path.dirname(__file__), "..", "data", "catch_log.jsonl")
 )
+# Photos of the fish, kept beside the log. Same tier of privacy as the log
+# itself: a catch photo carries the coordinate it was taken at in its EXIF,
+# which is the one thing this project has never shared. Gitignored, served
+# only to the page over the tailnet, never transmitted anywhere else.
+PHOTO_DIR = os.environ.get(
+    "TIDERACE_PHOTOS", os.path.join(os.path.dirname(__file__), "..", "data", "photos")
+)
+PHOTO_MAX_BYTES = 4 * 1024 * 1024     # the page shrinks to ~0.3 MB; this is slack
+PHOTOS_PER_ENTRY = 6
 
 # What an LLM should pull out of a voice memo or a written fishing report.
 # Kept deliberately small: every field is either something you actually know
@@ -84,6 +93,9 @@ class Entry:
     confidence: str = "high"
     conditions: dict = field(default_factory=dict)
     logged_at: str = ""
+    # Paths under PHOTO_DIR, relative, of the photos saved with this trip.
+    # Older rows have no field and load as an empty list downstream.
+    photos: list[str] = field(default_factory=list)
 
 
 def snapshot(spot_key: str | None, when: datetime, species: str | None = None,
@@ -213,6 +225,75 @@ def record_trip(entries: list[Entry], path: str = LOG_PATH) -> list[Entry]:
             e.conditions = dict(first.conditions)
         out.append(record(e, path))
     return out
+
+
+def store_photos(blobs: list[bytes], when: datetime | None = None,
+                 root: str | None = None) -> list[str]:
+    """Keep photos of the fish beside the log. Returns their relative paths.
+
+    JPEG only, because that is what a phone produces and what photolog can
+    read EXIF out of; a PNG screenshot of a photo is not a photo of a fish.
+    Each file is created by mkstemp -- atomically, owner-only -- and moved
+    into its final name with os.replace, so a torn write is a temp file and
+    never a half photo under a real name. A failure part-way removes what
+    this call already wrote: the entry is not saved, so its photos must not
+    be either.
+    """
+    import tempfile
+    import uuid
+    root = root or PHOTO_DIR
+    if len(blobs) > PHOTOS_PER_ENTRY:
+        raise ValueError(f"{len(blobs)} photos on one trip; keep it to "
+                         f"{PHOTOS_PER_ENTRY}")
+    day = (when or datetime.now()).strftime("%Y-%m-%d")
+    stamp = uuid.uuid4().hex[:10]
+    folder = os.path.join(root, day)
+    os.makedirs(folder, exist_ok=True)
+    out: list[str] = []
+    try:
+        for i, b in enumerate(blobs):
+            if b[:2] != b"\xff\xd8":
+                raise ValueError(f"photo {i + 1} is not a JPEG")
+            if len(b) > PHOTO_MAX_BYTES:
+                raise ValueError(f"photo {i + 1} is {len(b) / 1048576:.1f} MB; "
+                                 f"the limit is {PHOTO_MAX_BYTES // 1048576} MB")
+            rel = f"{day}/{stamp}-{i}.jpg"
+            fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=".jpg", dir=folder)
+            try:
+                view = memoryview(b)
+                while view:
+                    n = os.write(fd, view)
+                    view = view[n:]
+            finally:
+                os.close(fd)
+            os.replace(tmp, os.path.join(root, rel))
+            out.append(rel)
+    except BaseException:
+        discard_photos(out, root)
+        raise
+    return out
+
+
+def discard_photos(rels: list[str], root: str | None = None) -> None:
+    """Remove photos whose entry did not make it into the log."""
+    root = root or PHOTO_DIR
+    for rel in rels:
+        p = photo_path(rel, root)
+        if p:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
+def photo_path(rel: str, root: str | None = None) -> str | None:
+    """The file for a relative path, or None if it is missing or the path
+    tries to leave the photo directory."""
+    base = os.path.abspath(root or PHOTO_DIR)
+    p = os.path.abspath(os.path.join(base, os.path.normpath(rel or "")))
+    if not p.startswith(base + os.sep) or not os.path.isfile(p):
+        return None
+    return p
 
 
 def load(path: str = LOG_PATH) -> list[dict]:

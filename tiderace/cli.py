@@ -78,6 +78,9 @@ def run(argv=None) -> int:
     lg.add_argument("--method")
     lg.add_argument("--bait")
     lg.add_argument("--notes")
+    lg.add_argument("--photo", action="append", metavar="JPEG",
+                    help="a photo of the fish to keep with the entry (repeatable); "
+                         "stays on this machine")
     lg.add_argument("--source", default="manual",
                     choices=("manual", "voice", "report", "photo"))
 
@@ -313,6 +316,17 @@ def _cmd_log(args) -> int:
         bait_observed=args.bait, notes=args.notes, source=args.source,
         lat=lat, lon=lon,
     )
+    if args.photo:
+        blobs = []
+        for fp in args.photo:
+            with open(fp, "rb") as fh:
+                blobs.append(fh.read())
+        try:
+            entry.photos = catchlog.store_photos(
+                blobs, datetime.fromisoformat(entry.started_at))
+        except (ValueError, OSError) as exc:
+            print(f"  {exc}", file=sys.stderr)
+            return 2
     catchlog.record(entry)
     n = len(entry.conditions)
     where = args.spot or f"{lat:.4f},{lon:.4f}"

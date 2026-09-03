@@ -1951,6 +1951,123 @@ class CatchLogCoordinates(unittest.TestCase):
             self.assertAlmostEqual(row["lon"], sp.lon)
 
 
+class FishPhotos(unittest.TestCase):
+    """A photo of the fish is kept with the trip. Before this the phone's only
+    photo control carried `capture`, which opens the camera and never offers
+    the gallery, and the photo it took was read for species and place and
+    then thrown away. Now either route attaches the photo, the server writes
+    it beside the log, and the row remembers where."""
+    JPEG = b"\xff\xd8\xff\xe0" + bytes(64) + b"\xff\xd9"
+
+    def test_photos_are_written_atomically_and_owner_only(self):
+        import stat
+        import tempfile
+        from tiderace import log as catchlog
+        with tempfile.TemporaryDirectory() as d:
+            rels = catchlog.store_photos([self.JPEG, self.JPEG],
+                                         datetime(2026, 9, 3, 5, 0), root=d)
+            self.assertEqual(len(rels), 2)
+            for rel in rels:
+                self.assertTrue(rel.startswith("2026-09-03/"), rel)
+                path = catchlog.photo_path(rel, d)
+                self.assertIsNotNone(path, rel)
+                self.assertEqual(open(path, "rb").read(), self.JPEG)
+                self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600,
+                                 "a photo with a coordinate in it is owner-only")
+            leftovers = [f for f in os.listdir(os.path.join(d, "2026-09-03"))
+                         if f.startswith(".tmp-")]
+            self.assertEqual(leftovers, [], "temp files must be replaced, not left")
+
+    def test_a_bad_photo_leaves_nothing_behind(self):
+        """Not a JPEG, or over the cap, and the whole batch is refused --
+        including the photos written before the bad one, because the entry
+        will not be saved and orphan photos are spot data nobody can find."""
+        import tempfile
+        from tiderace import log as catchlog
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):
+                catchlog.store_photos([self.JPEG, b"\x89PNG\r\n" + bytes(32)],
+                                      datetime(2026, 9, 3), root=d)
+            self.assertEqual(os.listdir(os.path.join(d, "2026-09-03")), [])
+            big = self.JPEG + bytes(catchlog.PHOTO_MAX_BYTES)
+            with self.assertRaises(ValueError):
+                catchlog.store_photos([big], datetime(2026, 9, 3), root=d)
+            with self.assertRaises(ValueError):
+                catchlog.store_photos([self.JPEG] * (catchlog.PHOTOS_PER_ENTRY + 1),
+                                      datetime(2026, 9, 3), root=d)
+
+    def test_the_photo_route_cannot_leave_the_photo_directory(self):
+        import tempfile
+        from tiderace import log as catchlog
+        with tempfile.TemporaryDirectory() as d:
+            secret = os.path.join(d, "catch_log.jsonl")
+            open(secret, "w").close()
+            root = os.path.join(d, "photos")
+            rel = catchlog.store_photos([self.JPEG], datetime(2026, 9, 3), root=root)[0]
+            self.assertIsNotNone(catchlog.photo_path(rel, root))
+            for bad in ("../catch_log.jsonl", "/etc/passwd", "2026-09-03/../../catch_log.jsonl",
+                        "", "2026-09-03", "2026-09-03/missing.jpg"):
+                self.assertIsNone(catchlog.photo_path(bad, root), bad)
+
+    def test_an_entry_remembers_its_photos(self):
+        import json
+        import tempfile
+        from tiderace import log as catchlog
+        self.assertEqual(catchlog.Entry.__dataclass_fields__["photos"].default_factory(), [])
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "log.jsonl")
+            e = catchlog.Entry(spot="at:41.44080,-71.42280", species="striped_bass",
+                               started_at="2026-09-03T05:00", count=1,
+                               conditions={"current_speed": 1.0},
+                               photos=["2026-09-03/abc-0.jpg"])
+            catchlog.record(e, path)
+            row = json.loads(open(path).read().strip())
+            self.assertEqual(row["photos"], ["2026-09-03/abc-0.jpg"])
+            self.assertEqual(catchlog.load(path)[0].get("photos"), ["2026-09-03/abc-0.jpg"])
+
+    def test_the_server_decodes_stores_then_records_and_discards_on_failure(self):
+        """Order matters: record() refuses a duplicate submit, and the photos
+        it arrived with must not stay on disk pointing at nothing."""
+        import base64
+        import pathlib
+        from tiderace.server import Handler
+        b64 = base64.b64encode(self.JPEG).decode()
+        blobs = Handler._photo_blobs({"photos": [b64, {"name": "a.jpg", "data": b64}]})
+        self.assertEqual(blobs, [self.JPEG, self.JPEG])
+        self.assertEqual(Handler._photo_blobs({}), [])
+        with self.assertRaises(ValueError):
+            Handler._photo_blobs({"photos": "notalist"})
+        srv = strip_py_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "server.py").read_text())
+        fn = srv.split("def _record(")[1].split("\n    def ")[0]
+        self.assertLess(fn.index("store_photos"), fn.index("catchlog.record("))
+        self.assertIn("discard_photos(entry.photos)", fn)
+        self.assertIn('url.path.startswith("/photos/")', srv, "the page has to be able to fetch one back")
+        trk = strip_py_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "track.py").read_text())
+        self.assertIn('"photos"', trk.split("def with_catches(")[1].split("\ndef ")[0],
+                      "the trips tab reads catches off the track join")
+
+    def test_the_page_offers_the_gallery_and_sends_what_it_attached(self):
+        import pathlib
+        page = strip_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text())
+        cam = page.split('id="slogcam"')[1].split("</label>")[0]
+        self.assertIn('capture="environment"', cam, "the camera button still opens the camera")
+        pick = page.split('id="slogpick"')[1].split("</label>")[0]
+        self.assertIn('type="file"', pick)
+        self.assertNotIn("capture", pick,
+                         "capture is what hid the gallery; the second input must not carry it")
+        submit = page.split("form.onsubmit = async e => {")[1].split("\n  }\n")[0]
+        self.assertIn("body.photos = form._photos", submit)
+        self.assertIn("form._photos = [];", submit, "cleared once the entry is queued")
+        wire = page.split("function wirePhoto(form){")[1].split("\n  function wireMic")[0]
+        for id_ in ("'slogcam'", "'slogpick'"):
+            self.assertIn(id_, wire, id_ + " is not wired to the ingest path")
+        self.assertIn("form._photos.push(p)", wire, "the photo has to be kept, not just read")
+        self.assertIn('src="/photos/', page, "the trips tab shows what was attached")
+
+
 class DepthLayer(unittest.TestCase):
     def setUp(self):
         from tiderace import charts
@@ -5622,7 +5739,7 @@ class EverythingOnTheWaterIsReachable(unittest.TestCase):
         """photolog refuses to guess it and so must the form: a camera roll
         cannot honestly say how many fish were caught."""
         js = strip_comments(self.page)
-        handler = js.split("camIn.onchange")[1].split("const btn =")[0]
+        handler = js.split("async function ingest(")[1].split("for (const [id, idle]")[0]
         self.assertNotIn("[name=count]", handler)
         self.assertNotIn("set('count'", handler)
 

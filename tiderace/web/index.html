@@ -679,14 +679,24 @@ body.sheet-peek #trip{
    fills the form and never saves. The endpoint has existed since photolog
    landed and nothing in the UI ever called it, so a fish photo could only be
    read by running the CLI at the dock. */
-#slogcam{
+#slogcam, #slogpick{
   display:block; text-align:center; cursor:pointer;
   padding:13px 14px; margin-top:8px; border-radius:10px;
   border:1px solid var(--hair); background:var(--panel-2, rgba(255,255,255,.04));
   color:var(--ink); font:600 14px/1 var(--display);
 }
-#slogcam:active{transform:scale(.99)}
-#slogcam.busy{opacity:.55}
+#slogcam:active, #slogpick:active{transform:scale(.99)}
+#slogcam.busy, #slogpick.busy{opacity:.55}
+/* What is attached to this trip. Thumbnails, because a count is not proof
+   the right photo went in; tap one to take it back out. */
+#slogshots{display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:8px}
+#slogshots:empty{display:none}
+#slogshots img{width:56px; height:56px; object-fit:cover; border-radius:8px;
+               border:1px solid var(--hair); cursor:pointer}
+#slogshots .sdim{padding:0; flex-basis:100%}
+.trip .shots{display:flex; gap:4px; margin-top:6px}
+.trip .shots img{width:44px; height:44px; object-fit:cover; border-radius:6px;
+                 border:1px solid var(--hair)}
 /* The scorecard. Deliberately plain and deliberately first: it is the only
    thing in the app allowed to say the rest of it does not work yet. */
 .ev{padding:14px 16px; border-bottom:1px solid var(--hair)}
@@ -2240,9 +2250,13 @@ function tripRow(t, i){
     `${(t.sessions || []).length} spot${(t.sessions||[]).length === 1 ? '' : 's'}`,
     t.fishing_minutes ? `${Math.round(t.fishing_minutes)} min fishing` : '',
   ].filter(Boolean).join(' · ');
+  const shots = (t.catches || []).flatMap(c => c.photos || []).slice(0, 4)
+    .map(p => `<img src="/photos/${encodeURIComponent(p).replace(/%2F/g, '/')}" alt="" loading="lazy">`)
+    .join('');
   return `<div class="trip" data-trip="${i}">
       <div class="when">${tesc(when)}</div>${fish}
       <div class="meta">${tesc(bits)}${sp ? ' · <span class="sp">' + tesc(sp) + '</span>' : ''}</div>
+      ${shots ? `<div class="shots">${shots}</div>` : ''}
     </div>`;
 }
 
@@ -3272,9 +3286,13 @@ window.surveyURL = (lat, lon) =>
         </button>
         <form id="slogform" novalidate>
           <button id="slogmic" type="button">🎙 Say the trip</button>
-          <label id="slogcam">📷 Photo of the fish
+          <label id="slogcam">📷 Take a photo
             <input type="file" accept="image/*" capture="environment" multiple hidden>
           </label>
+          <label id="slogpick">🖼 Add from your photos
+            <input type="file" accept="image/*" multiple hidden>
+          </label>
+          <div id="slogshots"></div>
           <div id="slogheard"></div>
           <select id="slogsp" name="species"></select>
           <div id="slogwarn"></div>
@@ -3373,37 +3391,69 @@ window.surveyURL = (lat, lon) =>
       return {b64: btoa(bin), hadExif: !!app1};
     }
 
-    const cam = document.getElementById('slogcam');
-    const camIn = cam && cam.querySelector('input[type=file]');
-    if (camIn) camIn.onchange = async () => {
-      const files = Array.from(camIn.files || []).slice(0, 12);
+    /* Two ways in, one path through. The camera input keeps `capture`,
+       which is what opens the camera on a phone. The second input has no
+       `capture`, because that attribute is exactly what stopped the gallery
+       ever being offered: "add an existing photo of the fish" had no route
+       at all. Either way the photo is KEPT -- shrunk with its EXIF, attached
+       to this form, written beside the log entry when the trip is saved.
+       Reading it for species and place is the bonus that runs after, and a
+       photo with no EXIF is still a photo of the fish. */
+    form._photos = form._photos || [];
+    const MAX_SHOTS = 6;
+    const strip = document.getElementById('slogshots');
+    const heard = document.getElementById('slogheard');
+    function paintShots(){
+      if (!strip) return;
+      const n = form._photos.length;
+      strip.innerHTML = form._photos.map((p, i) =>
+        `<img src="data:image/jpeg;base64,${p.data}" alt="" data-i="${i}" title="tap to remove">`).join('') +
+        (n ? `<span class="sdim">${n} photo${n === 1 ? '' : 's'} saved with this trip · tap one to remove it</span>` : '');
+      strip.querySelectorAll('img').forEach(im => im.onclick = () => {
+        form._photos.splice(+im.dataset.i, 1); paintShots();
+      });
+    }
+    paintShots();
+
+    async function ingest(input, label, idle){
+      const files = Array.from(input.files || []).slice(0, MAX_SHOTS);
       if (!files.length) return;
-      const heard = document.getElementById('slogheard');
-      cam.classList.add('busy');
-      cam.firstChild.nodeValue = `📷 reading ${files.length} photo…`;
+      label.classList.add('busy');
+      label.firstChild.nodeValue = `reading ${files.length} photo…`;
+      const fresh = [];
+      let missing = 0;
       try{
-        const photos = [];
-        let missing = 0;
         for (const f of files){
+          if (form._photos.length >= MAX_SHOTS) break;
           const r = await shrink(f);
-          photos.push(r.b64);
+          const p = {name: f.name || 'photo.jpg', data: r.b64};
+          form._photos.push(p); fresh.push(p);
           if (!r.hadExif) missing++;
         }
+        paintShots();
+      } catch(e){
+        heard.className = 'show';
+        heard.innerHTML = 'Could not read those: ' + esc(e.message) + '<br>Type it in instead.';
+        label.classList.remove('busy'); label.firstChild.nodeValue = idle; input.value = '';
+        return;
+      }
+      // Attached. Now the optional part: EXIF for when and where, the vision
+      // model for what. Species and place only -- `count` is deliberately
+      // left alone: a photograph cannot honestly say how many fish were
+      // caught, and photolog refuses to guess it. You fill that in.
+      const got = `<b>${fresh.length} photo${fresh.length === 1 ? '' : 's'} attached.</b> `;
+      try{
         const r = await fetch('/api/log/photo', {
           method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({photos})
+          body: JSON.stringify({photos: fresh.map(p => p.data)})
         });
         const p = await r.json();
         if (p.error) throw new Error(p.error);
         const trip = (p.trips || [])[0];
         if (!trip) throw new Error(
-          missing === files.length
-            ? 'those photos carry no EXIF, so there is no time or place in them'
-            : 'nothing recognisable in those');
-
-        // Species and place only. `count` is deliberately left alone: a
-        // photograph cannot honestly say how many fish were caught, and
-        // photolog refuses to guess it. You fill that in.
+          missing === fresh.length
+            ? 'no EXIF in them, so no time or place to read'
+            : 'nothing recognisable in them');
         const spSel = document.getElementById('slogsp');
         const sp = ((trip.catch || [])[0] || {}).species;
         if (sp && spSel){ spSel.value = sp; spSel.dispatchEvent(new Event('change')); }
@@ -3414,27 +3464,29 @@ window.surveyURL = (lat, lon) =>
           if (el) el.value = trip.started_at.slice(0, 16);
         }
         heard.className = 'show';
-        heard.innerHTML = '<b>saw:</b> ' +
+        heard.innerHTML = got + 'saw: ' +
           (sp ? esc(sp.replace(/_/g,' ')) : 'no fish it could name') +
           (trip.lat != null
             ? ` · ${trip.lat.toFixed(4)}, ${trip.lon.toFixed(4)} from EXIF` : '') +
           (trip.started_at ? ` · ${esc(trip.started_at.replace('T',' '))}` : '') +
           '<br><span class="sdim">Count is yours to fill in — a photo cannot ' +
           'say how many.' +
-          (missing ? ` ${missing} of ${files.length} had no EXIF and were skipped.`
-                   : '') + '</span>';
+          (missing ? ` ${missing} of ${fresh.length} had no EXIF.` : '') + '</span>';
       } catch(e){
-        const heard = document.getElementById('slogheard');
         heard.className = 'show';
-        heard.innerHTML = 'Could not read those: ' + esc(e.message) +
-          '<br>Type it in instead.';
+        heard.innerHTML = got + esc(e.message) + ' — fill the rest in yourself.';
       } finally {
-        cam.classList.remove('busy');
-        cam.firstChild.nodeValue = '📷 Photo of the fish';
-        camIn.value = '';
+        label.classList.remove('busy');
+        label.firstChild.nodeValue = idle;
+        input.value = '';
       }
-    };
-
+    }
+    for (const [id, idle] of [['slogcam', '📷 Take a photo'],
+                              ['slogpick', '🖼 Add from your photos']]){
+      const label = document.getElementById(id);
+      const input = label && label.querySelector('input[type=file]');
+      if (input) input.onchange = () => ingest(input, label, idle);
+    }
   }
 
   function wireMic(d){
@@ -3667,6 +3719,10 @@ window.surveyURL = (lat, lon) =>
         client_id: (crypto.randomUUID?.() || String(Date.now()) + Math.random()),
       };
       for (const [k, v] of f.entries()) if (v !== '') body[k] = v;
+      // The attached photos go in the same queued entry, so a trip logged out
+      // of signal keeps its pictures until the phone is back in range.
+      if (form._photos && form._photos.length)
+        body.photos = form._photos.map(p => ({name: p.name, data: p.data}));
 
       const msg = document.getElementById('slogmsg');
       msg.className = ''; msg.textContent = 'saving…';
@@ -3683,6 +3739,9 @@ window.surveyURL = (lat, lon) =>
         return;
       }
       form.reset();
+      form._photos = [];
+      const shots = document.getElementById('slogshots');
+      if (shots) shots.innerHTML = '';
       const res = await flushQueue();
       if (res.sent) {
         const s = res.summary;

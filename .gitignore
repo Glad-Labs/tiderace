@@ -22,6 +22,10 @@ data/tracks.jsonl
 # Your own marks. Never committed, never transmitted, never exported.
 data/my_spots.json
 
+# Photos of the fish, saved with log entries. Each carries the coordinate it
+# was taken at in its EXIF, which makes it spot information with a picture on.
+data/photos/
+
 # NOAA station catalog. Regenerate with `tiderace stations --refresh`.
 data/stations.json
 

@@ -798,6 +798,8 @@ class Handler(BaseHTTPRequestHandler):
                                         "summary": catchlog.summary()})
             if url.path.startswith("/static/"):
                 return self._static(url.path[len("/static/"):])
+            if url.path.startswith("/photos/"):
+                return self._photo(url.path[len("/photos/"):])
             self._send_json({"error": "not found"}, 404)
         except Exception as exc:                                  # noqa: BLE001
             traceback.print_exc()
@@ -995,11 +997,59 @@ class Handler(BaseHTTPRequestHandler):
             lon=float(lon) if lon is not None else None,
             decided_by=data.get("decided_by", "angler"))
 
+    @staticmethod
+    def _photo_blobs(data: dict) -> list[bytes]:
+        """The photos posted with a trip, decoded. Base64 strings, or
+        {name, data} objects as /api/log/photo takes them."""
+        import base64
+        shots = data.get("photos") or []
+        if not isinstance(shots, list):
+            raise ValueError("photos must be a list")
+        out = []
+        for sh in shots:
+            blob = sh.get("data") if isinstance(sh, dict) else sh
+            if not isinstance(blob, str):
+                raise ValueError("a photo must be base64")
+            out.append(base64.b64decode(blob))
+        return out
+
     def _record(self, data: dict) -> str | None:
         """Persist one queued trip. Returns the client id so the phone knows
-        which of its queued entries to drop."""
-        catchlog.record(self._entry(data))
+        which of its queued entries to drop.
+
+        Photos first, then the row, and the photos go if the row does not:
+        a duplicate submit is refused by record(), and its photos must not be
+        left on disk pointing at nothing."""
+        entry = self._entry(data)
+        blobs = self._photo_blobs(data)
+        if blobs:
+            try:
+                when = datetime.fromisoformat(entry.started_at)
+            except ValueError:
+                when = None
+            entry.photos = catchlog.store_photos(blobs, when)
+        try:
+            catchlog.record(entry)
+        except BaseException:
+            catchlog.discard_photos(entry.photos)
+            raise
         return data.get("client_id")
+
+    def _photo(self, rel: str):
+        """One saved fish photo, for the page. photo_path refuses anything
+        that resolves outside the photo directory."""
+        from urllib.parse import unquote
+        path = catchlog.photo_path(unquote(rel))
+        if not path:
+            return self._send_json({"error": "not found"}, 404)
+        with open(path, "rb") as fh:
+            body = fh.read()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _static(self, name: str):
         safe = os.path.normpath(name).lstrip(os.sep)

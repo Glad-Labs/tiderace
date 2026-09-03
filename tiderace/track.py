@@ -319,7 +319,7 @@ def with_catches(rows: list[dict] | None = None,
         out.append({
             **{k: v for k, v in r.items() if k != "points"},
             "catches": [{k: c.get(k) for k in
-                         ("species", "count", "biggest_in", "method",
+                         ("species", "count", "biggest_in", "method", "photos",
                           "notes", "trip_id", "lat", "lon")} for c in cs],
             "fish": sum(int(c.get("count") or 0) for c in cs),
             "species": sorted({c["species"] for c in cs if c.get("species")}),
