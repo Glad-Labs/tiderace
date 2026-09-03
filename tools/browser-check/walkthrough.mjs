@@ -87,6 +87,38 @@ async function walk(url) {
          && g.legal.length > 0, JSON.stringify(g));
   }
 
+  // --- the time slider must move the panel, not just the map ------------
+  await page.click('#tabs button[data-view=now]');
+  await page.waitForTimeout(1500);
+  const readRows = () => page.evaluate(() => {
+    const out = {};
+    document.querySelectorAll('#sheetbody .srow').forEach(r => {
+      const v = r.querySelector('.v').cloneNode(true);
+      const mark = !!v.querySelector('.nowonly');
+      v.querySelectorAll('.nowonly').forEach(n => n.remove());
+      out[r.querySelector('.k').textContent.trim()] =
+        { v: v.textContent.trim().replace(/\s+/g, ' '), now: mark };
+    });
+    return out;
+  });
+  const t0 = await readRows();
+  await page.evaluate(() => { const t = document.getElementById('time');
+    t.value = String(Math.min(+t.max, 48)); t.dispatchEvent(new Event('input')); });
+  await page.waitForTimeout(4500);
+  const t1 = await readRows();
+  const forecastMoved = ['current', 'wind', 'next tide']
+    .filter(k => t0[k] && t1[k] && t0[k].v !== t1[k].v);
+  const obsHeld = Object.keys(t1).filter(k => t1[k].now)
+    .every(k => !t0[k] || t0[k].v === t1[k].v);
+  step('slider moves the forecast rows', forecastMoved.length >= 2,
+       `moved: ${forecastMoved.join(', ') || 'none'}`);
+  step('slider leaves observations alone, marked now', obsHeld
+       && Object.values(t1).some(r => r.now),
+       `${Object.values(t1).filter(r => r.now).length} marked`);
+  await page.evaluate(() => { const t = document.getElementById('time');
+    t.value = '0'; t.dispatchEvent(new Event('input')); });
+  await page.waitForTimeout(4000);
+
   // --- the potential surface and the scan -------------------------------
   await page.selectOption('#species', 'fluke');
   await page.waitForTimeout(8000);

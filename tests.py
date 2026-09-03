@@ -4404,6 +4404,37 @@ class DaylightAndEveryFish(unittest.TestCase):
         self.css = self.js.split("<style>")[1].split("</style>")[0]
 
     # ---- the picker ----
+    def test_the_slider_moves_the_panel_too(self):
+        """It moved the map and the ranked list while the panel sat frozen
+        beside them -- slide 24 hours out, watch the ranking re-order, and the
+        numbers were still the moment you tapped, with nothing saying so.
+        /api/survey has accepted `when` all along; the page never passed it."""
+        js = strip_comments(self.page)
+        self.assertIn("surveyAtTime", js)
+        self.assertIn("&when=", js, "surveyURL must be able to carry a time")
+        self.assertIn("refreshSurveyAtTime", js)
+        oninput = js.split("$('#time').oninput")[1].split("};")[0]
+        self.assertIn("refreshSurveyAtTime", oninput,
+                      "the slider must re-read the panel")
+        self.assertIn("setTimeout", oninput,
+                      "dragging fires per pixel; each one is a round trip")
+
+    def test_a_reading_that_cannot_be_forecast_says_so(self):
+        """Only `conditions` moves with `when`. Water level anomaly, observed
+        wind and air, logged bait, bird and whale records are observations --
+        rendering them unchanged inside a panel headed tomorrow makes a
+        reading taken now look like a forecast."""
+        js = strip_comments(self.page)
+        fn = js.split("function row(")[1].split("\n  }")[0]
+        self.assertIn("nowonly", fn)
+        self.assertIn("window.surveyAtTime", fn,
+                      "the marker only shows when the slider is away from now")
+        for observed in ("'water level'", "'wind now'", "'air'",
+                         "'bait seen'", "'birds'", "'whales'"):
+            call = js.split("h += row(" + observed)[1].split(");")[0]
+            self.assertIn("true", call,
+                          "%s is an observation and must be marked" % observed)
+
     def test_the_spots_tab_reads_the_binding_that_exists(self):
         """`GRID` is a module-scope let, so it is not a property of window and
         `window.GRID` was always undefined -- the Spots tab showed "No

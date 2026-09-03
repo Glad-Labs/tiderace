@@ -360,6 +360,11 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 .srow .v{flex:1; font:600 19px/1.15 var(--display); color:var(--ink);
          font-variant-numeric:tabular-nums}
 .srow .v small{font:11px/1 var(--mono); color:var(--muted); font-weight:400}
+/* A value the slider cannot move, shown while the slider is away from now. */
+.srow .v small.nowonly{
+  color:var(--warn); border:1px solid var(--hair); border-radius:999px;
+  padding:2px 6px; margin-left:4px; letter-spacing:.06em;
+}
 /* The footprint chip. Present on every value on purpose: these numbers
    describe patches of ocean that differ by four orders of magnitude, and
    without this the layout quietly claims they are equally precise. */
@@ -2637,7 +2642,17 @@ function paintLegal(){
 }
 window.paintLegal = paintLegal;
 
-$('#time').oninput = e => { TI = +e.target.value; paint(); };
+let SURVEY_T = null;
+$('#time').oninput = e => {
+  TI = +e.target.value;
+  paint();
+  // Re-read the panel at the slider's time. Debounced because dragging fires
+  // this per pixel and each one is a survey round trip.
+  clearTimeout(SURVEY_T);
+  SURVEY_T = setTimeout(() => {
+    if (typeof refreshSurveyAtTime === 'function') refreshSurveyAtTime();
+  }, 350);
+};
 $('#species').onchange = () => {
   loadGrid();
   if (MARK) reportAt(MARK.lat, MARK.lon);   // else the card lies about species
@@ -2875,8 +2890,14 @@ map.on('click', e => {
 /* The prefetched cache key and the live request must be identical to the byte
    or the Cache API misses and the boat gets nothing back. One builder, used by
    the dock bundle and by the live tap alike. */
+// The slider moves the map and the ranked list, and until now the panel sat
+// frozen beside them: slide 24 hours out, watch the ranking re-order, and the
+// numbers in the sheet were still the moment you tapped -- with nothing saying
+// so. /api/survey has accepted `when` all along; the page never passed it.
+window.surveyAtTime = null;
 window.surveyURL = (lat, lon) =>
-  `/api/survey?lat=${(+lat).toFixed(4)}&lon=${(+lon).toFixed(4)}&fast=1`;
+  `/api/survey?lat=${(+lat).toFixed(4)}&lon=${(+lon).toFixed(4)}&fast=1`
+  + (window.surveyAtTime ? '&when=' + encodeURIComponent(window.surveyAtTime) : '');
 
 /* ---- conditions sheet -------------------------------------------------
    Renders /api/survey. Deliberately dumb: the server already decided what
@@ -2902,10 +2923,15 @@ window.surveyURL = (lat, lon) =>
   const esc = t => String(t == null ? '' : t)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
-  function row(k, v, res, sub){
-    return `<div class="srow"><div class="k">${esc(k)}</div>` +
-           `<div class="v">${esc(v)}${sub ? ` <small>${esc(sub)}</small>` : ''}</div>` +
-           resChip(res) + `</div>`;
+  function row(k, v, res, sub, fixed){
+    // `fixed` marks a value that does not move with the slider -- an
+    // observation, or something that simply is what it is. Without it a
+    // reading taken now sits in a panel headed tomorrow and looks forecast.
+    return `<div class="srow${fixed && window.surveyAtTime ? ' fixed' : ''}">` +
+           `<div class="k">${esc(k)}</div>` +
+           `<div class="v">${esc(v)}${sub ? ` <small>${esc(sub)}</small>` : ''}` +
+           (fixed && window.surveyAtTime ? ' <small class="nowonly">now</small>' : '') +
+           `</div>` + resChip(res) + `</div>`;
   }
   const group = t => `<div class="sgroup">${esc(t)}</div>`;
 
@@ -2940,7 +2966,7 @@ window.surveyURL = (lat, lon) =>
     const wl = val('water_level_anomaly');
     if (wl && wl.anomaly_ft != null)
       h += row('water level', `${wl.anomaly_ft > 0 ? '+' : ''}${wl.anomaly_ft.toFixed(2)} ft`,
-               res('water_level_anomaly'), 'vs predicted');
+               res('water_level_anomaly'), 'vs predicted', true);
     // bottom_at returns {bottom, quality, distance_nm} -- rendering the object
     // gave "[object Object]" on the phone. The distance matters: a rock
     // sounding a fifth of a mile away is a different claim from one underfoot.
@@ -2960,9 +2986,9 @@ window.surveyURL = (lat, lon) =>
                `${c.wind_dir || ''} · forecast`);
     if (w.wind_kt != null)
       h += row('wind now', `${Math.round(w.wind_kt)} kt`, res('weather'),
-               'observed');
+               'observed', true);
     if (w.air_temp_f != null)
-      h += row('air', `${Math.round(w.air_temp_f)}°F`, res('weather'));
+      h += row('air', `${Math.round(w.air_temp_f)}°F`, res('weather'), null, true);
     if (c.pressure_trend_3h != null)
       h += row('pressure', `${c.pressure_trend_3h > 0 ? '+' : ''}${c.pressure_trend_3h.toFixed(1)} mb`,
                2500, '3h');
@@ -2970,18 +2996,18 @@ window.surveyURL = (lat, lon) =>
     const bu = val('buoy');
     if (bu && bu.wave_m != null)
       h += row('sea', `${bu.wave_m} m`, res('buoy'),
-               `${bu.dom_period_s ?? '?'}s · buoy`);
+               `${bu.dom_period_s ?? '?'}s · buoy`, true);
 
     const tu = val('turbine');
     if (tu) h += row('turbine', `${tu[0]}`, res('turbine'), `${tu[1]} nm`);
 
     h += group('what else is here');
     const bl = val('bait_log') || [];
-    h += row('bait seen', bl.length ? `${bl.length}` : 'none', 500, 'logged');
+    h += row('bait seen', bl.length ? `${bl.length}` : 'none', 500, 'logged', true);
     const bd = val('birds') || {};
-    h += row('birds', `${bd.bait_bird_records ?? 0}`, 500, 'bait-bird records');
+    h += row('birds', `${bd.bait_bird_records ?? 0}`, 500, 'bait-bird records', true);
     const wh = val('whales') || {};
-    h += row('whales', `${wh.cetacean_records ?? 0}`, 500, 'records');
+    h += row('whales', `${wh.cetacean_records ?? 0}`, 500, 'records', true);
 
     const pr = val('protected');
     if (pr && (pr.rules || []).length){
@@ -3636,6 +3662,28 @@ window.surveyURL = (lat, lon) =>
     setTab('now');
     nowEmpty();
   }
+
+  /* Re-read the open panel at whatever time the slider is on.
+     Only `conditions` actually moves -- current, light. Everything else the
+     survey returns is either genuinely fixed (depth, bottom, the stations) or
+     an observation that cannot be forecast at all (water level anomaly, bird
+     and whale records, logged bait). Those rows are marked rather than
+     silently re-rendered as though they had moved with the rest. */
+  window.refreshSurveyAtTime = async function(){
+    if (!SURVEY_AT || !GRID || !GRID.times) return;
+    const t = GRID.times[TI];
+    if (!t) return;
+    const atNow = TI === 0;
+    window.surveyAtTime = atNow ? null : t;
+    try{
+      const r = await fetch(window.surveyURL(SURVEY_AT[0], SURVEY_AT[1]));
+      const d = await r.json();
+      if (d.error) return;
+      when.textContent = new Date(d.when).toLocaleString([],
+        {weekday: atNow ? undefined : 'short', hour:'2-digit', minute:'2-digit'});
+      render(d);
+    }catch(_){ /* offline: leave what is on screen rather than blanking it */ }
+  };
 
   async function show(lat, lon, label){
     SURVEY_AT = [lat, lon];
