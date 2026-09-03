@@ -127,6 +127,9 @@ label.chk{display:flex; align-items:center; gap:5px; font-size:12px; color:var(-
   display:none; position:absolute; top:calc(100% + 6px); right:0; z-index:6;
   background:var(--panel-b); border:1px solid var(--hair); border-radius:6px;
   padding:9px 11px; min-width:220px; backdrop-filter:blur(8px);
+  /* The height is set by fitLayers() at open time, measured. This is the
+     scrolling that makes that bound usable rather than a guillotine. */
+  overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain;
 }
 #layers.open{display:block}
 /* Controls stowed here on a phone. They are moved, not re-rendered, so they
@@ -621,7 +624,22 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
    below its content width at all. */
 #bar > #species{flex:1 1 auto; min-width:0;
                 max-width:calc(46vw / var(--ui, 1))}
-#layers{position:fixed; left:12px; right:12px; width:auto; max-width:none}
+#layers{
+  position:fixed; left:12px; right:12px; width:auto; max-width:none;
+  /* Unbounded this came out 888px tall in an 839px viewport with
+     overflow:visible, so the bathy layer, the depth legend and the whole
+     Potential section were simply unreachable. This is the fallback bound if
+     fitLayers() has not run; the peek sheet reserves the bottom 210px.
+     100dvh follows the phone's shrinking address bar where 100vh does not.
+     It is a fallback and not the answer, because it does not know where the
+     menu starts -- subtracting only the sheet left the menu ending 75px
+     *under* the sheet, which is where the depth legend went. */
+  /* Divided by --ui, like every other length in this block. #layers is a
+     child of the zoomed #bar, so a bare 100dvh is resolved against the
+     unzoomed viewport and then multiplied -- the same double-scaling that
+     once put the sheet's drag handle 269px above the top of the screen. */
+  max-height:calc((100dvh - 210px) / var(--ui, 1));
+}
 #here{ right:calc(14px / var(--ui, 1));
        bottom:calc((20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
 #timebar{ right:calc(12px / var(--ui, 1)); bottom:calc(44px / var(--ui, 1));
@@ -2429,7 +2447,61 @@ addEventListener('resize', stowControls);
 stowControls();
 
 $('#scanbtn').onclick = () => scanView();
-$('#layersbtn').onclick = e => { e.stopPropagation(); $('#layers').classList.toggle('open'); };
+/* Bound the menu to the space that is actually clear beneath it.
+ *
+ * Measured, not computed from tokens, for two reasons. The menu is
+ * position:fixed inside a backdrop-filtered #bar, which makes the bar its
+ * containing block -- so a CSS `bottom` resolves against the bar and lands
+ * about 200px out. And the height of the peek sheet differs between the two
+ * layouts (168px / 210px), so any constant here is right in one of them.
+ *
+ * The bug this replaces: max-height:calc(100dvh - 210px) reserved the sheet
+ * but forgot the menu's own 75px top offset, so the menu ended 75px *under*
+ * the sheet. Scrolled to its own maximum, the depth legend and the caption
+ * explaining the potential layer were still behind it, with no scroll left. */
+function fitLayers(){
+  const l = $('#layers');
+  if (!l || !l.classList.contains('open')) return;
+  const r = l.getBoundingClientRect();
+  let floor = innerHeight;
+  const sh = document.getElementById('sheet');
+  if (sh){
+    const s = sh.getBoundingClientRect();
+    // Only a sheet that is both below the menu top and in front of it
+    // horizontally is in the way; on the desktop layout it is neither.
+    if (s.left < r.right && s.right > r.left && s.top > r.top + 80 && s.top < floor)
+      floor = s.top;
+  }
+  // getBoundingClientRect reports visual pixels; max-height inside the zoomed
+  // #bar subtree is multiplied by the zoom before it becomes visual pixels.
+  // Setting a plain px here was off by exactly --ui: 394px asked for, 675px
+  // drawn, and the menu went straight back under the sheet.
+  const px = Math.max(160, Math.round(floor - r.top - 10));
+  l.style.maxHeight = 'calc(' + px + 'px / var(--ui, 1))';
+}
+window.fitLayers = fitLayers;
+addEventListener('resize', fitLayers);
+addEventListener('orientationchange', fitLayers);
+
+$('#layersbtn').onclick = e => {
+  e.stopPropagation();
+  const open = $('#layers').classList.toggle('open');
+  // The sheet outranks the menu -- z-index 40 against the bar's 5 -- and it
+  // cannot be otherwise while the menu lives inside the bar. So on a phone,
+  // opening the menu gets the sheet out of its way rather than leaving half
+  // the chart list behind it.
+  if (open && TOUCH() && typeof setSheet === 'function'
+      && document.getElementById('sheet').classList.contains('up'))
+    setSheet('peek');
+  if (open){
+    fitLayers();              // now, so it never paints at 888px
+    // and again once the sheet has finished sliding down, because the rect
+    // read during the transition is wherever the sheet happened to be.
+    setTimeout(fitLayers, 320);
+  } else {
+    $('#layers').style.maxHeight = '';
+  }
+};
 document.addEventListener('click', e => {
   if (!$('#layers').contains(e.target) && e.target !== $('#layersbtn'))
     $('#layers').classList.remove('open');

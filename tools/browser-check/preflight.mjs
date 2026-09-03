@@ -399,6 +399,73 @@ async function run(url) {
     ok(`phone/${scheme}: text meets AA (4.5:1)`, worst.ratio >= 4.5,
        `worst ${worst.sel} at ${worst.ratio}:1`);
 
+    // ---- the chart menu is reachable all the way to the bottom ----
+    //
+    // It came out 888px tall in an 839px viewport with overflow:visible, so
+    // bathy, the depth legend and the whole Potential section could not be
+    // reached at all. Bounding it was not enough: the first bound reserved
+    // the peek sheet but forgot the menu's own 75px top offset, so the menu
+    // ended 75px UNDER the sheet -- and the sheet wins, z-index 40 to the
+    // bar's 5. The bound after that was a plain px value set from JS, which
+    // the zoom on #bar multiplied: 394px asked for, 675px drawn.
+    //
+    // The check is elementFromPoint, not "is it inside the viewport". The
+    // earlier version asked the latter, passed, and the legend was behind the
+    // sheet the whole time. Being on screen is not the same as being visible.
+    await p.evaluate(() => window.setSheet('full'));
+    await p.waitForTimeout(400);
+    await p.click('#layersbtn');
+    await p.waitForTimeout(700);
+    await p.evaluate(() => { const l = document.getElementById('layers');
+                             l.scrollTop = l.scrollHeight; });
+    await p.waitForTimeout(250);
+    const menu = await p.evaluate(() => {
+      const l = document.getElementById('layers');
+      const lb = l.getBoundingClientRect();
+      const sh = document.getElementById('sheet');
+      const sb = sh.getBoundingClientRect();
+      const covered = [];
+      let examined = 0;
+      for (const el of l.querySelectorAll('*')) {
+        if (el.children.length) continue;               // leaves only
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) continue;
+        if (r.top < lb.top + 2 || r.bottom > lb.bottom - 2) continue;
+        examined++;
+        const hit = document.elementFromPoint(
+          Math.round(r.left + Math.min(r.width / 2, 16)),
+          Math.round(r.top + r.height / 2));
+        if (!hit || !l.contains(hit))
+          covered.push(((el.textContent || el.tagName).trim().slice(0, 20))
+                       + '←' + (hit ? (hit.id || hit.className || hit.tagName) : 'nothing'));
+      }
+      // The last row of the last section, whatever it is called today.
+      const rows = l.querySelectorAll('label');
+      const last = rows[rows.length - 1];
+      const lr = last ? last.getBoundingClientRect() : null;
+      return { vh: innerHeight, bottom: Math.round(lb.bottom), top: Math.round(lb.top),
+               sheetTop: Math.round(sb.top), sheetState: sh.className,
+               scrolled: Math.round(l.scrollTop),
+               scrollMax: Math.round(l.scrollHeight - l.clientHeight),
+               lastReachable: !!(lr && lr.bottom <= lb.bottom + 1 && lr.top >= lb.top - 1),
+               examined, covered };
+    });
+    ok(`phone/${scheme}: the chart menu fits the screen`,
+       menu.bottom <= menu.vh + 1, `bottom ${menu.bottom} in ${menu.vh}`);
+    ok(`phone/${scheme}: the chart menu clears the sheet`,
+       menu.bottom <= menu.sheetTop + 1,
+       `menu ends ${menu.bottom}, sheet starts ${menu.sheetTop} (${menu.sheetState})`);
+    ok(`phone/${scheme}: opening the menu steps the sheet down`,
+       /peek/.test(menu.sheetState), menu.sheetState);
+    ok(`phone/${scheme}: the chart menu scrolls to its own end`,
+       menu.scrollMax > 0 && menu.scrolled >= menu.scrollMax - 2,
+       `${menu.scrolled} of ${menu.scrollMax}`);
+    ok(`phone/${scheme}: the last chart row is reachable`, menu.lastReachable);
+    // A check that found nothing has not passed: an empty menu covers nothing.
+    ok(`phone/${scheme}: nothing in the chart menu is covered`,
+       menu.examined >= 8 && menu.covered.length === 0,
+       `examined ${menu.examined}` + (menu.covered.length ? `, covered ${menu.covered.join(', ')}` : ''));
+
     await ctx.close();
   }
 
