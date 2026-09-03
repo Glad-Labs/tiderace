@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import bait as baitmod
 from . import birds, charts, config as cfgmod, features, heat, point, regs, score, spots
+from . import species as speciesmod
 from . import evaluate, prospect, structure
 from . import log as catchlog
 from .sources import SourceError
@@ -47,12 +48,25 @@ def build_grid(species: str, start: datetime, hours: int = 48,
 
     times: list[str] = []
     out_spots = []
-    targets = list(spots.for_species(species))
+    # 29 of the 35 loggable species have no profile, and the picker offers all
+    # of them now -- you catch a bonito whether or not the model has an opinion
+    # about bonito. For those the grid still carries the water (current, tide,
+    # light, wind) and simply has no score, rather than the picker refusing to
+    # show the fish at all.
+    #
+    # `for_species` filters spots by which fish they are listed for, so it
+    # returns nothing for an unscored one; those get every spot. And
+    # `features.build` is passed species=None, which is what skips the bait,
+    # bird and thermal-season work that only means something with a profile.
+    modelled = species in score.PROFILES
+    targets = list(spots.for_species(species)) if modelled else list(spots.SPOTS)
+    feat_species = species if modelled else None
     # One eBird query for the whole set rather than one per spot.
     birds.prime([(s.lat, s.lon) for s in targets])
     for spot in targets:
         try:
-            rows = features.build(spot, start, hours, step_minutes, species=species)
+            rows = features.build(spot, start, hours, step_minutes,
+                                  species=feat_species)
         except SourceError as exc:
             out_spots.append({
                 "key": spot.key, "name": spot.name, "lat": spot.lat, "lon": spot.lon,
@@ -61,18 +75,20 @@ def build_grid(species: str, start: datetime, hours: int = 48,
             })
             continue
 
-        results = [score.score(species, r, exposed=r["exposed"],
-                               prior=spot.prior(species),
-                               best_stage=spot.best_stage) for r in rows]
+        results = ([score.score(species, r, exposed=r["exposed"],
+                                prior=spot.prior(species),
+                                best_stage=spot.best_stage) for r in rows]
+                   if modelled else [])
         if not times:
             times = [r["time"].isoformat() for r in rows]
 
         out_spots.append({
             "key": spot.key, "name": spot.name, "lat": spot.lat, "lon": spot.lon,
             "kind": spot.kind, "notes": spot.notes, "best_stage": spot.best_stage,
-            "prior": spot.prior(species),
+            "prior": spot.prior(species) if modelled else None,
             "bottom": charts.bottom_at(spot.lat, spot.lon),
-            "scores": [r["score"] for r in results],
+            # Empty, not zero. A spot with no score is not a bad spot.
+            "scores": [r["score"] for r in results] if modelled else [None] * len(rows),
             "detail": [{
                 "current_speed": r["current_speed"],
                 "current_dir": r["current_dir"],
@@ -86,13 +102,19 @@ def build_grid(species: str, start: datetime, hours: int = 48,
                 "season_note": r.get("season_note"),
                 "bait_note": r.get("bait_note"),
                 "bait_signal": r.get("bait_signal"),
-                "why": score.explain(res),
-            } for r, res in zip(rows, results)],
+                "why": score.explain(res) if res else None,
+            } for r, res in zip(rows, results or [None] * len(rows))],
         })
 
     grid = {
         "species": species,
-        "species_name": score.PROFILES[species].name,
+        "species_name": (score.PROFILES[species].name if modelled
+                         else (speciesmod.get(species).name
+                               if speciesmod.get(species) else species)),
+        # The picker offers every loggable fish; this says which of them the
+        # forecast actually has an opinion about, so the interface can show
+        # conditions without pretending to a score it does not have.
+        "modelled": modelled,
         "license_mode": cfgmod.load()["license_mode"],
         "regulations": regs.status(species, start.date(),
                                    cfgmod.load()["license_mode"],
@@ -101,7 +123,12 @@ def build_grid(species: str, start: datetime, hours: int = 48,
             species, start.date(), cfgmod.load()["license_mode"],
             cfgmod.load().get("aggregate_program")),
         "regulations_differences": regs.differences(species, start.date()),
-        "notes": score.PROFILES[species].notes,
+        "notes": (score.PROFILES[species].notes if modelled
+                  else (speciesmod.get(species).notes or "")),
+        # Said plainly rather than left to an empty score column. Absence of a
+        # forecast is a fact about this app, not about the fish.
+        "not_modelled": (None if modelled else
+                         speciesmod.unregulated_warning(species)),
         "start": start.isoformat(),
         "step_minutes": step_minutes,
         "times": times,
@@ -282,8 +309,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": True})
             if url.path == "/api/meta":
                 return self._send_json({
-                    "species": [{"key": k, "name": p.name, "notes": p.notes}
-                                for k, p in sorted(score.PROFILES.items())],
+                    # Every loggable fish, scored ones first. The picker used
+                    # to offer six of thirty-five, so the other twenty-nine --
+                    # bonito, albies, tog in the wrong season, every tuna --
+                    # could not even be looked at, let alone logged from the
+                    # map. `scored` says which have a forecast behind them.
+                    "species": [{"key": sp.key, "name": sp.name,
+                                 "notes": sp.notes, "scored": sp.scored,
+                                 "hms": sp.hms, "group": sp.group}
+                                for sp in sorted(
+                                    speciesmod.loggable(),
+                                    key=lambda x: (not x.scored, x.name))],
                     "spot_count": len(spots.SPOTS),
                     # AGPL s13: users interacting over a network must be
                     # offered the corresponding source.
@@ -292,7 +328,9 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if url.path == "/api/grid":
                 species = q.get("species", ["striped_bass"])[0]
-                if species not in score.PROFILES:
+                # Any loggable fish, not only the six with a profile. The grid
+                # carries the water for the rest and says `modelled: false`.
+                if not speciesmod.get(species):
                     return self._send_json({"error": f"unknown species {species}"}, 400)
                 hours = min(int(q.get("hours", ["48"])[0]), 96)
                 start = datetime.now().replace(minute=0, second=0, microsecond=0)

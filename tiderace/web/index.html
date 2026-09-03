@@ -17,8 +17,36 @@
   --ink:#E4ECEE; --ink-2:#C2D3D7; --muted:#8CA3A8;
   --accent:#F04FA0; --depth:#4FB3C7;
   --good:#4FBF89; --warn:#D9A521; --crit:#E0705F;
+  /* Marker ink, so the map labels follow the theme instead of being welded
+     to one. They used to be #E4ECEE with a near-black glow, which is exactly
+     backwards on a white chart in the sun. */
+  --mk-ink:#E4ECEE; --mk-halo:#0B1518; --mk-edge:#0B1518;
+  /* Translucent surfaces and hairlines. These were literals, so the top bar
+     and the layers menu stayed dark under the daylight palette -- light
+     chrome over a light map with a dark bar floating on it. */
+  --panel-a:rgba(18,33,38,.94); --panel-b:rgba(18,33,38,.97);
+  --hair-a:rgba(39,64,72,.5); --halo:rgba(11,21,24,.9);
+  --scrim:rgba(11,21,24,.86);
   --display:'Archivo','Helvetica Neue',Arial,sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;
+}
+
+/* Daylight. Not an inversion of the dark theme -- a different problem.
+   Reading a phone at noon on open water is a contrast fight against a sky
+   reflecting off the glass, so this goes further than "light mode": near-black
+   text on near-white, hairlines dark enough to survive glare, and the accent
+   pushed to a deep magenta that still reads at low screen brightness against a
+   pale chart. The bay is the one thing that stays coloured, so water still
+   looks like water. */
+:root[data-theme="light"]{
+  --ground:#F2F5F6; --panel:#FFFFFF; --panel-2:#E6ECEE; --hair:#9DB0B6;
+  --ink:#06171C; --ink-2:#1E3A42; --muted:#41595F;
+  --accent:#B0106E; --depth:#0F6C80;
+  --good:#12653F; --warn:#7A5200; --crit:#9B2317;
+  --mk-ink:#06171C; --mk-halo:#FFFFFF; --mk-edge:#FFFFFF;
+  --panel-a:rgba(255,255,255,.95); --panel-b:rgba(255,255,255,.98);
+  --hair-a:rgba(80,105,113,.34); --halo:rgba(255,255,255,.92);
+  --scrim:rgba(242,245,246,.9);
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
@@ -33,7 +61,7 @@ body{
 #bar{
   position:absolute; top:12px; left:12px; z-index:5;
   display:flex; gap:8px; align-items:center; flex-wrap:wrap;
-  background:rgba(18,33,38,.94); border:1px solid var(--hair);
+  background:var(--panel-a); border:1px solid var(--hair);
   border-radius:6px; padding:8px 10px; backdrop-filter:blur(8px);
   /* Leave the top-right corner free for the zoom, scale and attribution
      controls, which now live there. */
@@ -78,7 +106,7 @@ label.chk{display:flex; align-items:center; gap:5px; font-size:12px; color:var(-
 /* ---------- chart overlay menu ---------- */
 #layers{
   display:none; position:absolute; top:calc(100% + 6px); right:0; z-index:6;
-  background:rgba(18,33,38,.97); border:1px solid var(--hair); border-radius:6px;
+  background:var(--panel-b); border:1px solid var(--hair); border-radius:6px;
   padding:9px 11px; min-width:220px; backdrop-filter:blur(8px);
 }
 #layers.open{display:block}
@@ -100,7 +128,7 @@ label.chk{display:flex; align-items:center; gap:5px; font-size:12px; color:var(-
 /* ------------------------------------------------------ time scrubber */
 #timebar{
   position:absolute; bottom:14px; left:12px; right:calc(360px + 12px); z-index:5;
-  background:rgba(18,33,38,.94); border:1px solid var(--hair); border-radius:6px;
+  background:var(--panel-a); border:1px solid var(--hair); border-radius:6px;
   padding:10px 14px 12px; backdrop-filter:blur(8px);
 }
 #timebar .row{display:flex; align-items:baseline; gap:12px; margin-bottom:7px}
@@ -148,7 +176,7 @@ input[type=range]{width:100%; accent-color:var(--accent); cursor:pointer}
 /* The dropped mark reads as a crosshair rather than another spot dot: it is a
    question you asked, not a place anyone has recommended. */
 .markpin{width:22px; height:22px; border-radius:50%; border:2px solid var(--accent);
-  box-shadow:0 0 0 1px rgba(11,21,24,.9), 0 0 12px rgba(240,79,160,.55);
+  box-shadow:0 0 0 1px var(--halo), 0 0 12px rgba(240,79,160,.55);
   background:rgba(240,79,160,.16); cursor:pointer}
 .conf{font-family:var(--mono); font-size:10px; text-transform:uppercase;
   letter-spacing:.08em; padding:1px 6px; border-radius:3px; border:1px solid var(--hair)}
@@ -171,15 +199,27 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   border:1px solid var(--hair); border-radius:5px; font-family:var(--mono); font-size:11px}
 .maplibregl-popup-tip{border-top-color:var(--panel)!important}
 .maplibregl-ctrl-attrib{font-size:10px!important}
+/* MapLibre's own controls ship a white surface and dark glyphs. That is right
+   in daylight and wrong at night, and they are the last things on the map
+   still fixed to one theme. */
+:root[data-theme="dark"] .maplibregl-ctrl-attrib,
+:root[data-theme="dark"] .maplibregl-ctrl-group{
+  background:var(--panel-a)!important; color:var(--ink-2)!important;
+}
+:root[data-theme="dark"] .maplibregl-ctrl-attrib a{color:var(--depth)!important}
+:root[data-theme="dark"] .maplibregl-ctrl-group button+button{
+  border-top-color:var(--hair)!important;
+}
+:root[data-theme="dark"] .maplibregl-ctrl-icon{filter:invert(1) hue-rotate(180deg)}
 .maplibregl-ctrl-top-right{display:flex; flex-direction:column; align-items:flex-end}
 .maplibregl-ctrl-scale{
-  background:rgba(18,33,38,.92)!important; border-color:var(--hair)!important;
+  background:var(--panel-a)!important; border-color:var(--hair)!important;
   color:var(--ink-2)!important; font-family:var(--mono); font-size:10px;
 }
 #spark{width:100%; height:52px; display:block; margin-top:10px}
 #loading{
   position:absolute; inset:0; z-index:9; display:grid; place-items:center;
-  background:rgba(11,21,24,.86); font-family:var(--mono); font-size:12px;
+  background:var(--scrim); font-family:var(--mono); font-size:12px;
   color:var(--depth); letter-spacing:.1em; text-transform:uppercase;
 }
 #loading.hide{display:none}
@@ -305,7 +345,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
         text-transform:uppercase; color:var(--muted)}
 .srow{
   display:flex; align-items:center; gap:10px; padding:11px 16px;
-  border-bottom:1px solid rgba(39,64,72,.5);
+  border-bottom:1px solid var(--hair-a);
 }
 .srow .k{flex:none; width:34%; font:12px/1.25 var(--mono); color:var(--ink-2)}
 /* The number is the thing you glance at from three feet away with salt on
@@ -323,7 +363,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 .res.fine{color:var(--good); border-color:rgba(79,191,137,.45)}
 .res.coarse{color:var(--warn); border-color:rgba(217,165,33,.4)}
 .srule{padding:11px 16px; font:12px/1.5 var(--mono); color:var(--ink-2);
-       border-bottom:1px solid rgba(39,64,72,.5)}
+       border-bottom:1px solid var(--hair-a)}
 .srule b{color:var(--crit); font-weight:600}
 .sdim{padding:12px 16px; font:11px/1.5 var(--mono); color:var(--muted)}
 #here{
@@ -337,6 +377,12 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 /* The reading half of the app. Not on the map, because none of it is
    something you do with a rod in your hand and the map was decluttered on
    purpose -- but reachable, because CLI-only meant never looked at. */
+#themebtn{
+  font:600 11px/1 var(--display); padding:7px 10px; border-radius:7px;
+  border:1px solid var(--hair); background:var(--panel); color:var(--ink-2);
+  cursor:pointer;
+}
+#themebtn:active{transform:scale(.96)}
 #desklink{
   display:inline-block; text-decoration:none;
   padding:6px 10px; border-radius:7px; border:1px solid var(--hair);
@@ -604,7 +650,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 #tripsbtn:active{transform:scale(.99)}
 .trip{
   display:grid; grid-template-columns:1fr auto; gap:4px 12px;
-  padding:14px 16px; border-bottom:1px solid rgba(39,64,72,.5);
+  padding:14px 16px; border-bottom:1px solid var(--hair-a);
   cursor:pointer; align-items:baseline;
 }
 .trip:active{background:var(--panel-2)}
@@ -662,7 +708,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 #tabs button:active{background:var(--panel-2)}
 /* Rules are law, not a readout, so they collapse behind a line you can open
    rather than taking 135px out of the middle of the conditions. */
-.fold{border-top:1px solid rgba(39,64,72,.5)}
+.fold{border-top:1px solid var(--hair-a)}
 .fold > summary{
   list-style:none; cursor:pointer; padding:14px 16px;
   font:12px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
@@ -687,6 +733,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
       <span id="mode" title="Which rules apply"></span>
       <button id="layersbtn" title="Chart overlays">charts ▾</button>
       <button id="scanbtn" title="Look for bumps in the water you are looking at">scan ⛰</button>
+      <button id="themebtn" title="Daylight or night palette">sun ☀</button>
       <a id="desklink" href="/desk" title="Log history, reports, review queue, HMS rules">desk →</a>
       <button id="offlinebtn" title="Download the forecast for the water">save ↓</button>
       <span id="netstate"></span>
@@ -776,6 +823,19 @@ function colour(s){
 /* The server substitutes this at request time. The style must exist when the
    Map is constructed, and every layer this app adds hangs off map.on('load')
    -- swapping the style afterwards would race all of them. */
+/* Theme first, because basemapStyle() reads it and the Map is constructed
+   with the result. Stored per device: which one you want depends on where you
+   are standing, not on a preference you set once. Falls back to the system
+   setting, and to dark, which is right at 4am at the ramp. */
+function THEME(){
+  try {
+    const saved = localStorage.getItem('tiderace-theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch (_) {}
+  return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+document.documentElement.dataset.theme = THEME();
+
 const BASEMAP = __TIDERACE_BASEMAP__;
 
 if (window.pmtiles) {
@@ -806,10 +866,13 @@ function basemapStyle() {
     return {
       version: 8,
       glyphs: 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf',
-      sprite: 'https://protomaps.github.io/basemaps-assets/sprites/v4/dark',
+      sprite: 'https://protomaps.github.io/basemaps-assets/sprites/v4/'
+              + (THEME() === 'light' ? 'light' : 'dark'),
       sources: {protomaps: src, seamark: SEAMARK},
       layers: [
-        ...basemaps.layers('protomaps', basemaps.namedFlavor('dark'), {lang:'en'}),
+        ...basemaps.layers('protomaps',
+              basemaps.namedFlavor(THEME() === 'light' ? 'light' : 'dark'),
+              {lang:'en'}),
         {id:'seamark', type:'raster', source:'seamark', paint:{'raster-opacity':0.95}}
       ]
     };
@@ -858,7 +921,11 @@ $('#labels').onchange = e => {
 // ------------------------------------------------------------------ markers
 let MAP_READY = false;
 map.on('load', () => {
-  MAP_READY = true; syncMarkers(); loadCharts(); loadBait(); loadStructure();
+  MAP_READY = true;
+  const tb = document.getElementById('themebtn');
+  if (tb) tb.textContent =
+    document.documentElement.dataset.theme === 'light' ? 'sun ☀' : 'dark ☾';
+  syncMarkers(); loadCharts(); loadBait(); loadStructure();
   loadCellsForView();
   clampLabels();
 });
@@ -920,11 +987,12 @@ function makeMarker(sp){
   el.style.cssText = 'position:relative;width:0;height:0;cursor:pointer';
   el.innerHTML =
     `<div class="dot" style="position:absolute;left:0;top:0;width:18px;height:18px;
-        margin:-9px 0 0 -9px;border-radius:50%;border:2px solid #0B1518;
+        margin:-9px 0 0 -9px;border-radius:50%;border:2px solid var(--mk-edge);
         box-shadow:0 0 0 1px rgba(228,236,238,.35)"></div>
      <div class="lbl" style="position:absolute;left:15px;top:0;transform:translateY(-50%);
         font-family:var(--mono);font-size:10px;font-weight:600;
-        color:#E4ECEE;text-shadow:0 1px 3px #0B1518,0 0 6px #0B1518;
+        color:var(--mk-ink);
+        text-shadow:0 1px 3px var(--mk-halo),0 0 6px var(--mk-halo),0 0 2px var(--mk-halo);
         white-space:nowrap;pointer-events:none">${sp.name}</div>`;
   // Markers live inside the map's canvas container, so a tap on one also
   // reaches the map's own click handler -- selecting the spot AND dropping a
@@ -1069,7 +1137,12 @@ function renderRank(){
       <span>${r.sp.name}<br><span class="m">${(d.current_speed??0).toFixed(2)} kt ${d.current_dir||''}</span></span>
       <span class="m">${d.wind_kt!=null?d.wind_kt.toFixed(0)+' kt':''}</span>
     </button>`;
-  }).join('') || '<p class="empty">No spots scored at this time.</p>';
+  }).join('') || (GRID.modelled === false
+    ? `<p class="empty">No forecast for ${tesc(GRID.species_name || 'this fish')}. ` +
+      `The water below is real — current, tide, wind, light — but nothing here ` +
+      `ranks spots for it, because no profile has been researched. Conditions ` +
+      `and logging still work.</p>`
+    : '<p class="empty">No spots scored at this time.</p>');
   $('#rank').querySelectorAll('button').forEach(b => b.onclick = () => select(b.dataset.k));
 }
 
@@ -1643,7 +1716,7 @@ async function loadCharts(){
                   'symbol-placement':'line', 'text-field': st.label,
                   'text-font':['Noto Sans Regular'], 'text-size':10,
                   'text-max-angle':30, 'symbol-spacing':180},
-          paint:{'text-color': st.colour, 'text-halo-color':'rgba(11,21,24,.9)',
+          paint:{'text-color': st.colour, 'text-halo-color':'var(--halo)',
                  'text-halo-width':1.2}
         }, ABOVE_BASEMAP());
       }
@@ -1657,7 +1730,7 @@ async function loadCharts(){
         layout:{visibility: CHART_ON[l.name] ? 'visible' : 'none',
                 'text-field': st.label, 'text-font':['Noto Sans Regular'],
                 'text-size':10, 'text-allow-overlap':false},
-        paint:{'text-color': st.colour, 'text-halo-color':'rgba(11,21,24,.9)',
+        paint:{'text-color': st.colour, 'text-halo-color':'var(--halo)',
                'text-halo-width':1.1}
       }, ABOVE_BASEMAP());
       continue;
@@ -1761,7 +1834,7 @@ async function loadStructure(){
     minzoom:10,
     layout:{'text-field':['get','name'], 'text-font':['Noto Sans Regular'],
             'text-size':10, 'text-offset':[0,1.1], 'text-anchor':'top'},
-    paint:{'text-color':'#E4ECEE', 'text-halo-color':'rgba(11,21,24,.9)',
+    paint:{'text-color':'#E4ECEE', 'text-halo-color':'var(--halo)',
            'text-halo-width':1.2}
   });
 }
@@ -2057,7 +2130,7 @@ function drawTrip(t){
       filter:['==',['get','fish'],true], minzoom:10,
       layout:{'text-field':['get','label'],'text-font':['Noto Sans Regular'],
               'text-size':11,'text-offset':[0,1.2],'text-anchor':'top'},
-      paint:{'text-color':'#E4ECEE','text-halo-color':'rgba(11,21,24,.9)',
+      paint:{'text-color':'#E4ECEE','text-halo-color':'var(--halo)',
              'text-halo-width':1.2}});
   }
 
@@ -2171,7 +2244,7 @@ async function loadBait(){
         'loaded',9,'decent',7,'scattered',5,'trace',4,'none',5, 6],
       'circle-opacity':['max',0.25,['get','freshness']],
       'circle-stroke-width':1.2,
-      'circle-stroke-color':'rgba(11,21,24,.9)'
+      'circle-stroke-color':'var(--halo)'
     }
   });
   map.on('click','bait', e => {
@@ -2187,6 +2260,38 @@ async function loadBait(){
   map.on('mouseenter','bait',()=>map.getCanvas().style.cursor='pointer');
   map.on('mouseleave','bait',()=>map.getCanvas().style.cursor='');
 }
+
+/* Swapping the basemap flavour means a new style, and setStyle drops every
+   source and layer this app added -- charts, marks, bait, the potential
+   surface. They all hang off map.on('load'), which does not fire again, so
+   they are re-added on styledata instead. Getting this wrong leaves a
+   correctly-lit map with nothing on it. */
+function applyTheme(next){
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('tiderace-theme', next); } catch (_) {}
+  const btn = $('#themebtn');
+  if (btn) btn.textContent = next === 'light' ? 'sun ☀' : 'dark ☾';
+  const meta = document.querySelector('meta[name=theme-color]');
+  if (meta) meta.setAttribute('content',
+    getComputedStyle(document.documentElement).getPropertyValue('--ground').trim());
+  if (!MAP_READY) return;
+
+  MAP_READY = false;
+  map.once('styledata', () => {
+    MAP_READY = true;
+    // No cache to clear: loadCharts guards on map.getSource, and setStyle
+    // has already removed every source, so the layers re-add themselves.
+    syncMarkers(); loadCharts(); loadBait(); loadStructure();
+    loadCellsForView();
+    if (typeof HEAT_ON !== 'undefined' && HEAT_ON && typeof loadHeat === 'function')
+      loadHeat();
+    clampLabels();
+  });
+  map.setStyle(basemapStyle());
+}
+
+$('#themebtn').onclick = () =>
+  applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
 
 $('#scanbtn').onclick = () => scanView();
 $('#layersbtn').onclick = e => { e.stopPropagation(); $('#layers').classList.toggle('open'); };
@@ -2355,8 +2460,17 @@ if ('serviceWorker' in navigator) {
 // -------------------------------------------------------------------- boot
 async function loadSpecies(){
   const meta = await (await fetch('/api/meta')).json();
-  $('#species').innerHTML = meta.species
-    .map(s => `<option value="${s.key}">${s.name}</option>`).join('');
+  /* All thirty-five, not the six with a profile. You catch a bonito whether
+     or not the model has an opinion about bonito, and the picker refusing to
+     show the fish meant you could not look at the water for it or log one
+     from the map. Grouped so the difference is visible rather than implied. */
+  const scored = meta.species.filter(s => s.scored);
+  const rest   = meta.species.filter(s => !s.scored);
+  const opt = s => `<option value="${s.key}">${s.name}` +
+                   `${s.hms ? ' (HMS)' : ''}</option>`;
+  $('#species').innerHTML =
+    `<optgroup label="forecast modelled">${scored.map(opt).join('')}</optgroup>` +
+    `<optgroup label="conditions only — no forecast">${rest.map(opt).join('')}</optgroup>`;
   $('#species').value = 'striped_bass';
 }
 
@@ -2627,10 +2741,17 @@ map.on('click', e => {
   // Fills are excluded on purpose. The depth layer covers every square metre of
   // water, so counting it as "you clicked a feature" would swallow every tap
   // and the map would silently stop answering.
+  /* Contours and the modelled bathymetry are background, not things to ask
+     about. They cover most of the water, so tapping anywhere near the bay
+     hit a depth line and opened a popup about it instead of reporting the
+     coordinate you actually meant. Their numbers are already drawn on the
+     line; a popup adds nothing and costs you the tap. */
+  const NOT_CLICKABLE = new Set(['contours', 'bathy', 'depth_area']);
   const clickable = ((map.getStyle() || {}).layers || [])
     .map(l => l.id)
     .filter(id => (id === 'bait' || id === 'structure' ||
                    (id.startsWith('c-') && !id.endsWith('-lbl') &&
+                    !NOT_CLICKABLE.has(id.slice(2)) &&
                     (CHART_STYLE[id.slice(2)] || {}).kind !== 'fill'))
                   && map.getLayer(id));
 

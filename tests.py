@@ -4130,6 +4130,107 @@ class SheetStructure(unittest.TestCase):
                          "boot runs before the window alias exists")
 
 
+class DaylightAndEveryFish(unittest.TestCase):
+    """Three things asked for after a season of using it on a boat."""
+
+    def setUp(self):
+        import pathlib
+        self.page = (pathlib.Path(__file__).parent / "tiderace" / "web"
+                     / "index.html").read_text()
+        self.js = strip_comments(self.page)
+        self.css = self.js.split("<style>")[1].split("</style>")[0]
+
+    # ---- the picker ----
+    def test_the_picker_offers_every_loggable_fish(self):
+        """Six of thirty-five were on offer, so the other twenty-nine could not
+        be looked at or logged from the map at all."""
+        from tiderace import species as speciesmod, score
+        self.assertEqual(len(speciesmod.loggable()), 35)
+        self.assertGreater(len(speciesmod.loggable()), len(score.PROFILES))
+        import pathlib
+        srv = (pathlib.Path(__file__).parent / "tiderace" / "server.py").read_text()
+        meta = strip_py_comments(srv).split('url.path == "/api/meta"')[1][:700]
+        self.assertIn("speciesmod.loggable()", meta,
+                      "meta must list every loggable fish, not the profiles")
+        self.assertIn('"scored"', meta, "and say which have a forecast")
+
+    def test_an_unscored_fish_gets_water_but_no_score(self):
+        """The grid still carries current, tide, light and wind for a bonito.
+        Empty scores, not zero -- a spot with no score is not a bad spot."""
+        import pathlib
+        srv = strip_py_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "server.py").read_text())
+        fn = srv.split("def build_grid(")[1].split("\ndef ")[0]
+        self.assertIn("modelled = species in score.PROFILES", fn)
+        self.assertIn("spots.SPOTS", fn,
+                      "for_species returns nothing for an unscored fish")
+        self.assertIn("[None] * len(rows)", fn, "empty, not zero")
+        self.assertIn("feat_species", fn,
+                      "features.build takes species=None for the unscored path")
+
+    def test_the_picker_separates_modelled_from_not(self):
+        self.assertIn("optgroup", self.js)
+        self.assertIn("conditions only", self.js)
+
+    # ---- taps ----
+    def test_contours_and_bathy_do_not_swallow_taps(self):
+        """They cover most of the water, so tapping anywhere near the bay hit a
+        depth line and opened a popup about it instead of reporting the
+        coordinate. Their numbers are drawn on the line already."""
+        self.assertIn("NOT_CLICKABLE", self.js)
+        blk = self.js.split("NOT_CLICKABLE = new Set(")[1].split(")")[0]
+        for name in ("contours", "bathy", "depth_area"):
+            self.assertIn(name, blk)
+        self.assertIn("!NOT_CLICKABLE.has(", self.js,
+                      "the set must actually filter the clickable layers")
+
+    def test_the_contour_numbers_are_still_drawn(self):
+        """Not selectable is not the same as not visible."""
+        self.assertIn("'symbol-placement':'line'", self.js.replace(" ", "").replace(
+            "'symbol-placement':'line'", "'symbol-placement':'line'"))
+
+    # ---- daylight ----
+    def test_a_daylight_palette_exists_and_is_not_an_inversion(self):
+        """Reading a phone at noon on open water is a contrast fight against
+        the sky on the glass, so this is a different design, not a flip."""
+        self.assertIn(':root[data-theme="light"]{', self.css)
+        light = self.css.split(':root[data-theme="light"]{')[1].split("}")[0]
+        dark = self.css.split(":root{")[1].split("}")[0]
+        for token in ("--ground", "--panel", "--ink", "--hair", "--accent",
+                      "--mk-ink", "--mk-halo", "--panel-a", "--halo", "--scrim"):
+            self.assertIn(token, dark, "%s missing from the dark palette" % token)
+            self.assertIn(token, light, "%s missing from the daylight palette" % token)
+
+    def test_no_token_is_defined_in_terms_of_itself(self):
+        """A global replace turned `--panel-a:rgba(...)` into
+        `--panel-a:var(--panel-a)`, which is circular, resolves to nothing, and
+        made the top bar transparent in the dark theme."""
+        import re
+        for m in re.finditer(r"(--[a-z0-9-]+)\s*:\s*var\(\1\s*[,)]", self.css):
+            self.fail("token defined as itself: %s" % m.group(1))
+
+    def test_the_map_and_the_markers_follow_the_theme(self):
+        self.assertIn("namedFlavor(THEME() === 'light' ? 'light' : 'dark')", self.js)
+        self.assertIn("var(--mk-ink)", self.js, "label ink must be a token")
+        self.assertIn("var(--mk-halo)", self.js, "and so must its halo")
+
+    def test_switching_the_theme_puts_the_layers_back(self):
+        """setStyle drops every source and layer this app added, and they all
+        hang off map.on('load'), which does not fire again. Getting this wrong
+        leaves a correctly-lit map with nothing on it."""
+        fn = self.js.split("function applyTheme(")[1].split("\n}")[0]
+        self.assertIn("map.setStyle", fn)
+        self.assertIn("styledata", fn, "re-add on styledata, not on load")
+        for loader in ("syncMarkers()", "loadCharts()", "loadBait()",
+                       "loadStructure()"):
+            self.assertIn(loader, fn, "%s is not restored after a theme swap" % loader)
+
+    def test_the_choice_is_remembered_per_device(self):
+        """Which one you want depends on where you are standing."""
+        self.assertIn("localStorage.setItem('tiderace-theme'", self.js)
+        self.assertIn("prefers-color-scheme: light", self.js)
+
+
 class TheDesktopLayoutSurvivesTheZoomBlock(unittest.TestCase):
     """The touch compensation must not reach the desktop window.
 
