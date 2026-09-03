@@ -482,6 +482,14 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
    own pixel space and scaling it would break hit-testing and the label clamp.
 
    1 on an honest viewport, so this is inert on a normal phone. */
+/* Scoped to the touch layout, and it has to be. --ui is only ever anything
+   but 1 on the coarse-pointer path, so on desktop every rule below is a
+   no-op arithmetically -- but `#sheet{right:auto; width:100vw}` is NOT a
+   no-op as CSS. It sits after the desktop rule that makes the sheet a 420px
+   right rail, carries equal specificity, and wins on source order. The sheet
+   went full-width across the bottom of the desktop window, squeezed the map
+   into a strip, and left every spot label sitting on top of the panel. */
+@media (max-width:900px), (pointer:coarse){
 #sheet, #bar, #here, #timebar{ zoom: var(--ui, 1); }
 /* A zoomed fixed element still resolves left/right against the UNZOOMED
    viewport, then multiplies the result -- so `left:0;right:0` came out 2.4x
@@ -504,6 +512,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
        bottom:calc((20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
 #timebar{ right:calc(12px / var(--ui, 1)); bottom:calc(44px / var(--ui, 1));
           left:calc(12px / var(--ui, 1)); width:auto; }
+}
 
 /* ---- speak the trip -------------------------------------------------
    The reason the catch log has two rows is that logging one means typing on
@@ -856,6 +865,21 @@ map.on('load', () => {
 map.on('move', clampLabels);
 map.on('moveend', clampLabels);
 addEventListener('resize', clampLabels);
+
+/* The sheet's own height is what decides which labels it covers, and that
+   changes without the map moving at all: the body is filled after an async
+   fetch, a fold opens, a tab renders a longer view. Clamping only on map
+   events and sheet STATE changes meant labels sat on top of the panel until
+   you nudged the map, which is exactly what it looked like -- a rendering
+   bug that fixed itself when touched.
+
+   An observer rather than another call site, because the list of things that
+   resize the sheet keeps growing and every new render path would have to
+   remember. */
+if (typeof ResizeObserver === 'function'){
+  const sheetEl = document.getElementById('sheet');
+  if (sheetEl) new ResizeObserver(() => clampLabels()).observe(sheetEl);
+}
 map.on('error', e => console.warn('map:', e && e.error && e.error.message));
 
 // The map is a view onto the data, not a prerequisite for it. If WebGL is
@@ -2749,6 +2773,13 @@ window.surveyURL = (lat, lon) =>
     LAST_SURVEY = d;
     body.innerHTML = h;
     fillDiag();
+    // The sheet just changed height, and what it covers changed with it. The
+    // ResizeObserver above catches this when the sheet is free to grow, but
+    // once it hits max-height the body scrolls instead and the element never
+    // resizes -- so the observer alone is not enough. Clamping here covers the
+    // path that actually reported the bug: content arrives from a fetch, the
+    // panel fills, and spot labels sit on top of it until the map is nudged.
+    if (typeof clampLabels === 'function') clampLabels();
   }
 
 
@@ -3239,9 +3270,11 @@ window.surveyURL = (lat, lon) =>
     const inSheet = !!document.querySelector('#sheet #adopted');
     const build = window.__SHELL || (('serviceWorker' in navigator)
       ? 'not registered' : 'unsupported');
-    // Only claim staleness on evidence: a measured size that the current CSS
-    // would never produce, or a touch device that did not get the touch layout.
-    const stale = (size && parseFloat(size) < 20) || (coarse && !mob);
+    // Only claim staleness on evidence, and the size test is only evidence on
+    // the touch layout. 22px is the mobile override; the desktop base really
+    // is 19px, so an unqualified "under 20 means stale" fired on every single
+    // desktop load and told the truth-teller to distrust itself.
+    const stale = (mob && size && parseFloat(size) < 20) || (coarse && !mob);
     el.innerHTML =
       `build <b>${build}</b> · viewport <b>${innerWidth}×${innerHeight}</b>` +
       ` · pointer <b>${coarse ? 'coarse' : 'fine'}</b><br>` +

@@ -2945,8 +2945,18 @@ class ViewportLies(unittest.TestCase):
         # A zoomed fixed element resolves left/right against the UNZOOMED
         # viewport and then multiplies, so left:0;right:0 came out 586px wide
         # inside a 375px screen.
-        self.assertIn("width:calc(100vw / var(--ui, 1))", self.page)
-        self.assertIn("right:auto", self.page)
+        # Stripped: the comment explaining the fix quotes the property it is
+        # asserting, so a raw-page search matches the paragraph about the bug.
+        css = strip_comments(self.page)
+        self.assertIn("width:calc(100vw / var(--ui, 1))", css)
+        self.assertIn("right:auto", css)
+        # And it must be scoped to the touch layout. Unscoped it sits after
+        # the desktop rule that makes the sheet a 420px right rail, wins on
+        # source order, and stretches the sheet across the whole window.
+        head = css[:css.index("#sheet{ right:auto")]
+        self.assertIn("@media (max-width:900px), (pointer:coarse){",
+                      head[head.rindex("@media") if "@media" in head else 0:],
+                      "the zoom block must not apply on desktop")
 
     def test_offsets_are_divided_by_the_zoom(self):
         # Offsets are multiplied too: a 12px inset landed at 29px.
@@ -4118,6 +4128,93 @@ class SheetStructure(unittest.TestCase):
         line = js[boot:js.index("\n", js.index("setSheet", boot))]
         self.assertNotIn("window.setSheet", line,
                          "boot runs before the window alias exists")
+
+
+class TheDesktopLayoutSurvivesTheZoomBlock(unittest.TestCase):
+    """The touch compensation must not reach the desktop window.
+
+    --ui is only ever anything but 1 on the coarse-pointer path, so every rule
+    in that block is arithmetically inert on desktop -- but
+    `#sheet{right:auto; width:100vw}` is not inert as CSS. Unscoped it sat
+    after the rule making the sheet a 420px right rail, carried equal
+    specificity, and won on source order. The sheet stretched across the whole
+    desktop window, squeezed the map into a strip at the top, and left every
+    spot label sitting on the panel.
+    """
+
+    def setUp(self):
+        import pathlib
+        self.css = strip_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "web"
+             / "index.html").read_text())
+
+    def test_the_zoom_block_is_inside_the_touch_media_query(self):
+        # Brace containment, not "the nearest @media above it". The first
+        # version of this test used rindex("@media") and found an EARLIER,
+        # already-closed touch query that happened to contain pointer:coarse,
+        # so it passed with the block fully unscoped -- a test that could not
+        # fail the thing it was written for.
+        i = self.css.index("zoom: var(--ui, 1)")
+        head = self.css[:i]
+        depth, enclosing = 0, []
+        pos = 0
+        while True:
+            nxt_open = head.find("{", pos)
+            if nxt_open == -1:
+                break
+            nxt_close = head.find("}", pos)
+            if nxt_close != -1 and nxt_close < nxt_open:
+                if enclosing:
+                    enclosing.pop()
+                pos = nxt_close + 1
+                continue
+            line_start = head.rfind("\n", 0, nxt_open) + 1
+            enclosing.append(head[line_start:nxt_open].strip())
+            pos = nxt_open + 1
+        while head.count("}", pos) and head.find("}", pos) != -1:
+            if enclosing:
+                enclosing.pop()
+            pos = head.find("}", pos) + 1
+        media = [e for e in enclosing if e.startswith("@media")]
+        self.assertTrue(media, "the zoom block sits at top level, so it "
+                               "applies on desktop and overrides the right rail")
+        self.assertTrue(any("pointer:coarse" in m for m in media),
+                        "enclosed by %r, not the touch query" % media)
+
+    def test_the_desktop_sheet_is_still_a_right_rail(self):
+        self.assertIn("width:420px", self.css)
+        desktop = self.css.index("width:420px")
+        override = self.css.index("#sheet{ right:auto")
+        # It may come later in the file, but only from inside a media query
+        # the desktop never matches -- asserted by the test above.
+        self.assertGreater(override, desktop,
+                           "source order assumption changed; re-check scoping")
+
+    def test_the_stale_build_warning_does_not_fire_on_desktop(self):
+        """22px is the mobile override; the desktop base really is 19px, so an
+        unqualified "under 20 means stale" fired on every desktop load and
+        told the truth-teller to distrust itself."""
+        js = strip_comments(
+            __import__("pathlib").Path(__file__).parent.joinpath(
+                "tiderace", "web", "index.html").read_text())
+        line = [l for l in js.splitlines() if "const stale =" in l]
+        self.assertTrue(line, "stale detector not found")
+        self.assertIn("mob &&", line[0],
+                      "the size heuristic is only evidence on the touch layout")
+
+    def test_labels_are_reclamped_when_the_sheet_fills(self):
+        """The sheet's height decides which labels it covers, and that changes
+        without the map moving: the body is filled after an async fetch. Only
+        clamping on map events meant labels sat on the panel until you nudged
+        the map. The observer misses the case where the sheet is already at
+        max-height and the body scrolls instead, so render clamps too."""
+        js = strip_comments(
+            __import__("pathlib").Path(__file__).parent.joinpath(
+                "tiderace", "web", "index.html").read_text())
+        self.assertIn("ResizeObserver", js)
+        after = js.split("body.innerHTML = h;")[1][:400]
+        self.assertIn("clampLabels()", after,
+                      "render must clamp after it fills the sheet")
 
 
 class RulesApplyThemselves(unittest.TestCase):
