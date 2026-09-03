@@ -5103,7 +5103,7 @@ class ScrapeFreshness(unittest.TestCase):
 
 
 class TheDeskPageIsReachable(unittest.TestCase):
-    """The reading half. history, reports, review and hms were CLI-only, which
+    """The reading half. history, reports, regs and hms were CLI-only, which
     in practice meant nobody ever looked at them -- and none of them belongs on
     the map, because none is something you do with a rod in your hand and the
     map screen was decluttered on purpose.
@@ -5117,8 +5117,21 @@ class TheDeskPageIsReachable(unittest.TestCase):
         self.server = (d / "server.py").read_text()
         self.sw = (d / "web" / "sw.js").read_text()
 
+    def _regs_renderer(self) -> str:
+        """The body of `async regs()`, and nothing else on the page.
+
+        `page.split(marker)[1]` raises when the marker moves; assertIn on the
+        whole page quietly keeps passing on a neighbouring tab's identifiers,
+        which is exactly what happened here.
+        """
+        js = strip_comments(self.desk)
+        after = js.split("async regs()")[1]
+        # Up to the next renderer in the object literal.
+        end = after.find("\n  async ")
+        return after if end < 0 else after[:end]
+
     def test_every_cli_only_reading_has_an_endpoint(self):
-        for path in ("/api/history", "/api/reports", "/api/review", "/api/hms"):
+        for path in ("/api/history", "/api/reports", "/api/regs", "/api/hms"):
             self.assertIn('url.path == "%s"' % path, self.server, path)
 
     def test_the_desk_page_is_served_and_linked_both_ways(self):
@@ -5132,30 +5145,98 @@ class TheDeskPageIsReachable(unittest.TestCase):
         /api/log/photo sat unreachable for months."""
         js = strip_comments(self.desk)
         for name, path in (("history", "/api/history"), ("reports", "/api/reports"),
-                           ("review", "/api/review"), ("hms", "/api/hms")):
+                           ("regs", "/api/regs"), ("hms", "/api/hms")):
             self.assertIn(path, js, name)
             self.assertIn("async %s()" % name, js, name)
 
-    def test_the_review_queue_does_not_pretend_to_approve(self):
-        """No approve action exists anywhere in the codebase. A button that
-        wrote these claims into the model with nothing downstream expecting
-        them would be worse than no button."""
-        self.assertIn("read_only", self.server)
-        # The mechanism, not the vocabulary. The page's own copy says
-        # "nothing in the codebase approves these yet", which is visible text
-        # rather than a comment, so a word search matches the sentence that
-        # promises the opposite of what it is looking for.
+    def test_the_desk_issues_no_writes(self):
+        """It is the reading half. Nothing on it changes anything, which is
+        also why the tab that used to ask for approvals had no button."""
         js = strip_comments(self.desk)
         for verb in ("POST", "PUT", "DELETE", "method:", "method :"):
             self.assertNotIn(verb, js,
                              "the desk page must issue no writes (%s)" % verb)
         self.assertGreater(js.count("fetch("), 0, "it does fetch something")
 
-    def test_a_queued_regulation_is_labelled_a_claim_not_a_rule(self):
-        """These come out of an extractor. Rendering one beside the real
-        RIDEM limits without saying which is which is how a guess becomes a
-        rule somebody fishes on."""
-        self.assertIn("claim an extractor made, not a rule", self.desk)
+    def test_the_claim_queue_is_gone_from_the_desk(self):
+        """Matt, 3 September 2026: "I shouldn't be reviewing that stuff. I
+        just want the latest regulations posted, and then a link in the app
+        that I can click on to verify them on the actual page."
+
+        The Review tab served extract.pending() -- 37KB of extractor claims,
+        forty-odd of them, each with a confidence score and no approve action
+        anywhere, because auto-apply had already made approval pointless. It
+        was a queue nobody was going to clear. What replaced it shows the rule
+        as it stands and puts the notice one tap away.
+        """
+        js = strip_comments(self.desk)
+        self.assertNotIn("/api/review", js, "the claim queue must be gone")
+        self.assertNotIn("async review()", js)
+        self.assertNotIn('data-s="review"', strip_comments(self.desk))
+        self.assertNotIn('url.path == "/api/review"', self.server)
+
+    def test_every_posted_rule_carries_the_link_that_replaced_the_review(self):
+        """The link IS the feature. Auto-apply was accepted specifically
+        because checking one notice before a trip beats reviewing claims that
+        never get reviewed -- so a rule rendered without its source is the
+        trade taken and not paid for.
+        """
+        route = self.server.split('url.path == "/api/regs"')[1].split("if url.path ==")[0]
+        # The output KEY, colon included. Matching bare "source" passes on the
+        # `st.get("source")` that reads the value, so renaming the key the
+        # client actually consumes left this green -- caught by mutation.
+        self.assertIn('"source":', route, "each mode must carry a source URL")
+        self.assertIn('"applied":', route, "and the rules applied automatically")
+        # Sliced, not searched: the Sources tab has its own `r.source` (the
+        # name of a scrape source), so looking for that string anywhere in the
+        # page passed with the regs link deleted. Slicing raises if the
+        # function is renamed instead of quietly matching the neighbour.
+        regs = self._regs_renderer()
+        self.assertIn("r.source", regs, "the regs tab must read the source key")
+        self.assertIn("target=", regs, "and open it as a link")
+        # The sentence each number was read out of, not just the page it is on.
+        self.assertIn("a.quote", regs)
+
+    def test_the_regs_tab_says_what_it_has_no_rule_for(self):
+        """18 of the 24 loggable species have no transcribed rule. Leaving
+        them off the list would read as "no rules apply", which is the one
+        thing it must never mean -- an absence and a refusal are different
+        facts, and only one of them is a reason to keep a fish.
+        """
+        route = self.server.split('url.path == "/api/regs"')[1].split("if url.path ==")[0]
+        self.assertIn("unregulated_warning", route,
+                      "species with no rule must be named, not omitted")
+        self.assertIn('"modelled":', route)
+        # The rendered fallback, not the phrase anywhere on the page. The
+        # closing disclaimer also contains "not modelled", so asserting that
+        # against the raw page passed with the label itself gutted.
+        # The gaps block, sliced out. What matters is that every species with
+        # no rule is NAMED and the distinction is stated -- not that the
+        # per-species warning string is echoed. `unregulated_warning` is one
+        # template with the name substituted, so printing it once per species
+        # was 1.4KB of identical sentence burying the six real rules, which is
+        # the volume problem this tab exists to remove.
+        regs = self._regs_renderer()
+        gaps = regs.split("const gaps")[1].split("$('#regs')")[0]
+        self.assertIn("r.name", gaps, "every species with no rule is named")
+        self.assertIn("not.length", gaps, "and counted")
+        self.assertIn("rules not modelled", gaps,
+                      "the page must use the phrase the app is held to")
+        # The safety point, in visible text: unverified is not the same as
+        # unrestricted, and only one of those is a reason to keep a fish.
+        self.assertIn("not that there are none", gaps)
+
+    def test_the_api_still_offers_the_per_species_warning(self):
+        """The desk states the caveat once because it lists eighteen species
+        at a time. The phone shows one species at a time and needs the
+        sentence for that fish -- `paintLegal` prints it -- so the endpoint
+        keeps sending it even though this page does not repeat it.
+        """
+        route = self.server.split('url.path == "/api/regs"')[1].split("if url.path ==")[0]
+        self.assertIn("unregulated_warning", route)
+        self.assertIn('"warning"', route)
+        self.assertIn("RULES NOT MODELLED", self.page,
+                      "the phone still says it per species")
 
     def test_the_desk_works_at_the_mooring(self):
         """Its four readings are what you catch up on at the dock, which is

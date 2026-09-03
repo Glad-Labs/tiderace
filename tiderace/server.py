@@ -21,7 +21,7 @@ import os
 import re
 import threading
 import traceback
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -409,17 +409,73 @@ class Handler(BaseHTTPRequestHandler):
                 if sp and sp in hmsmod.RULES:
                     out["status"] = hmsmod.status(sp)
                 return self._send_json(out)
-            if url.path == "/api/review":
-                from . import extract
-                kind = q.get("kind", [None])[0]
+            if url.path == "/api/regs":
+                # The rules as they stand, not the claims behind them.
+                #
+                # This replaced /api/review, which served extract.pending() --
+                # every claim an extractor had made, forty-odd of them, with no
+                # approve action anywhere because auto-apply had made one
+                # pointless. Matt: "I shouldn't be reviewing that stuff. I just
+                # want the latest regulations posted, and a link I can click to
+                # verify them." A queue of claims is work; a rule with its
+                # notice attached is an answer.
+                from . import regs as regsmod, species as spmod
+                when = date.today()
+                rows = []
+                for sp in spmod.loggable():
+                    if sp.hms:
+                        continue           # federal, and hms.py owns them
+                    entry = {"key": sp.key, "name": sp.name, "group": sp.group,
+                             "modelled": sp.regulated, "modes": []}
+                    if not sp.regulated:
+                        # Said out loud rather than omitted. A species missing
+                        # from this list would read as "no rules", which is the
+                        # one thing it must never mean.
+                        entry["warning"] = spmod.unregulated_warning(sp.key)
+                        rows.append(entry)
+                        continue
+                    for mode in ("recreational", "commercial"):
+                        try:
+                            st = regsmod.status(sp.key, when, mode)
+                        except Exception:                          # noqa: BLE001
+                            continue
+                        if not st.get("known"):
+                            continue
+                        entry["modes"].append({
+                            "mode": mode,
+                            "line": regsmod.summary_line(sp.key, when, mode),
+                            "open": st.get("open"),
+                            "season": st.get("season"),
+                            "min_inches": st.get("min_inches"),
+                            "slot": st.get("slot"),
+                            "bag": st.get("bag"),
+                            "note": st.get("note"),
+                            "stale": st.get("stale"),
+                            "checked_on": st.get("checked_on"),
+                            "advisory": st.get("advisory"),
+                            # The link that replaces the review step.
+                            "source": st.get("applied_source") or st.get("source"),
+                            "applied": st.get("applied") or [],
+                        })
+                    try:
+                        entry["differences"] = regsmod.differences(sp.key, when)
+                    except Exception:                              # noqa: BLE001
+                        entry["differences"] = []
+                    rows.append(entry)
                 try:
-                    rows = extract.pending(kind)
-                except (OSError, ValueError) as exc:
-                    return self._send_json({"error": str(exc)}, 500)
-                # Read-only on purpose: no approve action exists anywhere in
-                # the codebase, and inventing one here would write claims into
-                # the model with nothing downstream expecting them.
-                return self._send_json({"pending": rows, "read_only": True})
+                    from . import applied as appliedmod
+                    ap = appliedmod.summary()
+                except Exception:                                  # noqa: BLE001
+                    ap = {}
+                return self._send_json({
+                    "as_of": when.isoformat(),
+                    "rows": rows,
+                    # What the machine applied on its own since the file was
+                    # last edited by hand, and which way each change went.
+                    "applied_at": ap.get("applied_at"),
+                    "applied_count": ap.get("count"),
+                    "relaxed": ap.get("relaxed") or [],
+                })
             if url.path == "/api/reports":
                 from . import reports as rep
                 try:

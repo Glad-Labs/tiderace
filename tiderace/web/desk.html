@@ -68,6 +68,18 @@ h2{font:600 13px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
 .row .k{color:var(--ink-2)}
 .row .v{margin-left:auto; font-variant-numeric:tabular-nums; color:var(--ink)}
 .dim{color:var(--muted); font:12px/1.6 var(--mono)}
+/* Rules read left-to-right as sentences. `.row .v` has margin-left:auto, which
+   right-aligns the value -- correct for a column of numbers, wrong for "open
+   through 12/31 · slot 28-31" · 1 fish/person/day", which came out ragged and
+   sometimes shoved to the far edge depending on length. */
+#regs .rule{padding:9px 0; border-top:1px solid rgba(39,64,72,.55)}
+#regs .rule:first-of-type{border-top:none}
+#regs .md{font:10px/1 var(--mono); letter-spacing:.1em; text-transform:uppercase;
+          color:var(--depth)}
+#regs .md .adv{color:var(--muted); letter-spacing:0; text-transform:none}
+#regs .rv{font:13px/1.5 var(--mono); color:var(--ink); margin-top:5px}
+#regs .rv.shut{color:var(--crit)}
+#regs .names{font:13px/1.9 var(--mono); color:var(--ink-2)}
 .warn{color:var(--warn)}
 .crit{color:var(--crit)}
 .tag{
@@ -92,7 +104,7 @@ a{color:var(--depth)}
 <nav>
   <button data-s="history" class="on">Log</button>
   <button data-s="reports">Reports</button>
-  <button data-s="review">Review</button>
+  <button data-s="regs">Regs</button>
   <button data-s="hms">HMS</button>
   <button data-s="sources">Sources</button>
 </nav>
@@ -100,7 +112,7 @@ a{color:var(--depth)}
 <main>
   <section id="history" class="on"><div class="empty">reading…</div></section>
   <section id="reports"><div class="empty">reading…</div></section>
-  <section id="review"><div class="empty">reading…</div></section>
+  <section id="regs"><div class="empty">reading…</div></section>
   <section id="hms"><div class="empty">reading…</div></section>
   <section id="sources"><div class="empty">reading…</div></section>
 </main>
@@ -191,31 +203,93 @@ const RENDER = {
          somebody else's day, and never a substitute for your own log.</div>`;
   },
 
-  async review(){
-    const d = await get('/api/review');
-    const rows = (d.pending || []).map(r => {
-      const conf = r.confidence || '?';
-      const cls = conf === 'high' ? 'hi' : conf === 'low' ? 'lo' : '';
-      const bits = [r.license_mode, r.change_type, r.value,
-                    r.effective_date && ('effective ' + r.effective_date)]
+  /* The rules as they stand, with the notice attached.
+   *
+   * This tab used to be Review: forty-odd extractor claims, each with a
+   * confidence score, and no approve button anywhere because auto-apply had
+   * already made one pointless. Matt, on 3 September 2026: "I shouldn't be
+   * reviewing that stuff. I just want the latest regulations posted, and then
+   * a link in the app that I can click on to verify them on the actual page."
+   *
+   * So this shows current state per species and puts the RIDEM page one tap
+   * away. Verifying one number you care about before a trip is a smaller job
+   * than clearing a queue, and it is the job he actually does. */
+  async regs(){
+    const d = await get('/api/regs');
+    const mode = r => {
+      const shut = r.open === false;
+      // The note stays out of the status line. Joined into it, striped bass
+      // read as one long red sentence in which "the minimum is 34 in --
+      // LARGER than the recreational slot" looked like part of the closure
+      // rather than the thing that catches you out when it reopens.
+      const bits = [];
+      if (r.line) bits.push(esc(r.line));
+      // Every rule the machine applied on its own, each with the sentence it
+      // was read out of. A number with no notice behind it is not checkable,
+      // and checkable is the whole point of this tab.
+      const ap = (r.applied || []).map(a => {
+        const wh = [a.change_type, a.value, a.period, a.sub_fishery,
+                    a.effective_date && ('effective ' + a.effective_date),
+                    a.reopens_on && ('reopens ' + a.reopens_on)]
                    .filter(Boolean).map(esc).join(' · ');
-      return `<div class="card">
-        <span class="tag ${cls}">${esc(r.kind || '?')}</span>
-        <span class="tag ${cls}">${esc(conf)} confidence</span>
-        <div style="margin-top:9px"><b>${esc(r.species || r.bait || '—')}</b></div>
-        <div class="dim">${bits}</div>
-        ${r.source ? `<div class="dim"><a href="${esc(r.source)}" rel="noopener"
-           target="_blank">source</a></div>` : ''}
-      </div>`;
-    }).join('') || '<div class="empty">Nothing awaiting review.</div>';
-    $('#review').innerHTML =
-      `<h2>Claims awaiting a human</h2>
-       ${rows}
-       <div class="dim">Read-only. Nothing in the codebase approves these yet,
-         and a button that wrote them into the model with nothing downstream
-         expecting them would be worse than no button. A regulation here is a
-         claim an extractor made, not a rule — check the source before you act
-         on it.</div>`;
+        return `<div class="dim">${wh}${a.relaxes === true
+          ? ' <b class="crit">looser than before — check this one</b>' : ''}
+          ${a.quote ? `<div class="dim">“${esc(a.quote)}”</div>` : ''}</div>`;
+      }).join('');
+      return `<div class="rule">
+          <div class="md">${esc(r.mode)}${r.advisory
+            ? ' <span class="adv">· advisory</span>' : ''}</div>
+          <div class="rv ${shut ? 'shut' : ''}">${shut ? 'CLOSED · ' : ''}${bits.join(' · ') || '—'}</div>
+          ${r.note ? `<div class="dim">${esc(r.note)}</div>` : ''}
+          ${ap}
+          ${r.stale ? `<div class="dim crit">last read off a notice
+             ${esc(r.checked_on)} — treat as out of date</div>` : ''}
+          ${r.source ? `<div class="dim"><a href="${esc(r.source)}" rel="noopener"
+             target="_blank">verify at the source →</a></div>` : ''}
+        </div>`;
+    };
+    const modelled = (d.rows || []).filter(r => r.modelled);
+    const not = (d.rows || []).filter(r => !r.modelled);
+    const cards = modelled.map(r => `<div class="card">
+        <div><b>${esc(r.name)}</b></div>
+        ${(r.modes || []).map(mode).join('')}
+        ${(r.differences || []).length
+          ? `<div class="dim">rec vs commercial: ${r.differences.map(esc).join('; ')}</div>`
+          : ''}
+      </div>`).join('') || '<div class="empty">No rules transcribed yet.</div>';
+    /* Absence and refusal are different facts, so the ones with no rule are
+     * named rather than left out of the list.
+     *
+     * Named, though -- not each given the same twenty-word caveat. The first
+     * version printed "Size and season for X are not modelled in this app.
+     * That means nobody verified them..." eighteen times, about 1.4KB of
+     * identical sentence that took two thirds of the page and pushed the six
+     * actual rules off the top. That is the same volume problem that made the
+     * Review tab useless, rebuilt in the thing meant to replace it. The
+     * caveat is a property of the whole list, so it is stated once. */
+    const gaps = not.length
+      ? `<h2>${not.length} with no rule transcribed</h2>
+         <div class="card">
+           <div class="names">${not.map(r => esc(r.name)).join(' · ')}</div>
+           <div class="dim" style="margin-top:9px">Size and season for these
+             are <b>rules not modelled</b> in this app — nobody read them off a
+             notice. That means unverified, not that there are none. Check the
+             RIDEM table before keeping one.</div>
+         </div>`
+      : '';
+    $('#regs').innerHTML =
+      `<h2>Rules in force ${esc(d.as_of || '')}</h2>
+       ${d.applied_at ? `<div class="dim">${esc(String(d.applied_count || 0))}
+          applied automatically from RIDEM notices, last run
+          ${esc(d.applied_at)}.${(d.relaxed || []).length
+            ? ` ${(d.relaxed || []).length} of them loosened a limit — those are
+                the ones a parse error would cost money on.` : ''}</div>` : ''}
+       ${cards}
+       ${gaps}
+       <div class="dim">Nothing here is approved by anybody. RIDEM published it,
+         the app mirrored it, and the link goes to the page it came from — check
+         the one you are about to act on. When it says a rule is not modelled
+         that is a fact about this app, not permission to keep the fish.</div>`;
   },
 
   async sources(){

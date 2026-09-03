@@ -34,7 +34,7 @@
 // is genuinely confusing during development -- a browser check against a
 // stale cache proves nothing, which is how a debug probe survived one round
 // of "verification" here.
-const SHELL = 'tiderace-shell-v75';
+const SHELL = 'tiderace-shell-v76';
 const TILES = 'tiderace-tiles-v1';
 
 // About 55 MB of raster tiles: enough for the bay at working zoom plus wherever

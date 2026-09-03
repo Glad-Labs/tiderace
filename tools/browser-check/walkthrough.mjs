@@ -181,13 +181,33 @@ async function walk(url) {
   // --- the desk, and all five of its tabs --------------------------------
   await page.goto(url.replace(/\/$/, '') + '/desk', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2500);
-  for (const s of ['history', 'reports', 'review', 'hms', 'sources']) {
+  for (const s of ['history', 'reports', 'regs', 'hms', 'sources']) {
     await page.click(`nav button[data-s=${s}]`);
     await page.waitForTimeout(2200);
     const txt = await page.evaluate(id =>
       (document.getElementById(id).textContent || '').trim(), s);
     step(`desk tab: ${s}`, txt.length > 40 && !/could not load/i.test(txt),
          `${txt.length} chars`);
+  }
+  // Regs replaced Review, and the point of the swap was the link: a rule you
+  // cannot check against its notice is the thing Matt said he did not want.
+  // A tab that renders but links nowhere would pass the length check above.
+  {
+    await page.click('nav button[data-s=regs]');
+    await page.waitForTimeout(1200);
+    const r = await page.evaluate(() => {
+      const sec = document.getElementById('regs');
+      const links = [...sec.querySelectorAll('a[href]')];
+      return { links: links.length,
+               offsite: links.filter(a => /^https?:/.test(a.href)).length,
+               verify: links.filter(a => /verify/i.test(a.textContent)).length,
+               quotes: (sec.textContent.match(/[\u201c]/g) || []).length,
+               saysNotModelled: /not modelled/i.test(sec.textContent) };
+    });
+    step('desk regs: every rule links to its notice',
+         r.offsite >= 6 && r.verify >= 6, JSON.stringify(r));
+    step('desk regs: names the species it has no rule for',
+         r.saysNotModelled, JSON.stringify(r));
   }
   await page.screenshot({ path: 'walkthrough-desk.png' });
 
