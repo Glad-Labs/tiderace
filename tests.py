@@ -4419,6 +4419,41 @@ class DaylightAndEveryFish(unittest.TestCase):
         self.assertIn("setTimeout", oninput,
                       "dragging fires per pixel; each one is a round trip")
 
+    def test_the_forecast_air_temperature_reaches_the_survey(self):
+        """`_row_at` has a `keep` tuple and air_temp_f was not in it, so the
+        air row could only ever show the observation and could not follow the
+        slider. features.build has carried a gridpoint air temperature all
+        along -- the same series the wind comes from."""
+        import inspect
+        from tiderace import survey
+        keep = inspect.getsource(survey._row_at).split("keep = (")[1].split(")")[0]
+        self.assertIn("air_temp_f", keep)
+        js = strip_comments(self.page)
+        self.assertIn("row('air', `${Math.round(c.air_temp_f)}", js,
+                      "the air row must read the forecast, not the observation")
+        self.assertIn("row('air now'", js,
+                      "the observation keeps its own row and its now marker")
+
+    def test_the_marine_forecast_picks_the_period_on_the_slider(self):
+        """Four periods -- OVERNIGHT, THU, THU NIGHT, FRI -- were fetched on
+        every survey and rendered nowhere, then handed over undifferentiated,
+        so a panel headed tomorrow afternoon carried tonight's fog."""
+        from datetime import datetime, timedelta
+        from tiderace import survey
+        mf = {"issued": "2026-09-03T02:04",
+              "periods": [{"name": "OVERNIGHT"}, {"name": "THU"},
+                          {"name": "THU NIGHT"}, {"name": "FRI"}]}
+        at = lambda h: datetime(2026, 9, 3, 2, 4) + timedelta(hours=h)
+        self.assertEqual(survey._period_for(mf, at(1))["name"], "OVERNIGHT")
+        self.assertEqual(survey._period_for(mf, at(10))["name"], "THU")
+        self.assertEqual(survey._period_for(mf, at(24))["name"], "THU NIGHT")
+        # Past the last period it must return nothing rather than the last one:
+        # a four-period forecast does not reach two days and the slider does.
+        self.assertIsNone(survey._period_for(mf, at(96)),
+                          "ran off the end and returned a period anyway")
+        self.assertIn("mfrow", strip_comments(self.page),
+                      "and the page has to render it")
+
     def test_a_reading_that_cannot_be_forecast_says_so(self):
         """Only `conditions` moves with `when`. Water level anomaly, observed
         wind and air, logged bait, bird and whale records are observations --
@@ -4429,11 +4464,18 @@ class DaylightAndEveryFish(unittest.TestCase):
         self.assertIn("nowonly", fn)
         self.assertIn("window.surveyAtTime", fn,
                       "the marker only shows when the slider is away from now")
-        for observed in ("'water level'", "'wind now'", "'air'",
+        for observed in ("'water level'", "'wind now'", "'air now'",
                          "'bait seen'", "'birds'", "'whales'"):
             call = js.split("h += row(" + observed)[1].split(");")[0]
             self.assertIn("true", call,
                           "%s is an observation and must be marked" % observed)
+        # And the forecast halves of those pairs must NOT be marked, or the
+        # chip stops meaning anything. `air` was the observation until the
+        # gridpoint temperature was plumbed through; it is the forecast now.
+        for forecast in ("'wind'", "'air'"):
+            call = js.split("h += row(" + forecast + ",")[1].split(");")[0]
+            self.assertNotIn("true", call,
+                             "%s follows the slider and must not be marked" % forecast)
 
     def test_the_spots_tab_reads_the_binding_that_exists(self):
         """`GRID` is a module-scope let, so it is not a property of window and

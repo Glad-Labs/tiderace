@@ -30,7 +30,7 @@ Nothing in here is scored, ranked or blended. It reports.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Metres. Rough, honest, and documented at the point of use rather than
 # invented per call.
@@ -176,6 +176,14 @@ def survey(lat: float, lon: float, when: datetime | None = None,
     # ------------------------------------------------------- marine forecast
     mf, err = _try(conditions.marine_forecast)
     if mf:
+        # Pick the period covering the hour asked for. The forecast arrives as
+        # OVERNIGHT / THU / THU NIGHT / FRI and the whole set was handed over
+        # undifferentiated, so a panel showing tomorrow afternoon carried
+        # tonight's fog. NWS period names are the only ordering available --
+        # there are no timestamps on them -- so this counts forward from the
+        # issue time in half-days, which is what those names mean.
+        mf = dict(mf)
+        mf["period"] = _period_for(mf, when)
         L["marine_forecast"] = _d(mf, "NWS coastal waters forecast", None,
                                   "zone-wide text, not a point value")
     else:
@@ -211,10 +219,48 @@ def _row_at(lat: float, lon: float, when: datetime, species: str) -> dict:
     if not rows:
         raise RuntimeError("no feature row for that hour")
     r = rows[0]
+    # `air_temp_f` was missing from this list, which is the whole reason the
+    # air row could not follow the time slider. features.build has carried a
+    # forecast air temperature all along -- `_nearest(wx, t, "air_temp_f")`,
+    # the same NWS gridpoint series the wind comes from -- and this tuple
+    # dropped it on the way out. The observed air temperature in the `weather`
+    # layer is a different number and stays where it is; it is an observation
+    # and has no value at a future hour.
     keep = ("current_speed", "current_dir", "water_temp_f", "wind_kt", "wind_dir",
+            "air_temp_f", "sky_pct",
             "light_phase", "pressure_trend_3h", "next_tide", "moon_phase",
             "moon_illum", "wind_against_tide", "exposed")
     return {k: r.get(k) for k in keep if k in r}
+
+
+def _period_for(mf: dict, when: datetime) -> dict | None:
+    """Which forecast period covers this hour.
+
+    NWS coastal waters periods carry no timestamps, only names -- OVERNIGHT,
+    THU, THU NIGHT, FRI. What they do have is a strict order and a known
+    cadence: each one is a half-day, day periods running roughly 06-18 local
+    and night periods 18-06. So the period is found by counting half-days from
+    the issue time rather than by parsing the names, which would need a
+    weekday table and would still not say where the boundary falls.
+
+    Returns None rather than guessing when the hour is past the last period --
+    a four-period forecast does not reach 48 hours out, and the slider does.
+    """
+    periods = mf.get("periods") or []
+    if not periods:
+        return None
+    try:
+        issued = datetime.fromisoformat(mf["issued"])
+    except (KeyError, TypeError, ValueError):
+        return periods[0]
+    # Where the first period ends: the next 06:00 or 18:00 after issue.
+    edge = issued.replace(minute=0, second=0, microsecond=0)
+    while edge.hour not in (6, 18) or edge <= issued:
+        edge += timedelta(hours=1)
+    if when < edge:
+        return periods[0]
+    idx = 1 + int((when - edge).total_seconds() // (12 * 3600))
+    return periods[idx] if idx < len(periods) else None
 
 
 def _observations(lat: float, lon: float) -> dict:

@@ -361,6 +361,13 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
          font-variant-numeric:tabular-nums}
 .srow .v small{font:11px/1 var(--mono); color:var(--muted); font-weight:400}
 /* A value the slider cannot move, shown while the slider is away from now. */
+/* The marine forecast is a paragraph, not a number, so it does not get the
+   big tabular treatment the readings do. */
+.srow.mfrow{align-items:flex-start}
+.srow .v.mftext{
+  font:12px/1.55 var(--mono); font-weight:400; color:var(--ink-2);
+  letter-spacing:0;
+}
 .srow .v small.nowonly{
   color:var(--warn); border:1px solid var(--hair); border-radius:999px;
   padding:2px 6px; margin-left:4px; letter-spacing:.06em;
@@ -2987,8 +2994,15 @@ window.surveyURL = (lat, lon) =>
     if (w.wind_kt != null)
       h += row('wind now', `${Math.round(w.wind_kt)} kt`, res('weather'),
                'observed', true);
+    // The same pair the wind rows use: the forecast follows the slider, the
+    // observation stays put and says so. `air` used to be the observed value
+    // alone, which is why it could not move -- features has carried a
+    // gridpoint air temperature all along and survey was dropping it.
+    if (c.air_temp_f != null)
+      h += row('air', `${Math.round(c.air_temp_f)}°F`, 2500, 'forecast');
     if (w.air_temp_f != null)
-      h += row('air', `${Math.round(w.air_temp_f)}°F`, res('weather'), null, true);
+      h += row('air now', `${Math.round(w.air_temp_f)}°F`, res('weather'),
+               'observed', true);
     if (c.pressure_trend_3h != null)
       h += row('pressure', `${c.pressure_trend_3h > 0 ? '+' : ''}${c.pressure_trend_3h.toFixed(1)} mb`,
                2500, '3h');
@@ -3019,6 +3033,24 @@ window.surveyURL = (lat, lon) =>
       });
       h += `<details class="fold"><summary>rules &amp; protected species</summary>`
          + inner + `</details>`;
+    }
+
+    // Four periods of waves, gusts and fog were fetched on every survey and
+    // rendered nowhere. The one covering the hour on the slider is the one
+    // worth reading; past the last period it says so rather than showing
+    // tonight's fog against Friday.
+    const mf = val('marine_forecast') || {};
+    if (mf.periods && mf.periods.length){
+      const per = mf.period;
+      h += group('the forecast');
+      h += `<div class="srow mfrow"><div class="k">${esc(per ? per.name.toLowerCase() : 'marine')}</div>` +
+           `<div class="v mftext">${per ? esc(per.text)
+             : 'Past the end of the coastal waters forecast — it runs about ' +
+               'two days and the slider goes further.'}</div></div>`;
+      if (mf.name)
+        h += `<div class="sdim">${esc(mf.name)} (${esc(mf.zone || '')}) · ` +
+             `issued ${esc((mf.issued || '').replace('T', ' '))} · zone-wide, ` +
+             `not a reading at this coordinate</div>`;
     }
 
     const un = Object.keys(d.unavailable || {});
