@@ -13,10 +13,17 @@ claimed:
   **loggable**    Everything. Costs nothing, claims nothing, and is the whole
                   point: you caught a bonito, the log should hold that.
 
-  **scored**      The six in `score.PROFILES`. Their temperature bands are
-                  grounded in published literature and cited in that file; the
-                  weights are still hand-set priors waiting on a catch log.
-                  Adding a seventh means doing that research, not guessing.
+  **scored**      The fourteen in `score.PROFILES`. Their temperature bands
+                  are grounded in published literature and cited in that file;
+                  the weights are still hand-set priors waiting on a catch log.
+                  Adding a fifteenth means doing that research, not guessing.
+
+                  It was six until 2026-09-02, when the inshore and nearshore
+                  species got the same treatment the original six had. The
+                  other twenty-one are not a backlog: `score.NOT_PROFILED`
+                  carries a reason for every one of them, and for eleven of
+                  those the reason is that somebody looked and the answer was
+                  no. An absence and a refusal are different facts.
 
   **regulated**   Only where the rules were actually read out of a RIDEM or
                   DMF notice. Anything else says so and points at the book.
@@ -77,7 +84,7 @@ class Species:
 # this list becomes a dropdown and the fish you catch weekly should not be
 # below the one you catch once a decade.
 SPECIES: tuple[Species, ...] = (
-    # ---- the six the model scores ----
+    # ---- the original six the model scored ----
     Species("striped_bass", "Striped Bass", INSHORE,
             ("striper", "stripers", "bass", "schoolie", "schoolies",
              "keeper", "linesider", "rockfish")),
@@ -92,11 +99,17 @@ SPECIES: tuple[Species, ...] = (
     Species("tautog", "Tautog (Blackfish)", INSHORE,
             ("tog", "blackfish", "white chin")),
 
-    # ---- inshore, loggable, not modelled ----
+    # ---- inshore and nearshore: six of these eight are now modelled ----
+    #
+    # northern_kingfish and summer_triggerfish are the two that are not, and
+    # both are recorded refusals rather than omissions — see
+    # score.NOT_PROFILED for what was consulted and what it said.
     Species("weakfish", "Weakfish", INSHORE,
             ("squeteague", "squet", "sea trout", "grey trout"),
-            notes="Was the bay's other great inshore fish; the run collapsed "
-                  "and has only partly come back."),
+            notes="Was the bay's other great inshore fish. The GSO trawl "
+                  "series says the recovery is further along at the mouth "
+                  "than the usual story allows — a 2020-2024 mean of 2.20 at "
+                  "Whale Rock against 0.70 across 65 years."),
     Species("winter_flounder", "Winter Flounder", INSHORE,
             ("blackback", "black back", "flatfish"),
             notes="Cold-water flatfish, a spring fishery when there is one."),
@@ -124,19 +137,30 @@ SPECIES: tuple[Species, ...] = (
             notes="Bycatch. Logging them is how you learn which drifts are "
                   "worth abandoning."),
 
-    # ---- the fall run ----
+    # ---- the fall run: modelled since 2026-09-02 ----
     Species("bonito", "Atlantic Bonito", NEARSHORE,
             ("bones", "boneeto")),
     Species("false_albacore", "False Albacore", NEARSHORE,
             ("albie", "albies", "little tunny", "fat albert")),
 
     # ---- cold water ----
+    #
+    # Loggable and deliberately never scored. `score.NOT_PROFILED` carries the
+    # reasoning: none of these three is among the 25 species that make up 96%
+    # of everything the GSO trawl has caught in this bay since 1959, and the
+    # documented shift in that series is away from exactly this group. Absence
+    # from the forecast is a finding here, not a gap.
     Species("cod", "Atlantic Cod", NEARSHORE,
-            ("codfish", "market cod", "scrod")),
-    Species("pollock", "Pollock", NEARSHORE, ("pollack",)),
+            ("codfish", "market cod", "scrod"),
+            notes="Not forecast: effectively gone from this water. Log it if "
+                  "one turns up — that is worth more than a forecast would be."),
+    Species("pollock", "Pollock", NEARSHORE, ("pollack",),
+            notes="Not forecast: effectively gone from this water."),
     Species("haddock", "Haddock", OFFSHORE, ()),
     Species("monkfish", "Monkfish", NEARSHORE,
-            ("goosefish", "monk")),
+            ("goosefish", "monk"),
+            notes="Not forecast: effectively gone from this water; the "
+                  "literature describes a Gulf of Maine and Georges Bank fish."),
 
     # ---- offshore, HMS: federally managed, permit required ----
     Species("bluefin", "Bluefin Tuna", OFFSHORE,

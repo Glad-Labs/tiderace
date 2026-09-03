@@ -105,9 +105,70 @@ class Regulations(unittest.TestCase):
         self.assertTrue(regs.RULES["tautog"].is_open(date(2026, 8, 1)))
         self.assertTrue(regs.RULES["tautog"].is_open(date(2026, 4, 15)))
 
-    def test_every_scored_species_has_a_rule(self):
+    def test_a_scored_species_without_a_rule_says_so_out_loud(self):
+        """This replaced `test_every_scored_species_has_a_rule` on 2026-09-02.
+
+        That test asserted scored => regulated, which held only while the two
+        sets happened to be the same six species. Eight profiles were added
+        out of the EFH and ASMFC literature and the sets came apart, and the
+        way to make the old assertion pass again would have been to type eight
+        RIDEM size limits in from memory. That is the one thing CLAUDE.md
+        forbids outright: a wrong size limit is not a bad forecast, it is a
+        fine, and worse than a fine on a commercial licence.
+
+        So the invariant moved to the thing that was actually being protected.
+        A species may be scored without a rule; it may NOT be scored, shown,
+        and silent about the rules. Every one of them has to produce the
+        warning, and the warning has to say that nobody checked rather than
+        that there is nothing to check.
+        """
+        unruled = [sp for sp in score.PROFILES if sp not in regs.RULES]
+        self.assertTrue(unruled, "no scored species is unregulated any more — "
+                                 "if regs.py grew, this test is now vacuous "
+                                 "and should assert against the new set")
+        for sp in unruled:
+            self.assertFalse(regs.status(sp)["known"])
+            warn = speciesmod.unregulated_warning(sp)
+            self.assertTrue(warn, f"{sp} is scored, has no rule, and says "
+                                  f"nothing about it")
+            self.assertIn("not modelled", warn,
+                          f"{sp}: the warning has to name the app as the gap")
+        # And the ones that DO have a rule must not be dragged into the
+        # warning path -- a "rules not modelled" line under a fluke forecast
+        # would be a lie in the other direction.
         for sp in score.PROFILES:
-            self.assertIn(sp, regs.RULES, f"{sp} can be scored but has no regulation")
+            if sp in regs.RULES:
+                self.assertIsNone(speciesmod.unregulated_warning(sp), sp)
+
+    def test_the_forecast_prints_the_missing_rule_rather_than_nothing(self):
+        """Silence under a forecast reads as "no limits". The web view already
+        guarded this in paintLegal(); the CLI did not, because until now every
+        species it could forecast had a rule."""
+        import pathlib
+        src = strip_py_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "cli.py").read_text())
+        fn = src.split("def _cmd_forecast(")[1].split("\ndef ")[0]
+        self.assertIn("unregulated_warning", fn,
+                      "a forecast for a species with no transcribed rule goes "
+                      "out with no legal line at all")
+        # The regs table iterates the profiles, so eight of fourteen would
+        # have been skipped by the `continue` and the table would have read as
+        # the complete set.
+        table = src.split("def _cmd_regs(")[1].split("\ndef ")[0]
+        self.assertIn("unregulated_warning", table)
+
+    def test_the_web_view_says_rules_not_modelled_for_any_species(self):
+        """paintLegal keys off `regulations.known` and nothing else, so a
+        newly scored fish inherits the guard for free. Pinned because the
+        obvious "tidy-up" is to gate it on `modelled` instead, which would
+        silence it for exactly the eight species that need it."""
+        import pathlib
+        page = (pathlib.Path(__file__).parent / "tiderace" / "web"
+                / "index.html").read_text()
+        fn = strip_comments(page).split("function paintLegal(")[1][:900]
+        self.assertIn("!r.known", fn)
+        self.assertIn("RULES NOT MODELLED", fn)
+        self.assertNotIn("modelled &&", fn)
 
     def test_striped_bass_slot_is_surfaced(self):
         self.assertEqual(regs.status("striped_bass")["slot"], (28, 31))
@@ -351,10 +412,23 @@ class Commercial(unittest.TestCase):
         self.assertEqual(regs.status("scup", self.FRI)["mode"], "recreational")
         self.assertEqual(regs.status("scup", self.FRI, "commercial")["mode"], "commercial")
 
-    def test_every_species_has_both_regimes(self):
-        for sp in score.PROFILES:
-            self.assertIn(sp, regs.RULES, f"{sp} missing recreational rule")
-            self.assertIn(sp, regs.COMMERCIAL, f"{sp} missing commercial rule")
+    def test_a_transcribed_species_has_both_regimes(self):
+        """Was `test_every_species_has_both_regimes`, over score.PROFILES.
+
+        The point was never that every fish has rules on file — it was that a
+        fish must never have one regime transcribed and not the other, because
+        the two disagree (fluke is 19 in recreationally and 14 in
+        commercially) and showing the wrong column is the whole risk of
+        carrying commercial rules at all. That is a statement about regs.py,
+        so it now runs over regs.py rather than over the profile list, and it
+        no longer breaks every time a species is modelled.
+        """
+        self.assertEqual(set(regs.RULES), set(regs.COMMERCIAL),
+                         "a species with one regime transcribed and not the "
+                         "other will silently show the wrong column")
+        for sp in regs.RULES:
+            self.assertIn(sp, speciesmod.BY_KEY, f"{sp} has rules but is not "
+                                                 f"a species you can log")
 
 
 class WebFetching(unittest.TestCase):
@@ -3989,7 +4063,14 @@ class SpeciesRegistry(unittest.TestCase):
 
     def test_you_can_log_far_more_than_the_model_scores(self):
         self.assertGreater(len(speciesmod.loggable()), 25)
-        self.assertEqual(len(speciesmod.scored()), 6)
+        # 6 until 2026-09-02, then the inshore and nearshore species were
+        # researched. Pinned as a literal on purpose: this number may only go
+        # up by doing the reading, so moving it is a diff someone has to
+        # justify with a citation in score.py.
+        self.assertEqual(len(speciesmod.scored()), 14)
+        # The gap between the two tiers is the whole design, and it must not
+        # close by accident.
+        self.assertGreater(len(speciesmod.loggable()), len(speciesmod.scored()))
 
     def test_every_scored_species_is_in_the_registry(self):
         from tiderace import score
@@ -5389,6 +5470,43 @@ class PotentialSurface(unittest.TestCase):
             out.append((key, node, comment))
         return out
 
+    def test_every_citation_tag_resolves_to_a_declared_source(self):
+        """A bracketed tag is the whole provenance mechanism in this file, and
+        nothing checked that one resolves. Replacing [EFH-DOG] with [MADE-UP]
+        passed the suite -- an invented label bought a number exactly as well
+        as a real one."""
+        import re
+        from tiderace import score
+        doc = score.__doc__ or ""
+        declared = set(re.findall(r"^\s{2}(\[[A-Z][A-Z0-9-]*\])", doc, re.M))
+        self.assertGreater(len(declared), 10,
+                           "found almost no declared sources; the walk broke")
+        src = __import__("inspect").getsource(score)
+        used = set(re.findall(r"\[[A-Z][A-Z0-9-]*\]", src))
+        # Bracketed things that are not citations at all.
+        used -= {"[ASMFC-SCI ch.8]"}
+        missing = sorted(t for t in used - declared)
+        self.assertEqual(missing, [],
+                         "cited but never declared: %s" % missing)
+
+    def test_a_band_carries_its_own_claim(self):
+        """The existing depth test asks whether the PROFILE names a source,
+        and every profile names one for temperature -- so an invented depth
+        band inherits the citation of an unrelated number. Adding
+        depth=(20,40,80,120) to a profile passed the suite. A band must carry
+        the sentence saying what it claims, which is where the caveat lives
+        and cannot be borrowed from another line."""
+        from tiderace import score
+        for key, prof in score.PROFILES.items():
+            if prof.depth is not None:
+                self.assertTrue(getattr(prof, "depth_claim", ""),
+                                "%s has a depth band and no depth_claim" % key)
+            if getattr(prof, "bottom", None) is not None:
+                self.assertTrue(getattr(prof, "bottom_claim", ""),
+                                "%s has a substrate band and no bottom_claim" % key)
+            if getattr(prof, "temp_claim", None) is not None:
+                self.assertIsInstance(prof.temp_claim, str)
+
     def test_a_depth_band_may_only_exist_where_a_source_is_named(self):
         """The rule the temperature bands were held to, applied to depth.
 
@@ -5643,6 +5761,530 @@ class PotentialSurface(unittest.TestCase):
         # painted as though you were sitting on it
         cell = inspect.getsource(heat.surface).split("cells.append(")[1]
         self.assertIn("confidence", cell)
+
+
+class PublishedTemperatureBands(unittest.TestCase):
+    """The depth rule, applied to the one band every species is forced to have.
+
+    Depth can be None, so "no publication supports one" is expressible and
+    `PotentialSurface` can test it directly. Temperature cannot: every profile
+    carries four numbers whether or not anybody measured them, which means the
+    tuple alone cannot tell a cited edge from a plausible one. That is exactly
+    the failure mode the depth work was written to prevent, arriving through a
+    door depth does not have.
+
+    `Profile.temp_claim` is the door being shut. These tests hold it to the
+    same standard: a claim of citation has to name a source score.py declares,
+    a number that was NOT cited has to say so in a word that cannot be read as
+    a citation, and the numbers that came out of a paper have to still be the
+    numbers in the paper.
+    """
+
+    # ---- the same AST walk PotentialSurface uses, over a different keyword --
+
+    @staticmethod
+    def _kwarg_comments(kwarg):
+        """(species, contiguous comment block directly above `kwarg=`).
+
+        Scoped to the run of comment lines immediately above the keyword, for
+        the reason PotentialSurface records: a search over the whole Profile
+        call is satisfied by a citation earned by some other number in it.
+        """
+        import ast, inspect
+        from tiderace import score
+        src = inspect.getsource(score)
+        lines = src.splitlines()
+        out = []
+        for node in ast.walk(ast.parse(src)):
+            fn = node.func if isinstance(node, ast.Call) else None
+            if not (isinstance(fn, ast.Name) and fn.id == "Profile"):
+                continue
+            key, comment = None, ""
+            for kw in node.keywords:
+                if kw.arg == "key" and isinstance(kw.value, ast.Constant):
+                    key = kw.value.value
+                if kw.arg == kwarg:
+                    block, i = [], kw.value.lineno - 2
+                    while i >= 0 and lines[i].strip().startswith("#"):
+                        block.append(lines[i])
+                        i -= 1
+                    comment = "\n".join(reversed(block))
+            out.append((key, comment))
+        return out
+
+    @staticmethod
+    def _declared():
+        """Source tags the module docstring actually declares, with the text."""
+        import re
+        from tiderace import score
+        declared, tag = {}, None
+        for line in (score.__doc__ or "").splitlines():
+            m = re.match(r"\s{2}\[([A-Z0-9-]+)\]\s+(.*)", line)
+            if m:
+                tag = m.group(1)
+                declared[tag] = m.group(2)
+            elif tag and re.match(r"\s{4,}\S", line):
+                declared[tag] += " " + line.strip()
+            else:
+                tag = None
+        return declared
+
+    # ---------------------------------------------------------------- rules --
+
+    def test_every_profile_carries_a_temperature_claim(self):
+        """A band with no claim beside it is the state this field exists to
+        make impossible -- four numbers and no way to tell what they rest on."""
+        from tiderace import score
+        calls = self._kwarg_comments("temp")
+        self.assertEqual(len(calls), len(score.PROFILES),
+                         "the AST walk lost a Profile -- it cannot pass on an "
+                         "empty set")
+        for key, prof in score.PROFILES.items():
+            self.assertTrue(prof.temp_claim.strip(),
+                            "%s sets a temperature band and says nothing "
+                            "about where it came from" % key)
+
+    def test_a_claim_of_citation_names_a_source_the_docstring_declares(self):
+        """Same rule the depth bands are held to: the tag has to be real, and
+        it has to be one score.py declares with a year. A bare invented label
+        buys nothing."""
+        import re
+        from tiderace import score
+        declared = self._declared()
+        self.assertTrue(declared, "score.py declares no sources at all")
+
+        grab = lambda t: set(re.findall(r"\[([A-Z0-9-]+)(?:[,\s][^\]]*)?\]", t))
+        cited_any = 0
+        for key, prof in score.PROFILES.items():
+            tags = grab(prof.temp_claim)
+            bogus = tags - set(declared)
+            self.assertFalse(bogus, "%s cites %s for its temperature band and "
+                                    "score.py declares no such source"
+                                    % (key, sorted(bogus)))
+            for tag in sorted(tags):
+                self.assertRegex(declared[tag], r"(19|20)\d\d",
+                                 "%s cites [%s], declared without a year -- a "
+                                 "label, not a source" % (key, tag))
+            cited_any += bool(tags)
+        self.assertGreater(cited_any, 8, "almost nothing is cited any more; "
+                                         "this test has stopped testing")
+
+    def test_an_uncited_band_says_so_in_a_word_that_is_not_a_citation(self):
+        """The whole point, and the part a plausible number would slip past.
+
+        Six of the fourteen bands have at least one edge nobody published --
+        bonito and false albacore derived wholesale from a season statement,
+        weakfish's cold half, striped searobin's warm half, tautog's warm half,
+        bluefish's warm half. Each has to admit it in its claim. A claim that
+        merely fails to cite is not the same as one that says it is not citing:
+        the first is an omission, the second is the record.
+        """
+        from tiderace import score
+        # Deliberately narrow. "preferred", "reported", "found at" would all
+        # let a guess through wearing the vocabulary of a result.
+        admissions = ("derived", "hand-set", "angling knowledge", "unsourced",
+                      "not been determined", "inert spacer", "no publication")
+        uncited = {"striped_bass", "bluefish", "fluke", "black_sea_bass",
+                   "scup", "tautog", "bonito", "false_albacore", "weakfish",
+                   "striped_searobin"}
+        for key in sorted(uncited):
+            claim = score.PROFILES[key].temp_claim.lower()
+            self.assertTrue(
+                any(a in claim for a in admissions),
+                "%s has an edge nobody published and its temp_claim does not "
+                "say so in any of %s -- a claim that is merely silent about "
+                "the gap reads as a citation" % (key, list(admissions)))
+        # And the fully cited ones must NOT be carrying a disclaimer, or the
+        # word loses its meaning and the test above becomes decorative.
+        for key in ("winter_flounder", "atlantic_mackerel", "squid"):
+            claim = score.PROFILES[key].temp_claim.lower()
+            self.assertNotIn("derived", claim,
+                             "%s has four cited edges; calling it derived "
+                             "would make the disclaimer meaningless" % key)
+
+    def test_the_comment_above_the_band_carries_the_source_too(self):
+        """`temp_claim` is a summary. The reader who wants to check a number
+        reads the comment, so the comment is where the tag has to be -- and
+        scoped to the band, not to the profile."""
+        import re
+        declared = set(self._declared())
+        grab = lambda t: set(re.findall(r"\[([A-Z0-9-]+)(?:[,\s][^\]]*)?\]", t))
+        for key, comment in self._kwarg_comments("temp"):
+            self.assertTrue(
+                grab(comment) & declared,
+                "%s: the comment block directly above `temp=` names no source "
+                "score.py declares. A citation earned by a neighbouring number "
+                "does not count -- see PotentialSurface._profile_calls." % key)
+
+    # ------------------------------------------- the numbers are the numbers --
+
+    def test_the_cited_edges_are_still_the_published_celsius_values(self):
+        """These came out of papers in Celsius and were converted once. Pinned
+        edge by edge against the conversion, so a number that drifts by a
+        degree of feel stops being within rounding of what was published.
+
+        Asserted as `round(C*9/5+32) == the number in the file`, which is a
+        stronger statement than a literal: it says the Fahrenheit value IS the
+        published Celsius one and not merely close to it.
+        """
+        from tiderace import score
+        c2f = lambda c: c * 9 / 5 + 32
+        cited = {
+            # [EFH-WF] Table 1 and the ADULTS section
+            "winter_flounder": [
+                (0, 0.6, "adult occurrence floor, Table 1"),
+                (1, 12, "preferred range lower, McCracken 1963"),
+                (2, 15, "preferred range upper, McCracken 1963"),
+                (3, 23, "feeding ceased and they buried, Olla et al. 1969"),
+            ],
+            # [EFH-MACK]
+            "atlantic_mackerel": [
+                (0, 5, "intolerance floor, Overholtz & Anderson 1976"),
+                (1, 7.3, "laboratory preferred lower, Olla et al. 1975/1976"),
+                (2, 15.8, "laboratory preferred upper, Olla et al. 1975/1976"),
+                (3, 20, "highest commonly found, Bigelow & Schroeder 1953"),
+            ],
+            # [EFH-SQ Fig 8], Narragansett Bay recruits
+            "squid": [
+                (0, 7, "coldest found in this bay"),
+                (1, 15, "autumn mode in this bay"),
+                (2, 21, "top of the summer mode in this bay"),
+                (3, 26, "warmest found in this bay"),
+            ],
+            # [EFH-DOG] -- three oceans, which is why the claim says so
+            "dogfish": [
+                (0, 6, "lower limit caught, Shepherd et al. 2002"),
+                (1, 7, "worldwide favoured lower, Compagno 1984"),
+                (2, 13, "eastern Long Island Sound ceiling, Table 4"),
+                (3, 15, "worldwide favoured upper, Compagno 1984"),
+            ],
+            # [ASMFC-SCI ch.7], the one cited weakfish edge
+            "weakfish": [
+                (2, 28, "estuarine egress above, Wuenschel et al. 2014"),
+            ],
+            # [SEAROBIN], Mann 1974 in Long Island Sound
+            "striped_searobin": [
+                (0, 8, "last fish, December, Long Island Sound"),
+                (1, 10, "first fish, May, Long Island Sound"),
+            ],
+        }
+        for key, edges in cited.items():
+            band = score.PROFILES[key].temp
+            for i, celsius, what in edges:
+                self.assertEqual(
+                    band[i], round(c2f(celsius)),
+                    "%s temp[%d] is %s; %s is %.1fC = %.1fF, which rounds to "
+                    "%d. Either the band drifted or the source did."
+                    % (key, i, band[i], what, celsius, c2f(celsius),
+                       round(c2f(celsius))))
+
+    def test_a_derived_edge_still_matches_the_data_it_was_derived_from(self):
+        """Bonito, false albacore and weakfish have cold edges built by laying
+        a published season window over the GSO climatology. That is a real
+        derivation and it stays checkable: the numbers must still be what the
+        65-year record says for those weeks. If somebody nudges one by feel
+        this fails, which is the entire difference between deriving a number
+        and inventing one.
+        """
+        from tiderace import gso, score
+        data = gso.load()
+        if not data:
+            self.skipTest("GSO climatology not built "
+                          "(python3 -m tiderace gso --download)")
+        weeks = data["stations"]["fox_island"]["weeks"]
+        # (species, index, week, what the week is)
+        derived = [
+            # [RIDEM-AB]: most prevalent late May to late September
+            ("bonito", 0, 21, "late May, the window opening"),
+            ("bonito", 1, 39, "late September, the window closing"),
+            ("false_albacore", 0, 21, "late May, the window opening"),
+            ("false_albacore", 1, 39, "late September, the window closing"),
+            # [FGOM] Woods Hole: May until the middle of October
+            ("weakfish", 0, 19, "early May, the window opening"),
+            ("weakfish", 1, 41, "mid October, the window closing"),
+        ]
+        for key, i, week, what in derived:
+            rec = weeks.get(str(week))
+            self.assertIsNotNone(rec, "GSO has no week %d" % week)
+            self.assertEqual(
+                score.PROFILES[key].temp[i], round(rec["surface_f"]),
+                "%s temp[%d] is %s but GSO week %d (%s) is %.2fF, which rounds "
+                "to %d" % (key, i, score.PROFILES[key].temp[i], week, what,
+                           rec["surface_f"], round(rec["surface_f"])))
+
+    def test_an_inert_warm_pair_is_actually_inert(self):
+        """Three bands have no published warm edge and use a spacer, the same
+        device as the fluke depth band's deep side. Asserted as a property --
+        it has to sit above the warmest water the record holds -- rather than
+        as a literal, because the point is that it never engages.
+
+        The comparison is against the highest weekly p90 rather than the
+        highest weekly mean: a spacer that clears the average and not the warm
+        years would be a claim that shows up only in a heatwave, which is the
+        worst possible time to discover it.
+        """
+        from tiderace import gso, score
+        data = gso.load()
+        if not data:
+            self.skipTest("GSO climatology not built")
+        weeks = data["stations"]["fox_island"]["weeks"]
+        hottest = max(r["p90_f"] for r in weeks.values())
+        for key in ("bonito", "false_albacore", "striped_searobin"):
+            band = score.PROFILES[key].temp
+            self.assertGreater(
+                band[2], hottest + 10,
+                "%s's plateau now ends within reach of real water (%.1fF at "
+                "the 90th percentile), which turns a spacer into a published "
+                "claim that hot water is worse" % (key, hottest))
+            self.assertEqual(score.trapezoid(hottest, *band), 1.0, key)
+
+    def test_the_months_agree_with_the_thermal_season_the_band_implies(self):
+        """gso.thermal_season turns `temp` into the season term, so a month
+        tuple that disagrees with its own band is two answers to one question
+        -- and the tuple is the one that runs when the climatology is missing,
+        i.e. on a fresh checkout. The tautog error was found exactly here: the
+        hand-written months said one thing and sixty-five years of temperature
+        said another.
+
+        Held loosely on purpose. `months` is presence and the band is
+        catchability, and they are allowed to differ at the edges; what is not
+        allowed is a month claimed with no thermal support at all, or a month
+        the water plainly supports being left out.
+        """
+        import datetime
+        from tiderace import gso, score
+        data = gso.load()
+        if not data:
+            self.skipTest("GSO climatology not built")
+        weeks = data["stations"]["fox_island"]["weeks"]
+
+        def by_month(prof):
+            out = {}
+            for w in range(1, 53):
+                rec = weeks.get(str(w))
+                if not rec:
+                    continue
+                m = (datetime.date(2025, 1, 1)
+                     + datetime.timedelta(weeks=w - 1)).month
+                out.setdefault(m, []).append(
+                    score.trapezoid(rec["surface_f"], *prof.temp))
+            return {m: max(v) for m, v in out.items()}
+
+        # The eight added on 2026-09-02. Their month tuples were set FROM the
+        # band's own thermal window or from a cited season statement, so for
+        # these a claimed month with no thermal support at all is a straight
+        # contradiction.
+        #
+        # The original six are deliberately exempt and it is worth saying why
+        # rather than quietly narrowing the loop. Their `months` means presence
+        # and not catchability: tautog claims July and August, where its band
+        # reads zero, because tautog are resident and the temperature curve --
+        # not the calendar -- is what shuts them off. Asserting over them would
+        # be asserting that the file's own documented design is a bug.
+        derived_months = ("bonito", "false_albacore", "weakfish",
+                          "winter_flounder", "atlantic_mackerel", "squid",
+                          "dogfish", "striped_searobin")
+        for key in derived_months:
+            prof = score.PROFILES[key]
+            peak = by_month(prof)
+            for m in prof.months:
+                self.assertGreater(
+                    peak.get(m, 0.0), 0.0,
+                    "%s claims month %d but its own temperature band is zero "
+                    "for every week of it" % (key, m))
+
+        # This half does hold for all fourteen. A tuple and a band may differ
+        # at the edges -- migration is not thermal, which is the whole reason
+        # peak_months are hand-set -- but they may not be disjoint. Somewhere
+        # in the months a species claims, the bay has to actually sit inside
+        # its band, or the two are answering different questions.
+        for key, prof in score.PROFILES.items():
+            peak = by_month(prof)
+            self.assertTrue(
+                any(peak.get(m, 0.0) >= 0.999 for m in prof.months),
+                "%s: there is no month it claims where the bay sits fully "
+                "inside its own temperature band" % key)
+            self.assertTrue(set(prof.peak_months) <= set(prof.months),
+                            "%s peaks in a month it says it is absent" % key)
+
+
+class RefusalsAreRecorded(unittest.TestCase):
+    """An absence and a refusal are different facts, and only one is a finding.
+
+    This is the depth argument -- "no band" had to mean "the source said depth
+    is the wrong variable" rather than "nobody got to it yet" -- lifted to the
+    species list. Twenty-one of the thirty-five loggable species have no
+    profile. Eleven were looked at and declined and fourteen are the wrong
+    scorer entirely, and an empty dict cannot say either.
+    """
+
+    def test_every_loggable_species_is_profiled_or_refused_in_writing(self):
+        """No species may simply not appear. This is the floor the whole class
+        rests on: if it stops holding, the tests below are checking a subset
+        and passing on the rest by not looking."""
+        from tiderace import score, species as speciesmod
+        keys = {s.key for s in speciesmod.SPECIES}
+        self.assertEqual(len(keys), 35)
+        covered = set(score.PROFILES) | set(score.NOT_PROFILED)
+        self.assertEqual(
+            keys - covered, set(),
+            "these species are neither modelled nor refused in writing, so "
+            "the file cannot say whether anyone looked")
+        self.assertEqual(covered - keys, set(),
+                         "the registries name species that do not exist")
+        self.assertEqual(set(score.PROFILES) & set(score.NOT_PROFILED), set(),
+                         "a species cannot be both scored and refused")
+
+    def test_a_refusal_gives_a_reason_rather_than_a_shrug(self):
+        """A one-word "no" is an absence wearing a refusal's clothes."""
+        from tiderace import score
+        for key, reason in score.NOT_PROFILED.items():
+            self.assertGreater(
+                len(reason), 120,
+                "%s is refused in under 120 characters, which is not enough "
+                "to say what was consulted and what it said" % key)
+            # A citation may carry a locator -- "[ASMFC-SCI ch.8]" -- so the
+            # tag is what sits before the first comma or space inside the
+            # brackets, exactly as PotentialSurface parses it. Matching on
+            # r"\[[A-Z0-9-]+\]" instead silently rejected every citation in
+            # this dict that named a chapter, which is most of them.
+            self.assertRegex(
+                reason, r"\[[A-Z0-9-]+(?:[,\s][^\]]*)?\]|GSO|literature|"
+                        r"South Atlantic|Gulf of Mexico|spots\.SPOTS|scorer",
+                "%s: the refusal names no evidence" % key)
+
+    def test_the_researched_refusals_name_what_was_consulted(self):
+        """Eleven species were actually looked up. Those refusals have to cite
+        the thing that was read, or they are indistinguishable from a hunch --
+        the same standard the depth refusals are held to in PotentialSurface.
+        """
+        import re
+        from tiderace import score
+        looked_at = {
+            "northern_kingfish": "ASMFC-SCI",
+            "summer_triggerfish": "COLLIE",
+            "cod": "COLLIE",
+            "pollock": "COLLIE",
+            "monkfish": "COLLIE",
+        }
+        declared = set(PublishedTemperatureBands._declared())
+        for key, tag in looked_at.items():
+            reason = score.NOT_PROFILED[key]
+            self.assertIn(tag, declared, "[%s] is not declared in score.py" % tag)
+            self.assertRegex(
+                reason, r"\[%s(?:[,\s][^\]]*)?\]" % tag,
+                "%s was refused on the strength of [%s] and does not say so"
+                % (key, tag))
+        # spanish_mackerel and cobia are refused for having no source about
+        # this water at all, so they cannot cite one -- and must say that
+        # rather than quietly citing a neighbour's.
+        for key in ("spanish_mackerel", "cobia"):
+            self.assertNotRegex(
+                score.NOT_PROFILED[key], r"\[[A-Z0-9-]+(?:[,\s][^\]]*)?\]",
+                "%s is refused for having no applicable source; citing one "
+                "would contradict the reason" % key)
+            self.assertIn("No source about this water",
+                          score.NOT_PROFILED[key], key)
+
+    def test_the_offshore_species_are_refused_structurally_not_for_effort(self):
+        """The reason has to be the scorer, not a reading list, because a
+        reading list is a backlog and somebody will work through it. Every one
+        of the fourteen gets the identical sentence for the identical reason.
+        """
+        from tiderace import score, species as speciesmod, spots
+        offshore = {s.key for s in speciesmod.SPECIES
+                    if s.group == speciesmod.OFFSHORE}
+        self.assertEqual(len(offshore), 14)
+        reasons = {score.NOT_PROFILED[k] for k in offshore}
+        self.assertEqual(len(reasons), 1,
+                         "the offshore refusal is one structural fact, so it "
+                         "should read as one sentence, not fourteen")
+        reason = reasons.pop()
+        self.assertIn("spots.SPOTS", reason)
+        self.assertIn("prospect.py", reason,
+                      "the refusal has to say where the work does belong")
+        # And the premise has to still be true: every spot inside the bay.
+        lats = [s.lat for s in spots.SPOTS]
+        self.assertGreater(min(lats), 41.3)
+        self.assertLess(max(lats), 41.8,
+                        "a spot has moved outside Narragansett Bay, which is "
+                        "the premise the offshore refusal rests on")
+        for k in offshore:
+            self.assertNotIn(k, score.PROFILES)
+
+    def test_a_refused_species_is_still_fully_loggable(self):
+        """The refusal is about the forecast and nothing else. If it leaked
+        into the log it would be the exact bug species.py was written to fix:
+        the scarcest thing in the project refusing what came over the rail."""
+        from tiderace import score, species as speciesmod
+        loggable = {s.key for s in speciesmod.loggable()}
+        for key in score.NOT_PROFILED:
+            self.assertIn(key, loggable, "%s is refused a forecast and has "
+                                         "also lost the log" % key)
+        self.assertTrue(speciesmod.resolve("caught a cod"))
+        self.assertEqual(speciesmod.resolve("a bluefin tuna"), "bluefin")
+
+
+class SpotsForNewlyScoredSpecies(unittest.TestCase):
+    """`for_species` filtered on a listing that only ever named six fish."""
+
+    def test_an_uncurated_species_gets_every_spot_rather_than_none(self):
+        """Empty said "this fish is nowhere" and meant "nobody wrote down
+        where it is". Those are different, and the empty list broke both
+        callers: the CLI printed "no spots carry squid" and exited 1, and
+        build_grid took the modelled path and produced a grid with no spots in
+        it -- so a fish got worse by being researched."""
+        from tiderace import score, spots
+        for key in ("squid", "weakfish", "winter_flounder",
+                    "atlantic_mackerel", "dogfish", "striped_searobin"):
+            self.assertIn(key, score.PROFILES)
+            self.assertFalse(spots.curated_for(key))
+            self.assertEqual(len(spots.for_species(key)), len(spots.SPOTS),
+                             "%s is uncurated and should fall back to every "
+                             "spot" % key)
+        for key in score.PROFILES:
+            self.assertTrue(spots.for_species(key),
+                            "%s can be forecast and has nowhere to fish it"
+                            % key)
+
+    def test_the_curated_exception_is_only_the_two_fall_run_species(self):
+        """Curation is a claim about where a fish is, at the same tier as
+        `quality`. Two species carry one because their distribution inside the
+        bay is sharply uneven; letting them fall back would put albies seven
+        miles up a bay they do not enter. A third appearing means somebody
+        started filling the rest in by feel."""
+        from tiderace import score, spots
+        curated = {k for k in score.PROFILES if spots.curated_for(k)}
+        self.assertEqual(
+            curated - {"striped_bass", "bluefish", "fluke", "black_sea_bass",
+                       "scup", "tautog"},
+            {"bonito", "false_albacore"})
+        # Ocean-facing only. The claim is that these fish do not come up the
+        # bay, so a curated spot above the bridges would contradict it.
+        for key in ("bonito", "false_albacore"):
+            for spot in spots.for_species(key):
+                self.assertLess(
+                    spot.lat, 41.50,
+                    "%s is listed at %s (%.4f N), which is up the bay past the "
+                    "bridges — the opposite of what the listing claims"
+                    % (key, spot.key, spot.lat))
+
+    def test_a_curated_prior_is_bounded_and_belongs_to_a_listed_species(self):
+        """The existing spot tests cover this for the file as a whole; this
+        pins it for the two species added on 2026-09-02, because a prior for a
+        fish a spot does not list is scored and then thrown away."""
+        from tiderace import spots
+        for key in ("bonito", "false_albacore"):
+            listed = spots.for_species(key)
+            self.assertGreaterEqual(len(listed), 5)
+            for spot in listed:
+                self.assertIn(key, spot.quality,
+                              "%s lists %s with no prior" % (spot.key, key))
+                self.assertTrue(0.0 <= spot.quality[key] <= 1.0)
+            # Default prior for everyone else, which is the honest 0.6.
+            for spot in spots.SPOTS:
+                if key not in spot.species:
+                    self.assertEqual(spot.prior(key), 0.6, spot.key)
 
 
 class ZoomedChromeStaysOnTheGlass(unittest.TestCase):

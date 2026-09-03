@@ -49,8 +49,9 @@ that two species carry a published depth band: the ranking below is by relief,
 because relief is what distinguishes one coordinate from its neighbour. What
 the band buys is a *label* on a bump -- `depth_suits` on each prospect says
 which species' published band the depth falls in, and what that band actually
-claims. Four of the six species have no band and appear on no bump; see
-`score.PROFILES` for which source was consulted for each and what it said.
+claims. Twelve of the fourteen have no band and appear on no bump; see
+`score.PROFILES` for which source was consulted for each and what it said --
+several of those twelve are refusals with a reason, not gaps.
 """
 
 from __future__ import annotations

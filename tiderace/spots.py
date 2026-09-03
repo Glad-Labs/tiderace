@@ -10,6 +10,34 @@ tide-height curve.
 `quality` and `best_stage` are hand-entered local priors -- conventional
 wisdom, not measurement. They exist to be overwritten by your catch log.
 Every station id below was verified live against CO-OPS.
+
+`species` is the same tier of claim as `quality`, and it became load-bearing
+on 2026-09-02 when score.PROFILES went from six species to fourteen. Two
+things follow, and they pull in opposite directions on purpose:
+
+  * `for_species` no longer returns an empty list for a fish nobody listed.
+    It returns every spot, because "nobody wrote down where this one is" and
+    "this one is nowhere" are different facts and the empty list said the
+    second while meaning the first. See the docstring on that function.
+  * Bonito and false albacore ARE listed, on six spots, and that is a
+    deliberate exception rather than the start of filling all fourteen in.
+    They are the one group whose distribution inside this bay is sharply
+    uneven in a way conventional wisdom is confident about: a mouth-and-ocean
+    fish, effectively never caught above the bridges. Letting them fall back
+    to every spot would put albies on Conimicut Point, seven miles up a bay
+    they do not enter.
+
+    What that claim rests on, stated so it can be argued with: the six spots
+    given them -- Harbor of Refuge, Point Judith Breachway, Brenton Reef,
+    Beavertail, Castle Hill, Whale Rock -- are the ocean-facing structures at
+    or outside the mouth. It is angling knowledge, not measurement. The one
+    piece of published support is indirect: [ASGA-LT] tabulates Rhode Island
+    little tunny catch as 85% state waters and 63% shore-based, which says the
+    fishery is inshore and structure-bound without saying which structure.
+    The `quality` numbers are pure priors, like every other number in this
+    file. Nothing else was curated, because for weakfish, winter flounder,
+    mackerel, squid, dogfish and searobin the honest answer is that the
+    distribution is either broad or unrecorded.
 """
 
 from __future__ import annotations
@@ -56,23 +84,31 @@ FALL_RIVER = "8447386"
 SPOTS: list[Spot] = [
     Spot("whale_rock", "Whale Rock", 41.4408, -71.4228, "ACT2201", NEWPORT,
          "reef", "West Passage mouth. Ledge to 40 ft. The ebb rip is the draw.",
-         ("striped_bass", "bluefish", "black_sea_bass"),
-         {"striped_bass": 0.98, "bluefish": 0.85, "black_sea_bass": 0.70},
+         ("striped_bass", "bluefish", "black_sea_bass",
+          "bonito", "false_albacore"),
+         {"striped_bass": 0.98, "bluefish": 0.85, "black_sea_bass": 0.70,
+          "bonito": 0.70, "false_albacore": 0.72},
          "ebb", (41.4494, -71.3997)),   # Beavertail SP -- nearest land grid
     Spot("beavertail", "Beavertail Point", 41.4494, -71.3997, "ACT2201", NEWPORT,
          "point", "Rip forms off the point on the drop. Heavy water.",
-         ("striped_bass", "bluefish", "tautog"),
-         {"striped_bass": 0.94, "bluefish": 0.80, "tautog": 0.85},
+         ("striped_bass", "bluefish", "tautog",
+          "bonito", "false_albacore"),
+         {"striped_bass": 0.94, "bluefish": 0.80, "tautog": 0.85,
+          "bonito": 0.78, "false_albacore": 0.80},
          "ebb", (41.4494, -71.3997)),
     Spot("castle_hill", "Castle Hill", 41.4622, -71.3628, "ACT2101", NEWPORT,
          "point", "East Passage mouth. Deep edge tight to shore.",
-         ("striped_bass", "bluefish", "tautog"),
-         {"striped_bass": 0.92, "bluefish": 0.78, "tautog": 0.80},
+         ("striped_bass", "bluefish", "tautog",
+          "bonito", "false_albacore"),
+         {"striped_bass": 0.92, "bluefish": 0.78, "tautog": 0.80,
+          "bonito": 0.74, "false_albacore": 0.76},
          "ebb", (41.4622, -71.3628)),
     Spot("brenton_reef", "Brenton Reef", 41.4256, -71.3611, "ACT2096", NEWPORT,
          "reef", "Open-ocean reef SW of Newport. Exposed to south swell.",
-         ("striped_bass", "bluefish", "black_sea_bass"),
-         {"striped_bass": 0.86, "bluefish": 0.88, "black_sea_bass": 0.90},
+         ("striped_bass", "bluefish", "black_sea_bass",
+          "bonito", "false_albacore"),
+         {"striped_bass": 0.86, "bluefish": 0.88, "black_sea_bass": 0.90,
+          "bonito": 0.86, "false_albacore": 0.88},
          None, (41.4519, -71.3572)),   # Brenton Point SP -- nearest land grid
     Spot("fort_wetherill", "Fort Wetherill", 41.4761, -71.3617, "ACT2106", NEWPORT,
          "shore", "Deep water from the rocks. Reliable night shore spot.",
@@ -145,14 +181,18 @@ SPOTS: list[Spot] = [
     Spot("pt_judith_breachway", "Point Judith Pond Breachway", 41.3833, -71.5167,
          "ACT2276", NEWPORT,
          "breachway", "Hard outflow through the breachway -- up to 2 kt.",
-         ("striped_bass", "bluefish", "fluke"),
-         {"striped_bass": 0.90, "bluefish": 0.82, "fluke": 0.76},
+         ("striped_bass", "bluefish", "fluke",
+          "bonito", "false_albacore"),
+         {"striped_bass": 0.90, "bluefish": 0.82, "fluke": 0.76,
+          "bonito": 0.80, "false_albacore": 0.84},
          "ebb", (41.3833, -71.5167)),
     Spot("harbor_of_refuge", "Harbor of Refuge", 41.3580, -71.4958, "ACT2266", NEWPORT,
          "breakwater", "The walls. Ocean access, structure, big fish potential.",
-         ("striped_bass", "bluefish", "fluke", "black_sea_bass", "tautog"),
+         ("striped_bass", "bluefish", "fluke", "black_sea_bass", "tautog",
+          "bonito", "false_albacore"),
          {"striped_bass": 0.88, "bluefish": 0.86, "fluke": 0.80,
-          "black_sea_bass": 0.84, "tautog": 0.86},
+          "black_sea_bass": 0.84, "tautog": 0.86,
+          "bonito": 0.88, "false_albacore": 0.92},
          None, (41.3730, -71.4958)),
 ]
 
@@ -216,8 +256,44 @@ def get(key: str) -> Spot:
     return BY_KEY[key]
 
 
+def curated_for(species: str) -> bool:
+    """Has anyone said which of these spots hold this fish?
+
+    `species` on a Spot is local knowledge of the same tier as `quality` and
+    `best_stage` -- conventional wisdom, not measurement -- so an empty answer
+    means nobody wrote it down, never that the fish is absent.
+    """
+    return any(species in s.species for s in SPOTS)
+
+
 def for_species(species: str) -> list[Spot]:
-    return [s for s in SPOTS if species in s.species]
+    """Spots to consider for this fish, and never an empty list.
+
+    This returned [] for anything no spot named, which was harmless while the
+    six scored species were exactly the six that appeared in the listings
+    above. Adding eight profiles broke that coupling and turned a silent
+    filter into a silent outage: `cli._cmd_forecast` printed "no spots carry
+    bonito" and exited 1, and `server.build_grid` -- which only takes the
+    unfiltered `spots.SPOTS` path for species the model does NOT score -- built
+    a grid with an empty spot list, so a newly modelled fish came out worse
+    than an unmodelled one.
+
+    So an uncurated species falls back to every spot rather than to none, and
+    that is the honest answer: nobody has narrowed the list, so the app does
+    not narrow it either. `curated_for` says which case a caller is holding.
+
+    Two species ARE curated below and it is worth knowing why only two.
+    Bonito and false albacore are the one group whose distribution inside this
+    bay is sharply uneven in a way local knowledge is confident about -- they
+    are a mouth-and-ocean fish and are effectively never caught above the
+    bridges -- and listing them everywhere would put albies on Conimicut Point
+    in the forecast. For weakfish, winter flounder, mackerel, squid, dogfish
+    and searobin the bay-wide distribution is either genuinely broad or nobody
+    has recorded it, so the fallback is the correct answer rather than a
+    placeholder.
+    """
+    hits = [s for s in SPOTS if species in s.species]
+    return hits or list(SPOTS)
 
 
 def public_only() -> list[Spot]:

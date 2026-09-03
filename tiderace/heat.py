@@ -258,7 +258,7 @@ def surface(species: str, bbox, when: datetime | None = None,
             if prof.depth is not None else
             ("Depth is reported, not scored. %s carries no depth band. That "
              "is a recorded finding, not an omission -- score.PROFILES names "
-             "the source consulted for each of the four unscored species and "
+             "the source consulted for every species without one and "
              "what it said, and for three of them it said depth is the wrong "
              "variable. None will be guessed in." % prof.name)),
         "resolution_note": (

@@ -15,6 +15,7 @@ from . import birds as birdmod
 from . import config as cfgmod
 from . import features, fetch, gso, regs, score, spots
 from . import log as catchlog
+from . import species as speciesmod
 from .point import windows as _windows
 from .sources import SourceError
 
@@ -1194,6 +1195,14 @@ def _cmd_regs(args) -> int:
         rec = regs.status(sp, today)
         com = regs.status(sp, today, "commercial")
         if not rec.get("known"):
+            # Was `continue`, which was correct only while every scored
+            # species also had a rule. Eight of the fourteen now do not, and
+            # skipping them silently would print a six-fish table that reads
+            # as the complete set -- the same failure the web view's
+            # paintLegal() already guards against with "RULES NOT MODELLED".
+            # Absence of a rule means nobody checked, not that there is none.
+            print(f"\n  {score.PROFILES[sp].name}")
+            print(f"    {speciesmod.unregulated_warning(sp)}")
             continue
         print(f"\n  {score.PROFILES[sp].name}")
         print(f"    recreational  {'OPEN  ' if rec['open'] else 'CLOSED'}  "
@@ -1361,6 +1370,12 @@ def _cmd_forecast(args) -> int:
         for d in (regs.differences(args.species, start.date())
                   if mode == "commercial" else []):
             print(f"           differs from recreational — {d}")
+    else:
+        # A forecast with no legal line under it reads as "no limits". It
+        # means nobody transcribed them. The forecast is still worth printing
+        # -- knowing when the fish will be there is a separate question from
+        # whether you may keep one -- but it does not go out unlabelled.
+        print(f"  [RULES NOT MODELLED]  {speciesmod.unregulated_warning(args.species)}")
     print(f"  {start:%a %d %b %H:%M} → {start + timedelta(hours=args.hours):%a %d %b %H:%M}"
           f"   ({len(targets)} spots)")
     print("  " + "─" * 74)

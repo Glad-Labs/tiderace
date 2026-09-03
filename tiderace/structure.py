@@ -44,7 +44,7 @@ candidate reports how close it is to charted rock, wreck and obstruction.
 Each candidate also reports `depth_suits`: which species' *published* depth
 band its top falls inside, and what that band actually claims. That labels a
 bump, it does not rank one -- ranking here is by relief, because relief is
-what distinguishes one coordinate from its neighbour. Only two of the six
+what distinguishes one coordinate from its neighbour. Only two of the fourteen
 scored species have a depth band at all, so an empty `depth_suits` means
 nothing published reaches this depth rather than nothing lives here.
 
@@ -215,9 +215,9 @@ def _load_points(name: str):
 def depth_suits(depth_ft) -> list[dict]:
     """Which scored species' published depth band contains this depth.
 
-    Two of the six carry a band (fluke and black sea bass); the other four
-    have no publication behind one and are therefore absent from every answer
-    this returns. That is the point of the shape: an empty list means "no
+    Two of the fourteen carry a band (fluke and black sea bass); the other
+    twelve have no publication behind one and are therefore absent from every
+    answer this returns. That is the point of the shape: an empty list means "no
     species has a published depth band reaching here", NOT "nothing lives
     here". A tautog does not appear at any depth, and the reason is in
     `score.PROFILES` -- the literature says structure decides where they are,
