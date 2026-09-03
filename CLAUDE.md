@@ -12,6 +12,13 @@ trips out.** Every feature added enlarges the part of the model nothing has
 falsified. Read `evaluate` before proposing a new signal — it will tell you how
 many trips are actually on file, and the answer governs what may be claimed.
 
+The checkout lives at `~/glad-labs-products/tiderace`. It was renamed from
+`~/Glad Labs Products/tiderace` on 2 September 2026, and the systemd units
+still pointed at the old path — the service stayed "active" while serving 404
+to the phone, because a process whose working directory has been deleted keeps
+running and cannot read a file. If the app is up but everything 404s, check
+`WorkingDirectory` in `~/.config/systemd/user/tiderace*.service` first.
+
 ```bash
 python3 -m tiderace serve          # the app (systemd user unit, port 8765)
 python3 tests.py                   # 400 tests, no runner needed
