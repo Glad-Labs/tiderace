@@ -4404,6 +4404,25 @@ class DaylightAndEveryFish(unittest.TestCase):
         self.css = self.js.split("<style>")[1].split("</style>")[0]
 
     # ---- the picker ----
+    def test_the_map_contains_its_own_marker_z_indexes(self):
+        """paint() gives every marker a z-index from its score, 0-100, and
+        with #map at `auto` those competed in the ROOT stacking context --
+        against the sheet at 40, the bar at 5, and any popup, which sits at
+        `auto` and stacks by DOM order. A spot scoring 81 painted over all
+        three. clampLabels hid the ones overlapping the sheet by setting
+        visibility, which papered over one surface and left the rest behind
+        the markers."""
+        css = self.css
+        rule = css.split("#map{")[1].split("}")[0]
+        self.assertIn("isolation:isolate", rule.replace(" ", ""),
+                      "#map must contain the 0-100 marker range")
+        self.assertIn(".maplibregl-popup{z-index:", css.replace(" ", ""),
+                      "a popup must outrank a marker inside that context")
+        import re
+        m = re.search(r"\.maplibregl-popup\{z-index:\s*(\d+)", css)
+        self.assertTrue(m and int(m.group(1)) > 100,
+                        "popup z-index must clear the whole score range")
+
     def test_the_slider_moves_the_panel_too(self):
         """It moved the map and the ranked list while the panel sat frozen
         beside them -- slide 24 hours out, watch the ranking re-order, and the

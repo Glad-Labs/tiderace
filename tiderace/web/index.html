@@ -57,7 +57,24 @@ body{
   font-family:var(--display); font-size:14px; overflow:hidden;
 }
 #app{display:grid; grid-template-columns:1fr 360px; height:100%}
-#map{width:100%; height:100%; background:var(--ground)}
+#map{
+  width:100%; height:100%; background:var(--ground);
+  /* Its own stacking context, and this is load-bearing. paint() gives every
+     marker a z-index from its score, 0 to 100, and with #map at `auto` those
+     numbers competed in the ROOT context -- against the sheet at 40, the top
+     bar at 5, and any popup, which sits at `auto` and stacks by DOM order.
+     A spot scoring 81 painted over all of them. clampLabels was hiding the
+     ones that overlapped the sheet by setting visibility, which papered over
+     the symptom for that one surface and left every other overlay behind the
+     markers. Isolating the map contains the whole 0-100 range beneath the
+     chrome, so the ordering is structural rather than something a clamp has
+     to keep re-establishing. */
+  isolation:isolate;
+}
+/* Above the markers, but still inside the map's context and so still beneath
+   the sheet and the bar. The 0-100 range belongs to scores; popups sit over
+   all of it. */
+.maplibregl-popup{z-index:120}
 
 /* ------------------------------------------------------------ top bar */
 #bar{

@@ -102,19 +102,31 @@ async function walk(url) {
     return out;
   });
   const t0 = await readRows();
+  // A control read at the SAME slider position, so ambient drift can be told
+  // from slider-caused change. Water level is "observed minus predicted at
+  // now", and `now` advances between two fetches -- without this the check
+  // failed intermittently and blamed the app for the clock.
+  await page.evaluate(() => refreshSurveyAtTime && refreshSurveyAtTime());
+  await page.waitForTimeout(4500);
+  const ctrl = await readRows();
+  const drifts = new Set(Object.keys(t0).filter(k => !ctrl[k] || t0[k].v !== ctrl[k].v));
+
   await page.evaluate(() => { const t = document.getElementById('time');
     t.value = String(Math.min(+t.max, 48)); t.dispatchEvent(new Event('input')); });
   await page.waitForTimeout(4500);
   const t1 = await readRows();
   const forecastMoved = ['current', 'wind', 'next tide']
-    .filter(k => t0[k] && t1[k] && t0[k].v !== t1[k].v);
-  const obsHeld = Object.keys(t1).filter(k => t1[k].now)
-    .every(k => !t0[k] || t0[k].v === t1[k].v);
+    .filter(k => t0[k] && t1[k] && t0[k].v !== t1[k].v && !drifts.has(k));
+  const obsBroke = Object.keys(t1).filter(k => t1[k].now)
+    .filter(k => t0[k] && t0[k].v !== t1[k].v && !drifts.has(k));
+  const obsHeld = obsBroke.length === 0;
   step('slider moves the forecast rows', forecastMoved.length >= 2,
        `moved: ${forecastMoved.join(', ') || 'none'}`);
   step('slider leaves observations alone, marked now', obsHeld
        && Object.values(t1).some(r => r.now),
-       `${Object.values(t1).filter(r => r.now).length} marked`);
+       `${Object.values(t1).filter(r => r.now).length} marked` +
+       (drifts.size ? `, ${drifts.size} drifting at rest` : '') +
+       (obsBroke.length ? `, MOVED: ${obsBroke.join(', ')}` : ''));
   await page.evaluate(() => { const t = document.getElementById('time');
     t.value = '0'; t.dispatchEvent(new Event('input')); });
   await page.waitForTimeout(4000);

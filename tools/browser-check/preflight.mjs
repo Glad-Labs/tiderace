@@ -84,7 +84,16 @@ async function run(url) {
 
     for (const theme of ['light', 'dark']) {
       await p.evaluate(t => { if (document.documentElement.dataset.theme !== t) applyTheme(t); }, theme);
-      await p.waitForTimeout(7000);
+      // Wait for the condition, not the clock. A theme swap is a setStyle and
+      // everything is re-added on styledata, so a fixed sleep is a race: this
+      // reported "no markers" intermittently and it was the harness losing,
+      // not the app dropping them. isStyleLoaded stays false for a while after
+      // the swap while sprites reload, so markers are the thing to wait on.
+      await p.waitForFunction(
+        () => typeof MARKERS !== 'undefined' && Object.keys(MARKERS).length > 0
+              && typeof MAP_READY !== 'undefined' && MAP_READY,
+        null, { timeout: 30000 }).catch(() => {});
+      await p.waitForTimeout(1200);
 
       // MapLibre cannot parse a CSS var. Five of these shipped and took the
       // contour numbers off the chart.
@@ -149,6 +158,53 @@ async function run(url) {
          driven && !driven.setupFailed && driven.behind
            && !driven.marker && !driven.label,
          driven ? JSON.stringify(driven) : 'no markers');
+
+      // Z-ORDER, tested with the clamp deliberately switched off. This is a
+      // stronger claim than "the clamp hides them": paint() gives every marker
+      // a z-index from its score, 0-100, and with #map at `auto` those numbers
+      // competed in the root context against the sheet at 40, the bar at 5 and
+      // any popup at `auto`. A spot scoring 81 painted over all three, and the
+      // clamp was papering over the one surface it knew about. Isolating #map
+      // contains the range; this proves it still holds when nothing hides
+      // anything.
+      const stack = await p.evaluate(async () => {
+        const saved = window.clampLabels;
+        window.clampLabels = () => {};
+        Object.values(MARKERS).forEach(m => {
+          m.el.style.visibility = 'visible';
+          const l = m.el.querySelector('.lbl'); if (l) l.style.visibility = 'visible';
+        });
+        const sh = document.getElementById('sheet').getBoundingClientRect();
+        const one = Object.values(MARKERS)[0];
+        if (!one || sh.height < 300) { window.clampLabels = saved; return null; }
+        map.setCenter(one._lngLat);
+        await new Promise(r => setTimeout(r, 400));
+        const c = map.getCanvas();
+        map.panBy([c.clientWidth / 2 - (sh.left + 40),
+                   c.clientHeight / 2 - (sh.top + 200)], { duration: 0 });
+        await new Promise(r => setTimeout(r, 900));
+        const box = one.el.getBoundingClientRect();
+        const hit = document.elementFromPoint(Math.round(box.left + box.width / 2),
+                                              Math.round(box.top + box.height / 2));
+        const bar = document.getElementById('bar').getBoundingClientRect();
+        const hb = document.elementFromPoint(Math.round(bar.left + 40),
+                                             Math.round(bar.top + 20));
+        // A popup must beat a marker too -- that is what "labels over the
+        // chart modal" was.
+        new maplibregl.Popup({closeButton: false})
+          .setLngLat(one._lngLat).setHTML('z-test').addTo(map);
+        await new Promise(r => setTimeout(r, 500));
+        const pop = document.querySelector('.maplibregl-popup');
+        const popZ = pop ? +getComputedStyle(pop).zIndex || 0 : -1;
+        const mkZ = +one.el.style.zIndex || 0;
+        window.clampLabels = saved;
+        return { sheetWins: !!(hit && hit.closest('#sheet')),
+                 barWins: !!(hb && hb.closest('#bar')),
+                 popupOverMarker: popZ > mkZ, popZ, mkZ };
+      });
+      ok(`${theme}: chrome outranks a marker even unclamped`,
+         stack && stack.sheetWins && stack.barWins && stack.popupOverMarker,
+         stack ? JSON.stringify(stack) : 'setup failed');
 
       // No two names drawn on top of each other, and none in the time bar.
       const overlap = await p.evaluate(() => {
