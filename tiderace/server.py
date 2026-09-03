@@ -125,10 +125,18 @@ def build_grid(species: str, start: datetime, hours: int = 48,
         "regulations_differences": regs.differences(species, start.date()),
         "notes": (score.PROFILES[species].notes if modelled
                   else (speciesmod.get(species).notes or "")),
-        # Said plainly rather than left to an empty score column. Absence of a
-        # forecast is a fact about this app, not about the fish.
+        # Two different absences, and they used to be one. Until 2 Sep 2026
+        # every scored species was also a regulated one, so "no forecast" and
+        # "no rule" arrived together and this field could key off `modelled`.
+        # Eight of the fourteen profiles now have no transcribed rule -- the
+        # alternative was typing eight size limits in from memory -- so the
+        # forecast and the rulebook can be absent independently, and each says
+        # so on its own.
         "not_modelled": (None if modelled else
                          speciesmod.unregulated_warning(species)),
+        "rules_not_modelled": (None if regs.status(
+            species, start.date(), cfgmod.load()["license_mode"]).get("known")
+            else speciesmod.unregulated_warning(species)),
         "start": start.isoformat(),
         "step_minutes": step_minutes,
         "times": times,

@@ -228,6 +228,23 @@ async function run(url) {
     ok(`phone/${scheme}: no false stale-build warning`,
        !/old cached build/.test(diag));
 
+    // A scored species with no transcribed rule must SAY so. Eight of the
+    // fourteen profiles are in that position since 2 Sep 2026, and the field
+    // that used to carry it keyed off "is there a forecast" -- which stopped
+    // meaning "is there a rule" the moment scored stopped implying regulated.
+    const unruled = await p.evaluate(async () => {
+      const sel = document.getElementById('species');
+      sel.value = 'weakfish';
+      sel.dispatchEvent(new Event('change'));
+      await new Promise(r => setTimeout(r, 9000));
+      const el = document.getElementById('slegal');
+      return { text: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60),
+               known: !!(GRID.regulations || {}).known };
+    });
+    ok(`phone/${scheme}: a scored fish with no rule says so`,
+       !unruled.known && /NOT MODELLED/i.test(unruled.text),
+       unruled.text || 'blank');
+
     // Contrast, composited over what is actually behind it.
     const worst = await p.evaluate(() => {
       const parse = c => { const n = (c.match(/[\d.]+/g) || []).map(Number);

@@ -58,6 +58,14 @@ saying it must be absent. Green test, broken app.
 Every new test gets **mutation-checked** before it counts: reintroduce the bug,
 watch the test fail. A test that has never failed has never been tested.
 
+One trap when the mutation is scripted: Python invalidates a `.pyc` on
+`(mtime, size)`, so a same-length edit — `temp=(57,` to `temp=(60,` — landing
+inside the same filesystem second is invisible, the subprocess imports the
+original module, and the test passes. That reads as a surviving mutation and it
+is a false negative. Delete `tiderace/__pycache__` between runs. Also check
+*which* assertion caught it: a mutation that produced a `SyntaxError` was
+caught by the parser, not by the test, and has proved nothing.
+
 ### Prefer slicing to searching
 
 `page.split("marker")[1]` raises when the marker moves. `assertIn(x, page)`
@@ -123,10 +131,20 @@ This is a decision, not an oversight. Do not "fix" it.
 claimed:
 
 - **loggable** — all 35 species. Costs nothing, claims nothing.
-- **scored** — the 6 in `score.PROFILES`, temperature bands grounded in cited
-  literature. Adding a seventh means doing that research, not guessing.
+- **scored** — the 14 in `score.PROFILES`, temperature bands grounded in cited
+  literature. Adding a fifteenth means doing that research, not guessing. Six
+  until 2 September 2026, when the inshore and nearshore species got the same
+  treatment; the other 21 sit in `score.NOT_PROFILED` with a reason each, and
+  for 11 of them the reason is that somebody read the literature and the
+  answer was no. An absence and a refusal are different facts.
 - **regulated** — only where the rule was actually read out of a RIDEM or DMF
-  notice.
+  notice. **Scored no longer implies regulated**, and that is deliberate: 8 of
+  the 14 have no transcribed rule, because the only way to keep the old
+  invariant would have been to type eight size limits in from memory. What is
+  enforced instead is that the app says so out loud — `paintLegal` on the
+  phone, and both CLI paths, print "rules not modelled" rather than going
+  silent. The two tests that asserted scored ⊆ regulated were rewritten to
+  assert that.
 
 A wrong size limit is not a bad forecast, it is a fine — and under Matt's
 father's commercial licence it is worse than a fine. When the app says a rule
