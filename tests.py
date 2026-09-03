@@ -1711,17 +1711,25 @@ class StationResolution(unittest.TestCase):
     def test_a_mark_behind_a_barrier_beach_is_flagged_not_guessed(self):
         """Widening the chart box to include Charlestown gave the resolver
         coastline data it never had there, and it immediately said something
-        true: the inside mark sits on charted land, and every current station
-        is more than half a mile of barrier beach away. Ninigret Pond really is
-        behind a barrier -- the only water connection is the breachway, narrower
-        than the coastline layer resolves. The right behaviour is to say so.
+        true: a point inside Ninigret Pond sits on charted land, and every
+        current station is more than half a mile of barrier beach away.
+        Ninigret Pond really is behind a barrier -- the only water connection
+        is the breachway, narrower than the coastline layer resolves. The
+        right behaviour is to say so.
+
+        This used to read the coordinate off the private mark once keyed
+        `charlestown_inside`. Matt corrected that mark's position to the
+        breachway channel itself on 2026-09-03 (it reads as open water, not
+        land -- the pond and the channel are different places, and the key
+        is now `charlestown_breachway`), so the pond-interior point this test
+        needs is hardcoded here instead of resolved from a configured spot.
         """
-        from tiderace import charts, spots as spotsmod
-        sp = spotsmod.get("charlestown_inside")
-        if not charts.covers(sp.lat, sp.lon) or not charts.land_index():
+        from tiderace import charts
+        lat, lon = 41.3745, -71.639  # inside Ninigret Pond, behind the barrier
+        if not charts.covers(lat, lon) or not charts.land_index():
             self.skipTest("land layer not cached for this area")
-        r = self.stations.resolve(sp.lat, sp.lon)
-        self.assertTrue(r["on_land"], "the pond mark reads as land on the chart")
+        r = self.stations.resolve(lat, lon)
+        self.assertTrue(r["on_land"], "the pond point reads as land on the chart")
         self.assertEqual(r["confidence"], "poor")
         self.assertTrue(any("land" in w.lower() for w in r["warnings"]),
                         "must say the current came from water elsewhere")
