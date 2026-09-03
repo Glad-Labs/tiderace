@@ -251,6 +251,60 @@ async function run(url) {
 
     ok(`phone/${scheme}: no uncaught page errors`, errs.length === 0, errs[0] || '');
 
+    // REC and HERE have to take a tap while the sheet is in peek, which is
+    // the state the phone boots in. They sat inside the 210px band the peek
+    // sheet keeps on screen, one z-index below it, so the hit-test at their
+    // centres returned the legal strip and a tap on REC did nothing. Measured
+    // at the centre of each, with the sheet put in peek on purpose and
+    // restored afterwards so the checks below see what they expect.
+    const fabs = await p.evaluate(async () => {
+      const was = window.sheetState();
+      window.setSheet('peek');
+      await new Promise(r => setTimeout(r, 500));
+      const out = {};
+      for (const id of ['trip', 'here']) {
+        const b = document.getElementById(id).getBoundingClientRect();
+        const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        out[id] = { hit: hit ? (hit.closest('button') || hit).id || hit.className : null,
+                    bottom: Math.round(innerHeight - b.bottom) };
+      }
+      out.sheetTop = Math.round(innerHeight - document.getElementById('sheet').getBoundingClientRect().top);
+      window.setSheet(was);
+      await new Promise(r => setTimeout(r, 500));
+      return out;
+    });
+    ok(`phone/${scheme}: REC and HERE take a tap over the peek sheet`,
+       fabs.trip.hit === 'trip' && fabs.here.hit === 'here'
+         && fabs.trip.bottom >= fabs.sheetTop && fabs.here.bottom >= fabs.sheetTop,
+       JSON.stringify(fabs));
+
+    // And the tap has to DO something. The button was reachable in the shut
+    // state all along and still did nothing: initTrip ran inline above the
+    // markup that holds the button, found no element, and attached no
+    // handler -- every click reached a button with onclick null. A real tap
+    // here, in peek, must start a trip (the phone-side state appears and the
+    // button goes red), and a second tap must end it and leave nothing
+    // behind. No geolocation permission in this context, which is the point:
+    // the state is written before the GPS is asked for.
+    await p.evaluate(() => { window.setSheet('peek'); localStorage.removeItem('tiderace:trip'); });
+    await p.waitForTimeout(500);          // the button slides up over .22s; measure it where it lands
+    const rec = await p.evaluate(() => {
+      const b = document.getElementById('trip').getBoundingClientRect();
+      return { x: b.left + b.width / 2, y: b.top + b.height / 2, onclick: typeof document.getElementById('trip').onclick }; });
+    await p.touchscreen.tap(rec.x, rec.y);
+    await p.waitForTimeout(700);
+    const started = await p.evaluate(() => ({ state: !!localStorage.getItem('tiderace:trip'),
+      red: document.getElementById('trip').classList.contains('rec') }));
+    await p.touchscreen.tap(rec.x, rec.y);
+    await p.waitForTimeout(700);
+    const stopped = await p.evaluate(() => ({ state: !!localStorage.getItem('tiderace:trip'),
+      red: document.getElementById('trip').classList.contains('rec') }));
+    await p.evaluate(() => { localStorage.removeItem('tiderace:trip'); window.setSheet('full'); });
+    await p.waitForTimeout(400);
+    ok(`phone/${scheme}: a tap on REC starts a trip and a second tap ends it`,
+       rec.onclick === 'function' && started.state && started.red && !stopped.state && !stopped.red,
+       JSON.stringify({ onclick: rec.onclick, started, stopped }));
+
     // Every control has to be reachable without scrolling. The bar wrapped to
     // three rows and got sliced by the sheet; making it one scrolling row
     // fixed the slicing and hid nine controls off the right edge instead --

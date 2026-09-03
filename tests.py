@@ -4332,6 +4332,62 @@ class SheetStructure(unittest.TestCase):
                     self.assertTrue(setter <= m.start() < end,
                                     "sheet class touched outside setSheet: " + m.group(0))
 
+    def test_the_fixed_buttons_ride_above_the_peek_sheet(self):
+        """REC did nothing on the phone. Measured: the sheet boots in peek,
+        peek reserves the bottom 210px, and HERE (bottom 20px) and REC
+        (bottom 92px) both sat inside that band at z-index 35 under a sheet at
+        40 -- elementFromPoint at REC's centre was the legal strip. The
+        buttons precede #sheet in the DOM so no sibling selector can see its
+        state; setSheet mirrors it onto body and the stylesheet lifts them by
+        the same 210px the peek rule keeps on screen. The two numbers are
+        read from the page and compared, so a peek that grows leaves the
+        buttons covered again only if somebody edits one rule and not the
+        other -- and this fails when they do."""
+        page = self._script()
+        setter = page[page.index("function setSheet(state)"):page.index("function sheetState()")]
+        self.assertIn("document.body.classList.toggle('sheet-peek', state === 'peek')",
+                      setter, "setSheet must mirror the peek state onto body")
+        # The touch query opens two blocks; everything from the first one on.
+        touch = page.split("@media (max-width:900px), (pointer:coarse){", 1)[1]
+        peek = re.search(r"#sheet\.peek\{transform:translateY\(calc\(100% - (\d+)px\)\)\}", touch)
+        self.assertIsNotNone(peek, "no peek rule in the touch block")
+        band = peek.group(1)
+        for btn, stack in (("#here", ""), ("#trip", "72px + ")):
+            # Band first and undivided, then the button's own clearance
+            # divided by --ui: the sheet is zoomed, so its band is 210 x --ui
+            # on the glass, and so is a bare 210px on these zoomed buttons.
+            # REC stacks 72px of that same zoomed space on top of HERE, so
+            # the gap between them grows with them.
+            m = re.search(r"body\.sheet-peek " + btn
+                          + r"\{\s*bottom:calc\((\d+)px \+ " + re.escape(stack)
+                          + r"\(20px \+ env\(safe-area-inset-bottom\)\) / var\(--ui, 1\)\)",
+                          touch)
+            self.assertIsNotNone(m, btn + " is not lifted in the touch block")
+            self.assertEqual(m.group(1), band, btn + " lifts by a different band than the sheet keeps")
+        zoomed = re.search(r"\n([^\n]*)\{ zoom: var\(--ui, 1\); \}", touch).group(1)
+        self.assertIn("#trip", zoomed,
+                      "#trip is positioned with calc(x / --ui) and must be zoomed like #here")
+
+    def test_the_rec_button_is_wired_after_it_exists(self):
+        """REC has never recorded a trip. initTrip ran inline, in a script
+        that sits ABOVE the <button id="trip"> in the markup, so
+        getElementById returned null, the guard returned, and no handler was
+        attached -- on every platform, since it was written. Measured on a
+        Pixel 7 emulation: every click event reached the button and
+        btn.onclick was null. The button stays where it is; the init waits
+        for the DOM. If someone moves the markup above the script this test
+        still passes, and that is fine -- it is the deferral that is asserted,
+        because it is correct in both orders."""
+        page = self._script()
+        self.assertIn("function initTrip(){", page)
+        self.assertIn("document.addEventListener('DOMContentLoaded', initTrip)", page,
+                      "initTrip must be deferred until the button exists")
+        self.assertNotIn("(function initTrip(){", page,
+                         "an inline IIFE runs before the markup below it is parsed")
+        # And the premise, so the comment explaining it stays true.
+        self.assertLess(page.index("function initTrip(){"),
+                        page.index('<button id="trip"'))
+
     def test_a_tap_on_the_handle_closes_the_sheet(self):
         """It was drag-only, with a 40px threshold, which is the wrong ask
         with wet hands on a boat -- and nothing said the bar was a button."""

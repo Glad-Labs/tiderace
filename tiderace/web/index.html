@@ -585,7 +585,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
    went full-width across the bottom of the desktop window, squeezed the map
    into a strip, and left every spot label sitting on top of the panel. */
 @media (max-width:900px), (pointer:coarse){
-#sheet, #bar, #here, #timebar{ zoom: var(--ui, 1); }
+#sheet, #bar, #here, #trip, #timebar{ zoom: var(--ui, 1); }
 /* A zoomed fixed element still resolves left/right against the UNZOOMED
    viewport, then multiplies the result -- so `left:0;right:0` came out 2.4x
    wider than the screen. Width has to be stated in the zoomed coordinate
@@ -642,6 +642,23 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 }
 #here{ right:calc(14px / var(--ui, 1));
        bottom:calc((20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
+/* Above the peek sheet, not under it. 210px is the band #sheet.peek leaves
+   on screen (its transform above); the buttons ride up by the same amount
+   while it is there and come back down when it shuts. Under a full sheet
+   they stay put, hidden behind it, which is the one state where being
+   covered is correct.
+
+   The 210px is NOT divided by --ui, on purpose, and the offset beside it is.
+   The sheet is zoomed, so its 210px band is 210 x --ui on the glass; these
+   buttons are zoomed too, so a bare 210px here comes out the same size. The
+   button's own clearance is a screen distance and takes the division like
+   every other length in this block. Measured with --ui at 1.66: dividing
+   both put HERE 110px inside the sheet. */
+#here, #trip{ transition:bottom .22s cubic-bezier(.2,.8,.3,1); }
+body.sheet-peek #here{
+  bottom:calc(210px + (20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
+body.sheet-peek #trip{
+  bottom:calc(210px + 72px + (20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
 #timebar{ right:calc(12px / var(--ui, 1)); bottom:calc(44px / var(--ui, 1));
           left:calc(12px / var(--ui, 1)); width:auto; }
 }
@@ -707,7 +724,11 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
    has to be reachable without opening anything. */
 #trip{
   position:fixed; right:calc(14px / var(--ui, 1)); z-index:35;
-  bottom:calc((92px + env(safe-area-inset-bottom)) / var(--ui, 1));
+  /* HERE's clearance, plus 72px of zoomed space: the buttons are 60px in
+     that space, so the 12px between them scales with them instead of
+     staying a screen distance while they grow -- at --ui 1.66 they were
+     drawn on top of each other. */
+  bottom:calc(72px + (20px + env(safe-area-inset-bottom)) / var(--ui, 1));
   width:60px; height:60px; border-radius:50%;
   background:var(--panel-2); color:var(--ink-2);
   border:1px solid var(--hair);
@@ -2162,7 +2183,7 @@ function showTripSummary(s){
   }, 900);
 }
 
-(function initTrip(){
+function initTrip(){
   const btn = document.getElementById('trip');
   if (!btn) return;
   btn.onclick = () => { tripState() ? tripStop() : tripStart(); };
@@ -2171,7 +2192,15 @@ function showTripSummary(s){
   if (tripState()) tripStart();
   paintTrip();
   setInterval(paintTrip, 30000);
-})();
+}
+// The button is in the markup AFTER this script, so when this ran inline
+// getElementById('trip') was null, the guard above returned, and no handler
+// was ever attached: REC has done nothing since it was written. Desktop hides
+// the button, so only a phone could show it -- and on the phone it was also
+// under the peek sheet (see setSheet), which is why the tap that found it
+// went unexplained for so long. Wire it once the DOM exists.
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initTrip);
+else initTrip();
 
 
 /* ---- trips ------------------------------------------------------------
@@ -3912,6 +3941,14 @@ window.surveyURL = (lat, lon) =>
     el.classList.remove('up','peek');
     if (state === 'full') el.classList.add('up');
     else if (state === 'peek') el.classList.add('peek');
+    // The peek sheet reserves the bottom 210px of the phone, and HERE and
+    // REC both lived inside that band at z-index 35 under a sheet at 40. On
+    // a phone the sheet boots in peek, so the buttons were covered from the
+    // first paint: elementFromPoint at the centre of REC returned the legal
+    // strip, and a tap on it did nothing. The buttons cannot see #sheet's
+    // class (they precede it in the DOM), so the state is mirrored here, on
+    // body, and the stylesheet lifts them clear of the peek band.
+    document.body.classList.toggle('sheet-peek', state === 'peek');
     const c = el.querySelector('#sheetgrip .gcue');
     if (c) c.textContent = state === 'full' ? 'tap to shrink'
                          : state === 'peek' ? 'tap to close' : '';
