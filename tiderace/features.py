@@ -54,6 +54,18 @@ def _wind_against_tide(wind_dir: str | None, current_compass: int | None,
 def build(spot: Spot, start: datetime, hours: int = 48,
           step_minutes: int = 30, species: str | None = None) -> list[dict]:
     """Feature rows at `step_minutes` resolution starting at `start`."""
+    # The charted seabed under this spot, resolved once. 805 ENC samples sit
+    # inside the bay at a median 460 m apart -- coarser than the 3 m bottom
+    # model, far finer than the 5.5 km current field, so it is a third
+    # resolution tier and carries its own distance. 27% of ENC seabed points
+    # record no type at all, so absent stays absent rather than defaulting to
+    # sand: "nobody charted it" is not "it is sand".
+    try:
+        from . import charts as _charts
+        _bottom = _charts.bottom_at(spot.lat, spot.lon)
+    except Exception:                                             # noqa: BLE001
+        _bottom = None
+
     end = start + timedelta(hours=hours)
     pad_start = start - timedelta(days=1)
     pad_end = end + timedelta(days=1)
@@ -170,6 +182,12 @@ def build(spot: Spot, start: datetime, hours: int = 48,
                 wind_dir, cur["compass"] if cur else None, speed),
             "next_tide": _next_tide(tides, t),
             "exposed": spot.kind in EXPOSED,
+            # Reported, and scored only for a species whose profile names a
+            # substrate preference -- none do yet. The association is
+            # researchable (fluke on sand, tautog on rock are among the
+            # best-established in the literature) but it is not invented here.
+            "bottom": (_bottom or {}).get("bottom"),
+            "bottom_nm": (_bottom or {}).get("distance_nm"),
         })
     return rows
 

@@ -997,7 +997,14 @@ class Solunar(unittest.TestCase):
         current speed counts the moon twice and calls it corroboration."""
         src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "tiderace", "score.py")).read()
-        self.assertNotIn("solunar", src)
+        # Mechanism, not vocabulary. The comment explaining why solunar is
+        # excluded names it, so a word search matches the paragraph that
+        # promises the opposite of what it looks for -- eighth time today.
+        code = strip_py_comments(src)
+        self.assertNotIn('feat.get("solunar")', code,
+                         "the scorer must not read solunar")
+        self.assertNotIn('"solunar"', code.split("PROFILES")[1].split("def _season")[0],
+                         "no profile may weight solunar")
         self.assertIn("solunar", open(os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "tiderace", "evaluate.py")).read())
@@ -4128,6 +4135,140 @@ class SheetStructure(unittest.TestCase):
         line = js[boot:js.index("\n", js.index("setSheet", boot))]
         self.assertNotIn("window.setSheet", line,
                          "boot runs before the window alias exists")
+
+
+class TermsAreConfigurablePerSpecies(unittest.TestCase):
+    """The menu of signals is open; each fish declares which apply to it.
+
+    It used to be seven terms hardcoded in the scorer, so a signal that
+    mattered to one species could not be added without applying to all six.
+    """
+
+    def _feat(self, **over):
+        f = {"month": 7, "week": 28, "water_temp_f": 68.0, "current_speed": 1.0,
+             "light_phase": "day", "wind_kt": 8.0, "pressure_trend_3h": -0.5,
+             "spring_strength": 0.5}
+        f.update(over)
+        return f
+
+    def test_a_species_uses_only_the_terms_it_weights(self):
+        from tiderace import score
+        for key, prof in score.PROFILES.items():
+            out = score.score(key, self._feat(depth_ft=45.0))
+            self.assertEqual(set(out["terms"]), set(prof.weights),
+                             "%s scored a term it does not weight, or missed "
+                             "one it does" % key)
+
+    def test_opting_one_species_into_a_term_does_not_move_another(self):
+        """Normalised by the weights actually used, so the menu can grow
+        without silently rescaling every other fish."""
+        from tiderace import score
+        feat = self._feat(depth_ft=45.0)
+        before = {k: score.score(k, feat)["score"] for k in score.PROFILES}
+        prof = score.PROFILES["scup"]
+        prof.weights["bottom"] = 0.2
+        prof.bottom = {"sand": 1.0}
+        try:
+            after = {k: score.score(k, feat)["score"] for k in score.PROFILES}
+        finally:
+            del prof.weights["bottom"]
+            prof.bottom = None
+        moved = [k for k in before if before[k] != after[k]]
+        self.assertEqual(moved, ["scup"],
+                         "adding a term to scup moved %s" % moved)
+
+    def _synthetic(self, weights, **kw):
+        """A throwaway profile, because no real one exercises the mechanism:
+        all six use every available term with weights summing to 1, so both
+        the filter and the normalisation are invisible on today's data. A
+        mutation removing either passed until this existed."""
+        from tiderace import score
+        prof = score.Profile(
+            key="testfish", name="Test Fish", months=tuple(range(1, 13)),
+            peak_months=(7,), temp=(0, 10, 90, 100),
+            current=(1.0, 0.5, 0.5, 4.0),
+            light={"day": 1.0, "golden": 1.0, "twilight": 1.0, "night": 1.0},
+            weights=weights, **kw)
+        score.PROFILES["testfish"] = prof
+        self.addCleanup(lambda: score.PROFILES.pop("testfish", None))
+        return prof
+
+    def test_a_term_the_profile_omits_is_not_scored(self):
+        from tiderace import score
+        self._synthetic({"current": 0.5, "temp": 0.5})
+        out = score.score("testfish", self._feat())
+        self.assertEqual(set(out["terms"]), {"current", "temp"},
+                         "the scorer applied a term this fish does not weight")
+
+    def test_the_total_is_a_weighted_mean_not_a_sum(self):
+        """Weights are relative. A profile whose weights sum to 2 must not
+        score twice what one summing to 1 scores on the same water."""
+        from tiderace import score
+        feat = self._feat(water_temp_f=50.0)   # temp 1.0, current below peak
+        self._synthetic({"current": 0.5, "temp": 0.5})
+        one = score.score("testfish", feat)["score"]
+        score.PROFILES["testfish"].weights = {"current": 1.0, "temp": 1.0}
+        two = score.score("testfish", feat)["score"]
+        self.assertAlmostEqual(one, two, places=6,
+                               msg="doubling every weight changed the score, "
+                                   "so the total is a sum and not a mean")
+
+    def test_adding_a_term_cannot_push_the_score_past_full(self):
+        from tiderace import score
+        self._synthetic({"current": 0.4, "temp": 0.3, "season": 0.3})
+        base = score.score("testfish", self._feat(water_temp_f=50.0))["score"]
+        score.PROFILES["testfish"].weights["bottom"] = 0.9
+        score.PROFILES["testfish"].bottom = {"sand": 1.0}
+        score.PROFILES["testfish"].bottom_claim = "test"
+        # Mud where the fish wants sand: charted, and not what it uses. The
+        # first version of this asserted on sand, where every term was already
+        # 1.0, so adding another 1.0 left the mean at 1.0 and the test could
+        # not fail.
+        out = score.score("testfish", self._feat(water_temp_f=50.0, bottom="mud"))
+        self.assertLessEqual(out["score"], 100.0)
+        self.assertIn("bottom", out["terms"])
+        self.assertLess(out["score"], base,
+                        "the wrong bottom, weighted 0.9, did not lower the score")
+
+    def test_bait_and_birds_are_modifiers_not_terms(self):
+        """They already scale the whole answer through
+        bait.combined_modifier -- perfect water with nothing to eat in it is
+        an empty spot. Making them terms as well counts one observation
+        twice, which is what the first cut of this change did."""
+        from tiderace import score
+        src = strip_py_comments(__import__("inspect").getsource(score.score))
+        head = src.split("terms = {")[0]
+        self.assertNotIn('"bait": ', head, "bait must not also be a term")
+        self.assertNotIn('"birds": ', head, "birds must not also be a term")
+        for prof in score.PROFILES.values():
+            self.assertNotIn("bait", prof.weights)
+            self.assertNotIn("birds", prof.weights)
+
+    def test_bottom_is_reported_and_not_scored_without_a_source(self):
+        """Fluke on sand is among the best-established associations there is,
+        and the fluke notes already say "over sand and edges" -- but a number
+        written from that sentence is one nobody published. Same rule as
+        depth: machinery now, claim on citation."""
+        from tiderace import score
+        for key, prof in score.PROFILES.items():
+            if prof.bottom is not None:
+                self.assertTrue(prof.bottom_claim,
+                                "%s declares a substrate preference with no "
+                                "claim attached" % key)
+        out = score.score("fluke", self._feat(bottom="sand", depth_ft=45.0))
+        self.assertNotIn("bottom", out["terms"],
+                         "no profile cites a substrate yet, so nothing scores it")
+
+    def test_the_charted_seabed_actually_reaches_the_features(self):
+        """805 ENC samples in the bay, median 460 m apart. Absent stays
+        absent -- 27% of ENC seabed points record no type, and "nobody
+        charted it" is not "it is sand"."""
+        import inspect
+        from tiderace import features
+        src = strip_py_comments(inspect.getsource(features.build))
+        self.assertIn("bottom_at", src)
+        self.assertIn('"bottom"', src)
+        self.assertIn('"bottom_nm"', src, "the distance is part of the claim")
 
 
 class DaylightAndEveryFish(unittest.TestCase):

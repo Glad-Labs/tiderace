@@ -92,6 +92,17 @@ from dataclasses import dataclass
 
 # ------------------------------------------------------------- response curves
 
+def _clip(v, default: float = 0.0) -> float:
+    """A signal into 0..1. Missing is 0, not a middling 0.5: nobody reporting
+    bait is not the same as somebody reporting some."""
+    if v is None:
+        return default
+    try:
+        return max(0.0, min(1.0, float(v)))
+    except (TypeError, ValueError):
+        return default
+
+
 def trapezoid(x: float, lo_out: float, lo_in: float, hi_in: float, hi_out: float) -> float:
     """0 outside [lo_out, hi_out], 1 inside [lo_in, hi_in], linear ramps between."""
     if x <= lo_out or x >= hi_out:
@@ -144,6 +155,13 @@ class Profile:
     # structure.py, a cell in heat.py -- gets the caveat at the same time as
     # the number instead of having to come back here for it.
     depth_claim: str = ""
+    # Substrate preference: {"sand": 1.0, "mud": 0.5, ...} or None where no
+    # publication supports one. Matched as a substring, because ENC records
+    # mixtures -- "sand,shells" and "mud,shells" are both real values in the
+    # bay. Absent bottom scores 0.6 (unknown), a bottom present but unlisted
+    # scores 0.15 (charted, and not what this fish uses).
+    bottom: dict[str, float] | None = None
+    bottom_claim: str = ""
 
 
 PROFILES: dict[str, Profile] = {
@@ -380,7 +398,17 @@ def score(species: str, feat: dict, exposed: bool = False,
     `best_stage` its preferred tide stage -- both local knowledge, both
     intended to be replaced by fitted values once a catch log exists."""
     p = PROFILES[species]
-    terms: dict[str, float] = {
+
+    # Every signal this scorer knows how to compute. A species uses the ones
+    # its `weights` names and no others, which is the point: a term that does
+    # not apply to a fish is absent for that fish rather than sitting at a
+    # neutral 0.6 and reporting as "considered, found middling".
+    #
+    # The menu used to be these seven, hardcoded. features.build computes
+    # thirty-seven fields and the scorer looked at six of them, so bait, birds,
+    # whales and wind-against-tide were all calculated and thrown away -- built
+    # and never wired, the same shape as the photo endpoint that had no caller.
+    available: dict[str, float] = {
         "season": _season_term(p, feat["month"], feat.get("week"),
                                feat.get("thermal_season"),
                                feat.get("season_shift_days") or 0),
@@ -389,6 +417,13 @@ def score(species: str, feat: dict, exposed: bool = False,
         "light": p.light.get(feat["light_phase"], 0.6),
         "wind": _wind_term(p, feat.get("wind_kt"), exposed),
         "pressure": _pressure_term(p, feat.get("pressure_trend_3h")),
+        # BAIT AND BIRDS ARE NOT HERE, and adding them was a mistake caught
+        # before it shipped. They already reach the score, further down, as a
+        # multiplicative modifier through `bait.combined_modifier` -- which is
+        # the right shape for them: perfect water with nothing to eat in it is
+        # an empty spot, so bait scales the whole answer rather than
+        # contributing a slice of it. Making them terms as well would count
+        # the same observation twice.
     }
 
     # Depth only exists as a term for the species that have a published band.
@@ -397,9 +432,35 @@ def score(species: str, feat: dict, exposed: bool = False,
     # would report as though depth had been considered and found middling.
     if p.depth:
         d = feat.get("depth_ft")
-        terms["depth"] = trapezoid(float(d), *p.depth) if d is not None else 0.6
+        available["depth"] = trapezoid(float(d), *p.depth) if d is not None else 0.6
 
-    total = sum(p.weights[k] * v for k, v in terms.items())
+    # Bottom type, scored only where a profile names a preference. None do
+    # yet, so this is inert -- deliberately. Fluke on sand and tautog on rock
+    # are among the best-established habitat associations there are, and the
+    # fluke profile's own notes already say "0.5-1.5 kt over sand and edges",
+    # but a preference written from that sentence would be a number nobody
+    # published. Same rule as depth: the machinery exists, the claim waits for
+    # a citation.
+    if p.bottom:
+        b = feat.get("bottom")
+        available["bottom"] = (0.6 if b is None
+                               else max((w for k, w in p.bottom.items()
+                                         if k in b), default=0.15))
+
+    # SOLUNAR IS NOT HERE, AND THAT IS DELIBERATE. It peaks at lunar transit,
+    # lunar transit drives the tide and the tide drives the current, so solunar
+    # agreeing with `current` is one witness heard twice rather than two.
+    # `evaluate.solunar_baseline` scores it as the rival theory; folding it in
+    # would inflate confidence and destroy the only question worth asking,
+    # which is whether the moon beats the water.
+
+    terms = {k: v for k, v in available.items() if k in p.weights}
+
+    # Normalised by the weights actually used, so a species can opt into any
+    # subset without the others silently rescaling. Adding `bait` to one fish
+    # must not change what another fish scores.
+    used = sum(p.weights[k] for k in terms) or 1.0
+    total = sum(p.weights[k] * v for k, v in terms.items()) / used
 
     # Multiplicative modifiers -- things that gate rather than nudge.
     mods: dict[str, float] = {}
