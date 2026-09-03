@@ -4202,6 +4202,57 @@ class TheDesktopLayoutSurvivesTheZoomBlock(unittest.TestCase):
         self.assertIn("mob &&", line[0],
                       "the size heuristic is only evidence on the touch layout")
 
+    def test_marker_visibility_against_the_desktop_right_rail(self):
+        """`markerVisibility` is a pure function and had no test, so the rule
+        it encodes was only ever checked by looking at the screen.
+
+        Ported here and run against real desktop geometry: a 1600x900 window,
+        the 420px rail at x=1180 grown to 800px tall, the top bar ending at
+        y=60. It is correct -- which is the point. The labels-on-the-panel
+        report was not this function being wrong; it was the sheet being
+        full-width so everything overlapped it, and the clamp not running when
+        content arrived.
+        """
+        import re
+        js = strip_comments(
+            __import__("pathlib").Path(__file__).parent.joinpath(
+                "tiderace", "web", "index.html").read_text())
+        fn = js.split("function markerVisibility(")[1].split("\n}")[0]
+
+        # The rule, transcribed from the source above so the two cannot drift
+        # apart silently: a change to the thresholds fails the shape check.
+        # Anchored. "sheetLeft + 4" is a substring of "sheetLeft + 400", so a
+        # plain assertIn passed when the threshold was changed by two orders of
+        # magnitude -- the transcription below would then no longer match the
+        # source it claims to mirror, silently.
+        for name in ("sheetTop", "sheetLeft", "barBottom"):
+            self.assertRegex(fn, r"%s \+ 4\b" % name,
+                             "%s threshold changed; the copy below is stale" % name)
+
+        def visible(box, bar_bottom, sheet_top, sheet_left):
+            if box["bottom"] > sheet_top + 4 and box["right"] > sheet_left + 4:
+                return ("hidden", "hidden")
+            if box["top"] < bar_bottom + 4:
+                return ("", "hidden")
+            return ("", "")
+
+        def box(l, t, w=120, h=16):
+            return {"left": l, "top": t, "right": l + w, "bottom": t + h}
+
+        RAIL_LEFT, RAIL_TOP, BAR = 1180, 100, 60
+        cases = {
+            "over the rail":        (box(1240, 300), ("hidden", "hidden")),
+            "straddling its edge":  (box(1130, 300), ("hidden", "hidden")),
+            "left of the rail":     (box(200, 300),  ("", "")),
+            "under the top bar":    (box(400, 50),   ("", "hidden")),
+            "clear of both":        (box(400, 400),  ("", "")),
+            # The rail occupies the right side only, so being below its top
+            # edge is not enough to be behind it.
+            "low but well left":    (box(300, 500),  ("", "")),
+        }
+        for name, (b, want) in cases.items():
+            self.assertEqual(visible(b, BAR, RAIL_TOP, RAIL_LEFT), want, name)
+
     def test_labels_are_reclamped_when_the_sheet_fills(self):
         """The sheet's height decides which labels it covers, and that changes
         without the map moving: the body is filled after an async fetch. Only
