@@ -40,7 +40,7 @@ _grid: dict[tuple, dict] = {}
 
 def build_grid(species: str, start: datetime, hours: int = 48,
                step_minutes: int = 30) -> dict:
-    """Score every spot for this species across the horizon."""
+    """Score every position for this species across the horizon."""
     key = (species, start.isoformat(), hours, step_minutes)
     with _grid_lock:
         if key in _grid:
@@ -69,7 +69,8 @@ def build_grid(species: str, start: datetime, hours: int = 48,
                                   species=feat_species)
         except SourceError as exc:
             out_spots.append({
-                "key": spot.key, "name": spot.name, "lat": spot.lat, "lon": spot.lon,
+                "key": spot.key, "label": spot.label, "lat": spot.lat, "lon": spot.lon,
+                "private": spot.private,
                 "kind": spot.kind, "notes": spot.notes, "best_stage": spot.best_stage,
                 "error": str(exc), "scores": [], "detail": [],
             })
@@ -82,8 +83,12 @@ def build_grid(species: str, start: datetime, hours: int = 48,
         if not times:
             times = [r["time"].isoformat() for r in rows]
 
+        # No name. The position is what the ranking reports, and `label` is
+        # the position formatted once, server-side, so every list and card
+        # prints the same string for the same water.
         out_spots.append({
-            "key": spot.key, "name": spot.name, "lat": spot.lat, "lon": spot.lon,
+            "key": spot.key, "label": spot.label, "lat": spot.lat, "lon": spot.lon,
+            "private": spot.private,
             "kind": spot.kind, "notes": spot.notes, "best_stage": spot.best_stage,
             "prior": spot.prior(species) if modelled else None,
             "bottom": charts.bottom_at(spot.lat, spot.lon),

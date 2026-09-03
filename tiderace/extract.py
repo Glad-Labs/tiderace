@@ -407,15 +407,29 @@ def normalize_species(name: str) -> tuple[str | None, str]:
     return SPECIES_ALIASES.get(raw.lower().strip()), raw
 
 
-def _match_spot(place: str):
-    """Map a place name in prose onto a known spot. Deliberately conservative —
-    an unmatched sighting is better than one pinned to the wrong rock."""
+def _match_spot(place: str, candidates=None):
+    """Map a place name in prose onto one of YOUR marks. Deliberately
+    conservative -- an unmatched sighting is better than one pinned to the
+    wrong rock.
+
+    The public positions carry no name any more (see spots.py), so a landmark
+    named in a report -- "Whale Rock", "the Mount Hope Bridge" -- does not
+    resolve to a coordinate here. That is the honest outcome: the sighting is
+    kept with its place text and no position, and the reviewer pins it. The
+    only names left in the system are the handles you gave your own marks at
+    `--save`, and those match, underscores read as spaces."""
     from . import spots
     if not place:
         return None
     p = place.lower().strip()
-    for s in spots.SPOTS:
-        if s.name.lower() in p or p in s.name.lower():
+    pool = [s for s in (spots.SPOTS if candidates is None else candidates)
+            if s.private and s.key and not s.key.startswith("at:")]
+
+    def handle(s) -> str:
+        return s.key.replace("_", " ").replace("-", " ").lower()
+
+    for s in pool:
+        if handle(s) in p or p in handle(s):
             return s
     # Generic geography carries no identity. Matching on it alone put
     # "Newport Bridge" at the Mount Hope Bridge and "Block Island" -- twelve
@@ -433,8 +447,8 @@ def _match_spot(place: str):
     if not tokens:
         return None
     best, score = None, 0
-    for s in spots.SPOTS:
-        overlap = len(tokens & keywords(s.name.lower()))
+    for s in pool:
+        overlap = len(tokens & keywords(handle(s)))
         if overlap > score:
             best, score = s, overlap
     return best if score >= 1 else None

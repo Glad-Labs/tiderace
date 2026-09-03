@@ -1,38 +1,48 @@
-"""Narragansett Bay fishing spots, each bound to the NOAA stations that
+"""Positions on Narragansett Bay, each bound to the NOAA stations that
 actually describe it.
 
-The important design choice: every spot carries a *current* station, not just
-a tide station. Tide height at Newport tells you almost nothing about whether
-water is ripping past Whale Rock. Current does. This is the single biggest
-edge over the generic national fishing apps, which key everything off one
-tide-height curve.
+The important design choice: every position carries a *current* station, not
+just a tide station. Tide height at Newport tells you almost nothing about
+whether water is ripping over a ledge at the mouth of the West Passage.
+Current does. This is the single biggest edge over the generic national
+fishing apps, which key everything off one tide-height curve.
 
-`quality` and `best_stage` are hand-entered local priors -- conventional
-wisdom, not measurement. They exist to be overwritten by your catch log.
-Every station id below was verified live against CO-OPS.
+There are no names here, and that is deliberate (3 September 2026). The app
+began as a ranking of nineteen named landmarks -- reef, point, bridge, each
+with a name off the chart -- and the name was doing work the coordinate should
+have been doing: the rankings said a landmark when what you need on the boat
+is a position to steer to. A name is also a claim about identity that a
+coordinate is not: two marks a few hundred metres apart are two pieces of
+water, and one name straddling both hid that. So a spot is a coordinate. Its
+key IS its coordinate (`coord_key`), the same scheme `at_coord` uses for a
+point you tap, and every ranking reports the position and nothing else.
+
+What each position still carries: the hand-verified station binding, a `kind`,
+a note about the water, and the local priors below. `quality` and
+`best_stage` are hand-entered -- conventional wisdom, not measurement. They
+exist to be overwritten by your catch log. Every station id below was
+verified live against CO-OPS.
 
 `species` is the same tier of claim as `quality`, and it became load-bearing
 on 2026-09-02 when score.PROFILES went from six species to fourteen. Two
 things follow, and they pull in opposite directions on purpose:
 
   * `for_species` no longer returns an empty list for a fish nobody listed.
-    It returns every spot, because "nobody wrote down where this one is" and
-    "this one is nowhere" are different facts and the empty list said the
+    It returns every position, because "nobody wrote down where this one is"
+    and "this one is nowhere" are different facts and the empty list said the
     second while meaning the first. See the docstring on that function.
-  * Bonito and false albacore ARE listed, on six spots, and that is a
+  * Bonito and false albacore ARE listed, on six positions, and that is a
     deliberate exception rather than the start of filling all fourteen in.
     They are the one group whose distribution inside this bay is sharply
     uneven in a way conventional wisdom is confident about: a mouth-and-ocean
     fish, effectively never caught above the bridges. Letting them fall back
-    to every spot would put albies on Conimicut Point, seven miles up a bay
-    they do not enter.
+    to every position would put albies seven miles up a bay they do not enter.
 
-    What that claim rests on, stated so it can be argued with: the six spots
-    given them -- Harbor of Refuge, Point Judith Breachway, Brenton Reef,
-    Beavertail, Castle Hill, Whale Rock -- are the ocean-facing structures at
-    or outside the mouth. It is angling knowledge, not measurement. The one
-    piece of published support is indirect: [ASGA-LT] tabulates Rhode Island
-    little tunny catch as 85% state waters and 63% shore-based, which says the
+    What that claim rests on, stated so it can be argued with: the six
+    positions given them are the ocean-facing structures at or outside the
+    mouth. It is angling knowledge, not measurement. The one piece of
+    published support is indirect: [ASGA-LT] tabulates Rhode Island little
+    tunny catch as 85% state waters and 63% shore-based, which says the
     fishery is inshore and structure-bound without saying which structure.
     The `quality` numbers are pure priors, like every other number in this
     file. Nothing else was curated, because for weakfish, winter flounder,
@@ -47,10 +57,15 @@ import os
 from dataclasses import dataclass, field
 
 
+def coord_key(lat: float, lon: float) -> str:
+    """The one key scheme. A curated position, a private mark you saved
+    without naming it, and a point you tapped on the map all key the same
+    way, so the same piece of water is the same key however you got there."""
+    return f"at:{lat:.5f},{lon:.5f}"
+
+
 @dataclass(frozen=True)
 class Spot:
-    key: str
-    name: str
     lat: float
     lon: float
     current_station: str          # CO-OPS current-prediction station (verified live)
@@ -65,7 +80,20 @@ class Spot:
     # carry a thermometer. Defaults to the tide station, which is right for
     # everything in the bay and wrong up the Providence River.
     temp_station: str | None = None
-    private: bool = False                  # your mark, not a public landmark
+    private: bool = False                  # your mark, not a public position
+    # Defaults to the coordinate. A private mark may carry the handle you
+    # typed at `--save`, because that is what the catch log links it by; the
+    # public positions never do.
+    key: str = ""
+
+    def __post_init__(self):
+        if not self.key:
+            object.__setattr__(self, "key", coord_key(self.lat, self.lon))
+
+    @property
+    def label(self) -> str:
+        """What every ranking, listing and card calls this place."""
+        return f"{self.lat:.4f}, {self.lon:.4f}"
 
     @property
     def thermometer(self) -> str:
@@ -76,109 +104,109 @@ class Spot:
 
 
 NEWPORT, CONIMICUT, PROVIDENCE = "8452660", "8452944", "8454000"
-# Mount Hope Bay is its own arm. Conimicut sits around the corner in the
-# Providence River and reads about a degree cooler; Fall River is in the same
-# water as the bridge.
+# The north-east arm is its own water. The upper-bay gauge sits around the
+# corner in the Providence River and reads about a degree cooler; Fall River
+# is in the same water as the bridge.
 FALL_RIVER = "8447386"
 
 SPOTS: list[Spot] = [
-    Spot("whale_rock", "Whale Rock", 41.4408, -71.4228, "ACT2201", NEWPORT,
+    Spot(41.4408, -71.4228, "ACT2201", NEWPORT,
          "reef", "West Passage mouth. Ledge to 40 ft. The ebb rip is the draw.",
          ("striped_bass", "bluefish", "black_sea_bass",
           "bonito", "false_albacore"),
          {"striped_bass": 0.98, "bluefish": 0.85, "black_sea_bass": 0.70,
           "bonito": 0.70, "false_albacore": 0.72},
-         "ebb", (41.4494, -71.3997)),   # Beavertail SP -- nearest land grid
-    Spot("beavertail", "Beavertail Point", 41.4494, -71.3997, "ACT2201", NEWPORT,
+         "ebb", (41.4494, -71.3997)),   # state park on the point -- nearest land grid
+    Spot(41.4494, -71.3997, "ACT2201", NEWPORT,
          "point", "Rip forms off the point on the drop. Heavy water.",
          ("striped_bass", "bluefish", "tautog",
           "bonito", "false_albacore"),
          {"striped_bass": 0.94, "bluefish": 0.80, "tautog": 0.85,
           "bonito": 0.78, "false_albacore": 0.80},
          "ebb", (41.4494, -71.3997)),
-    Spot("castle_hill", "Castle Hill", 41.4622, -71.3628, "ACT2101", NEWPORT,
+    Spot(41.4622, -71.3628, "ACT2101", NEWPORT,
          "point", "East Passage mouth. Deep edge tight to shore.",
          ("striped_bass", "bluefish", "tautog",
           "bonito", "false_albacore"),
          {"striped_bass": 0.92, "bluefish": 0.78, "tautog": 0.80,
           "bonito": 0.74, "false_albacore": 0.76},
          "ebb", (41.4622, -71.3628)),
-    Spot("brenton_reef", "Brenton Reef", 41.4256, -71.3611, "ACT2096", NEWPORT,
+    Spot(41.4256, -71.3611, "ACT2096", NEWPORT,
          "reef", "Open-ocean reef SW of Newport. Exposed to south swell.",
          ("striped_bass", "bluefish", "black_sea_bass",
           "bonito", "false_albacore"),
          {"striped_bass": 0.86, "bluefish": 0.88, "black_sea_bass": 0.90,
           "bonito": 0.86, "false_albacore": 0.88},
-         None, (41.4519, -71.3572)),   # Brenton Point SP -- nearest land grid
-    Spot("fort_wetherill", "Fort Wetherill", 41.4761, -71.3617, "ACT2106", NEWPORT,
+         None, (41.4519, -71.3572)),   # state park on the shore -- nearest land grid
+    Spot(41.4761, -71.3617, "ACT2106", NEWPORT,
          "shore", "Deep water from the rocks. Reliable night shore spot.",
          ("striped_bass", "tautog", "scup"),
          {"striped_bass": 0.82, "tautog": 0.92, "scup": 0.80},
          "ebb", (41.4761, -71.3617)),
-    # was ACT2201 (Beavertail): there is a station in the cove itself.
-    Spot("mackerel_cove", "Mackerel Cove", 41.4750, -71.3800, "ACT2111", NEWPORT,
-         "cove", "Sheltered Jamestown cove. Bait stacks up on a SW blow.",
+    # was ACT2201 (the point to the south): there is a station in the cove itself.
+    Spot(41.4750, -71.3800, "ACT2111", NEWPORT,
+         "cove", "Sheltered island cove. Bait stacks up on a SW blow.",
          ("striped_bass", "bluefish", "scup"),
          {"striped_bass": 0.62, "bluefish": 0.70, "scup": 0.75},
          None, (41.4750, -71.3800)),
-    Spot("rose_island", "Rose Island", 41.5033, -71.3317, "ACT2121", NEWPORT,
+    Spot(41.5033, -71.3317, "ACT2121", NEWPORT,
          "island", "Current seams around the island. Boat only.",
          ("striped_bass", "bluefish", "scup"),
          {"striped_bass": 0.74, "bluefish": 0.70, "scup": 0.78},
          None, (41.5033, -71.3317)),
-    Spot("gould_island", "Gould Island", 41.5250, -71.3367, "ACT2136", NEWPORT,
+    Spot(41.5250, -71.3367, "ACT2136", NEWPORT,
          "island", "Rips off both ends. Steady summer striper spot.",
          ("striped_bass", "bluefish", "fluke"),
          {"striped_bass": 0.80, "bluefish": 0.72, "fluke": 0.70},
          None, (41.5250, -71.3367)),
-    Spot("dutch_island", "Dutch Island", 41.5050, -71.4100, "ACT2216", NEWPORT,
+    Spot(41.5050, -71.4100, "ACT2216", NEWPORT,
          "island", "West Passage gut. Big tide push through the narrows.",
          ("striped_bass", "tautog", "fluke", "scup"),
          {"striped_bass": 0.88, "tautog": 0.86, "fluke": 0.72, "scup": 0.76},
          "ebb", (41.5050, -71.4100)),
-    Spot("dyer_island", "Dyer Island", 41.5750, -71.2967, "ACT2146", CONIMICUT,
+    Spot(41.5750, -71.2967, "ACT2146", CONIMICUT,
          "island", "Mid-bay. The classic fluke drift; bass work the edges.",
          ("striped_bass", "fluke", "scup"),
          {"striped_bass": 0.70, "fluke": 0.92, "scup": 0.82},
          None, (41.5750, -71.2967)),
-    Spot("mount_hope", "Mount Hope Bridge", 41.6400, -71.2583, "ACT2166", CONIMICUT,
+    Spot(41.6400, -71.2583, "ACT2166", CONIMICUT,
          "bridge", "Pilings plus a narrow channel. Night bite under the lights.",
          ("striped_bass", "tautog", "scup"),
          {"striped_bass": 0.90, "tautog": 0.88, "scup": 0.74},
          None, (41.6400, -71.2583), temp_station=FALL_RIVER),
-    Spot("hog_island", "Hog Island", 41.6467, -71.2950, "ACT2171", CONIMICUT,
+    Spot(41.6467, -71.2950, "ACT2171", CONIMICUT,
          "island", "Upper-bay structure that holds fish through summer.",
          ("striped_bass", "scup", "fluke"),
          {"striped_bass": 0.68, "scup": 0.80, "fluke": 0.66},
          None, (41.6467, -71.2950)),
-    Spot("quonset", "Quonset Point", 41.5834, -71.3957, "nb0301", CONIMICUT,
+    Spot(41.5834, -71.3957, "nb0301", CONIMICUT,
          "point", "West side. Warms early -- good on the spring run.",
          ("striped_bass", "fluke", "scup"),
          {"striped_bass": 0.66, "fluke": 0.74, "scup": 0.78},
          "flood", (41.5834, -71.3957)),
-    # was nb0301 (Quonset Point): Wickford Harbor has its own station.
-    Spot("wickford", "Wickford Harbor", 41.5667, -71.4333, "ACT2226", CONIMICUT,
+    # was nb0301 (the point to the north): the harbor has its own station.
+    Spot(41.5667, -71.4333, "ACT2226", CONIMICUT,
          "harbor", "Shallow, warms fast. Spring and fall schoolies.",
          ("striped_bass", "scup", "fluke"),
          {"striped_bass": 0.58, "scup": 0.76, "fluke": 0.60},
          "flood", (41.5667, -71.4333)),
     # was ACT2241: ACT2231 is the entrance itself.
-    Spot("greenwich_bay", "Greenwich Bay Entrance", 41.6667, -71.3933, "ACT2231", CONIMICUT,
+    Spot(41.6667, -71.3933, "ACT2231", CONIMICUT,
          "bay", "Shallow warm bay. Early season, then it shuts off in the heat.",
          ("striped_bass", "scup"),
          {"striped_bass": 0.50, "scup": 0.72},
          "flood", (41.6667, -71.3933)),
-    Spot("conimicut", "Conimicut Point", 41.7167, -71.3433, "ACT2246", CONIMICUT,
+    Spot(41.7167, -71.3433, "ACT2246", CONIMICUT,
          "point", "Upper-bay shoal. Spring run and fall blitzes.",
          ("striped_bass", "bluefish"),
          {"striped_bass": 0.72, "bluefish": 0.76},
          "flood", (41.7167, -71.3433)),
-    Spot("sakonnet_black_pt", "Black Point, Sakonnet", 41.5067, -71.2200, "ACT2071", NEWPORT,
-         "point", "Sakonnet River. Less pressure than the passages.",
+    Spot(41.5067, -71.2200, "ACT2071", NEWPORT,
+         "point", "The eastern river. Less pressure than the passages.",
          ("striped_bass", "bluefish", "tautog"),
          {"striped_bass": 0.78, "bluefish": 0.74, "tautog": 0.82},
          "ebb", (41.5067, -71.2200)),
-    Spot("pt_judith_breachway", "Point Judith Pond Breachway", 41.3833, -71.5167,
+    Spot(41.3833, -71.5167,
          "ACT2276", NEWPORT,
          "breachway", "Hard outflow through the breachway -- up to 2 kt.",
          ("striped_bass", "bluefish", "fluke",
@@ -186,7 +214,7 @@ SPOTS: list[Spot] = [
          {"striped_bass": 0.90, "bluefish": 0.82, "fluke": 0.76,
           "bonito": 0.80, "false_albacore": 0.84},
          "ebb", (41.3833, -71.5167)),
-    Spot("harbor_of_refuge", "Harbor of Refuge", 41.3580, -71.4958, "ACT2266", NEWPORT,
+    Spot(41.3580, -71.4958, "ACT2266", NEWPORT,
          "breakwater", "The walls. Ocean access, structure, big fish potential.",
          ("striped_bass", "bluefish", "fluke", "black_sea_bass", "tautog",
           "bonito", "false_albacore"),
@@ -198,10 +226,10 @@ SPOTS: list[Spot] = [
 
 # --------------------------------------------------------------- your marks
 #
-# The nineteen spots above are public landmarks — they are on every chart and
-# in every guidebook, so naming them gives nothing away. Your own marks are a
-# different matter entirely, and the first thing anyone says when they hear
-# about an app like this is "don't give away my good spots".
+# The nineteen positions above are public water — every one is on the chart
+# and in every guidebook, so listing them gives nothing away. Your own marks
+# are a different matter entirely, and the first thing anyone says when they
+# hear about an app like this is "don't give away my good spots".
 #
 # So private marks live in a gitignored file that nothing in this project ever
 # transmits: no sharing, no sync, no export by default. Weather lookups for
@@ -226,9 +254,11 @@ def load_private(path: str | None = None) -> list[Spot]:
 
     out = []
     for r in raw if isinstance(raw, list) else raw.get("spots", []):
+        # A "name" in the file is ignored. Older files carry one; it never
+        # reaches a ranking, a card or a listing -- the position does.
         try:
             out.append(Spot(
-                key=r["key"], name=r["name"],
+                key=r.get("key") or "",
                 lat=float(r["lat"]), lon=float(r["lon"]),
                 current_station=r["current_station"],
                 tide_station=r.get("tide_station", NEWPORT),
@@ -286,8 +316,8 @@ def for_species(species: str) -> list[Spot]:
     Bonito and false albacore are the one group whose distribution inside this
     bay is sharply uneven in a way local knowledge is confident about -- they
     are a mouth-and-ocean fish and are effectively never caught above the
-    bridges -- and listing them everywhere would put albies on Conimicut Point
-    in the forecast. For weakfish, winter flounder, mackerel, squid, dogfish
+    bridges -- and listing them everywhere would put albies seven miles up
+    the bay in the forecast. For weakfish, winter flounder, mackerel, squid, dogfish
     and searobin the bay-wide distribution is either genuinely broad or nobody
     has recorded it, so the fallback is the correct answer rather than a
     placeholder.
@@ -355,8 +385,7 @@ def parse_coord(text: str) -> tuple[float, float]:
     return round(lat, 6), round(lon, 6)
 
 
-def at_coord(lat: float, lon: float, name: str | None = None,
-             resolution: dict | None = None):
+def at_coord(lat: float, lon: float, resolution: dict | None = None):
     """Build a one-off Spot for a coordinate, with its stations resolved.
 
     Returns (spot, resolution) so the caller can print the caveats. Marked
@@ -376,8 +405,6 @@ def at_coord(lat: float, lon: float, name: str | None = None,
         raise ValueError(f"no NOAA stations near {lat},{lon}")
 
     spot = Spot(
-        key=f"at:{lat:.5f},{lon:.5f}",
-        name=name or f"{lat:.4f}, {lon:.4f}",
         lat=lat, lon=lon,
         current_station=cur["id"],
         tide_station=tide["id"],

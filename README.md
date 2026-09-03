@@ -200,11 +200,15 @@ is ripping past Whale Rock. Current does. There are 38 current-prediction
 stations inside the bay and the generic national fishing apps use none of
 them — they key everything off a single tide-height curve.
 
-## Any coordinate is a spot
+## Any coordinate is a spot — and a spot is only a coordinate
 
-The nineteen curated spots are landmarks. The marks that matter are the ones
-you found, and they are not on anybody's list. So any point on the water gets
-the same report:
+The nineteen built-in positions were landmarks with names until 3 September
+2026. They are positions now: the rankings, the spots tab, the map labels and
+the CLI report `41.4408, -71.4228` and nothing else, and a built-in position
+keys the same way as a point you tap (`at:41.44080,-71.42280`). What you need
+on the boat is somewhere to steer to, not a name off a chart. The marks that
+matter are the ones you found, and they are not on anybody's list. So any
+point on the water gets the same report:
 
 ```bash
 tiderace at 41.4408,-71.4228
@@ -547,9 +551,10 @@ tide, current and weather.
   gitignored — they are the irreplaceable part and should never be pushed by
   accident.
 - **Your own marks go in `data/my_spots.json`** (see `my_spots.example.json`).
-  The nineteen built-in spots are public landmarks on every chart; your marks
+  The nineteen built-in positions are public water on every chart; your marks
   are not, and `spots.public_only()` is the only set anything shareable should
-  ever be built from.
+  ever be built from. A mark's `key` is the handle you gave `--save` and the
+  thing the catch log links it by; a `name` in the file is ignored.
 - Weather lookups are the one place a coordinate leaves the machine, so they
   are rounded to ~1 km first. NWS grid cells are ~2.5 km, so nothing is lost
   from the forecast — but your mark does not end up in an access log at 11 m
