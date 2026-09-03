@@ -54,11 +54,10 @@ def run(argv=None) -> int:
     fc = sub.add_parser("forecast", help="rank upcoming windows (default)")
     _add_forecast_args(fc)
 
-    sub.add_parser("spots", help="list known spots")
+    sub.add_parser("spots", help="list the positions the forecast scores")
 
     at = sub.add_parser("at", help="conditions and windows for one coordinate")
     at.add_argument("coord", help="41.4408,-71.4228 · '41 26.448 N 71 25.368 W'")
-    at.add_argument("--name", help="label for the report (never saved)")
     at.add_argument("--save", metavar="KEY",
                     help="also add this coordinate to your private marks")
     _add_forecast_args(at)
@@ -279,11 +278,15 @@ def run(argv=None) -> int:
 
 
 def _cmd_spots() -> int:
+    # Positions, not names. The KEY column is what `--spot` takes; for the
+    # public positions it is the coordinate, and for your own marks it is the
+    # handle you gave `--save`, which is why it is printed at all.
     print()
-    print(f"  {'KEY':<22}{'NAME':<30}{'TYPE':<12}{'STAGE':<7}SPECIES")
+    print(f"  {'POSITION':<22}{'KEY':<26}{'TYPE':<12}{'STAGE':<7}SPECIES")
     print("  " + "─" * 92)
     for s in spots.SPOTS:
-        print(f"  {s.key:<22}{s.name:<30}{s.kind:<12}"
+        key = s.key if s.private and not s.key.startswith("at:") else ""
+        print(f"  {s.label:<22}{key:<26}{s.kind:<12}"
               f"{(s.best_stage or '—'):<7}{', '.join(s.species)}")
     print()
     return 0
@@ -1329,7 +1332,7 @@ def _cmd_forecast(args) -> int:
         try:
             rows = features.build(spot, start, args.hours, species=args.species)
         except SourceError as exc:
-            failures.append(f"{spot.name}: {exc}")
+            failures.append(f"{spot.label}: {exc}")
             continue
         results = [score.score(args.species, r, exposed=r["exposed"],
                                prior=spot.prior(args.species),
@@ -1343,7 +1346,7 @@ def _cmd_forecast(args) -> int:
 
     if args.json:
         print(json.dumps([{
-            "spot": w["spot"].key, "spot_name": w["spot"].name,
+            "spot": w["spot"].key, "lat": w["spot"].lat, "lon": w["spot"].lon,
             "start": w["start"].isoformat(), "end": w["end"].isoformat(),
             "score": w["best"]["score"],
             "explain": score.explain(w["best"]),
@@ -1395,7 +1398,7 @@ def _cmd_forecast(args) -> int:
             span = f"{w['start']:%a %H:%M} (narrow)"
         else:
             span = f"{w['start']:%a %H:%M}–{w['end']:%H:%M}"
-        print(f"\n  {b['score']:>5.1f}  {_bar(b['score'])}  {w['spot'].name}")
+        print(f"\n  {b['score']:>5.1f}  {_bar(b['score'])}  {w['spot'].label}")
         print(f"         {span}   peak {row['time']:%H:%M}")
 
         cur = f"{row['current_speed']:.2f} kt {row['current_dir'] or ''}".strip()
@@ -1541,7 +1544,7 @@ def _cmd_at(args) -> int:
     try:
         rep = point.report(lat, lon, species=args.species, start=start,
                            hours=args.hours, threshold=args.threshold,
-                           top=args.top, name=args.name)
+                           top=args.top)
     except (ValueError, stations.StationError) as exc:
         print(f"  {exc}", file=sys.stderr)
         return 1
@@ -1557,7 +1560,7 @@ def _cmd_at(args) -> int:
 
     st, place, now = rep["stations"], rep["place"], rep["now"]
     print()
-    print(f"  {rep['name']}   —   {rep['species_name']}")
+    print(f"  {rep['label']}   —   {rep['species_name']}")
     print("  " + "─" * 74)
 
     c, t, tp = st["current"], st["tide"], st["temp"]
@@ -1620,7 +1623,7 @@ def _cmd_at(args) -> int:
         print("  preferred tide stage. Log trips here and both become yours.")
 
     if args.save:
-        spot, _ = spots.at_coord(lat, lon, name=args.name)
+        spot, _ = spots.at_coord(lat, lon)
         path = _save_mark(args.save, spot, st)
         print(f"\n  saved as {args.save!r} in {path}")
         print("  (gitignored, never transmitted)")
@@ -1641,8 +1644,7 @@ def _save_mark(key: str, spot, res: dict) -> str:
             existing = []
     existing = [e for e in existing if e.get("key") != key]
     existing.append({
-        "key": key, "name": spot.name if spot.name != f"{spot.lat:.4f}, {spot.lon:.4f}"
-                            else key.replace("_", " ").title(),
+        "key": key,
         "lat": spot.lat, "lon": spot.lon,
         "current_station": spot.current_station,
         "tide_station": spot.tide_station,

@@ -1076,7 +1076,7 @@ function makeMarker(sp){
         font-family:var(--mono);font-size:10px;font-weight:600;
         color:var(--mk-ink);
         text-shadow:0 1px 3px var(--mk-halo),0 0 6px var(--mk-halo),0 0 2px var(--mk-halo);
-        white-space:nowrap;pointer-events:none">${sp.name}</div>`;
+        white-space:nowrap;pointer-events:none">${sp.label}</div>`;
   // Markers live inside the map's canvas container, so a tap on one also
   // reaches the map's own click handler -- selecting the spot AND dropping a
   // mark pin on top of it, with a report request behind it.
@@ -1137,7 +1137,9 @@ function clampLabels(){
   const entries = Object.values(MARKERS).filter(m => m.el);
   // Best spot wins the label. paint() already puts the score in zIndex, and
   // the selected spot outranks everything -- if you have picked a place, its
-  // name is the one you need on screen.
+  // position is the one you need on screen. Labels are coordinates now, not
+  // names (spots.py says why), so there are more of them to clamp: every one
+  // is ~17 characters of mono and none is shorter than another.
   entries.sort((a, b) => {
     const sa = a.el.dataset.key === SEL ? 1e6 : (+a.el.style.zIndex || 0);
     const sb = b.el.dataset.key === SEL ? 1e6 : (+b.el.style.zIndex || 0);
@@ -1166,9 +1168,9 @@ function clampLabels(){
       lbl.style.visibility = '';
       const lb = lbl.getBoundingClientRect();
       // The time bar sits over the map bottom-left and had no say here, so
-      // names under it were drawn into it.
+      // labels under it were drawn into it.
       if (tbox && hits(lb, tbox)) show = false;
-      // And the real complaint: two names on top of each other. Charlestown
+      // And the real complaint: two labels on top of each other. Charlestown
       // Breachway publishes an inside and an east-side mark a few hundred
       // metres apart, so at bay zoom their labels land in the same place.
       else if (kept.some(k => hits(lb, k))) show = false;
@@ -1217,7 +1219,7 @@ function renderRank(){
     const d = r.sp.detail[TI] || {};
     return `<button data-k="${r.sp.key}" class="${SEL===r.sp.key?'on':''}">
       <span class="s" style="color:${colour(r.s)}">${r.s.toFixed(0)}</span>
-      <span>${r.sp.name}<br><span class="m">${(d.current_speed??0).toFixed(2)} kt ${d.current_dir||''}</span></span>
+      <span>${r.sp.label}<br><span class="m">${(d.current_speed??0).toFixed(2)} kt ${d.current_dir||''}</span></span>
       <span class="m">${d.wind_kt!=null?d.wind_kt.toFixed(0)+' kt':''}</span>
     </button>`;
   }).join('') || (GRID.modelled === false
@@ -1252,8 +1254,8 @@ function renderDetail(){
   $('#detail').innerHTML = `
     <p class="ph">Spot</p>
     <div class="card">
-      <h3>${sp.name}</h3>
-      <div class="sub">${sp.kind}${sp.best_stage?' · best on '+sp.best_stage:''}</div>
+      <h3>${sp.label}</h3>
+      <div class="sub">${sp.kind}${sp.private ? ' · your mark' + (sp.key && !sp.key.startsWith('at:') ? ' ' + tesc(sp.key) : '') : ''}${sp.best_stage?' · best on '+sp.best_stage:''}</div>
       <div class="big" style="color:${colour(s)};margin-top:10px">${s!=null?s.toFixed(1):'—'}</div>
       ${sp.scores.length ? sparkline(sp.scores) : ''}
       <dl class="kv">
@@ -1287,7 +1289,7 @@ function renderLogForm(sp){
       <input type="text" name="method" placeholder="method — live eel, bucktail…">
       <input type="text" name="bait_observed" placeholder="bait seen — peanut bunker…">
       <input type="text" name="notes" placeholder="notes">
-      <button class="primary" type="submit">Log at ${sp.name}</button>
+      <button class="primary" type="submit">Log at ${sp.label}</button>
       <p class="note">Blanks count. A model trained only on good days learns every day is good.</p>
       <div id="logmsg"></div>
     </form>`;
@@ -3740,7 +3742,7 @@ window.surveyURL = (lat, lon) =>
         const cur = d.current_speed != null
           ? `${d.current_speed.toFixed(2)} kt ${d.current_dir || ''}` : '';
         return `<div class="trip" data-spot="${esc(sp.key)}">
-            <div class="when">${esc(sp.name)}</div>
+            <div class="when">${esc(sp.label)}</div>
             <div class="fish">${s == null ? '—' : Math.round(s)}</div>
             <div class="meta">${s == null
               ? esc((sp.error || 'not scored here').replace(/\.$/, ''))
@@ -3752,7 +3754,7 @@ window.surveyURL = (lat, lon) =>
       if (!sp) return;
       if (MAP_READY) map.easeTo({center:[sp.lon, sp.lat],
                                  zoom: Math.max(map.getZoom(), 12), duration:600});
-      show(sp.lat, sp.lon, sp.name);          // straight into Now for that spot
+      show(sp.lat, sp.lon);                   // straight into Now for that position
     });
   }
 

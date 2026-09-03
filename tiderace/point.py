@@ -104,7 +104,7 @@ def structure_near(lat: float, lon: float, max_nm: float = 0.25) -> dict[str, in
 def report(lat: float, lon: float, species: str = "striped_bass",
            start: datetime | None = None, hours: int = 48,
            threshold: float = 45.0, top: int = 6,
-           name: str | None = None, step_minutes: int = 30) -> dict:
+           step_minutes: int = 30) -> dict:
     """Resolve, describe and score one coordinate.
 
     Returns the station binding and its caveats alongside the numbers, because
@@ -115,7 +115,7 @@ def report(lat: float, lon: float, species: str = "striped_bass",
         raise ValueError(f"unknown species {species!r}")
 
     res = stations.resolve(lat, lon)
-    spot, res = spots.at_coord(lat, lon, name=name, resolution=res)
+    spot, res = spots.at_coord(lat, lon, resolution=res)
     start = start or datetime.now().replace(minute=0, second=0, microsecond=0)
 
     rows = features.build(spot, start, hours, step_minutes, species=species)
@@ -129,7 +129,7 @@ def report(lat: float, lon: float, species: str = "striped_bass",
 
     return {
         "lat": lat, "lon": lon,
-        "name": spot.name,
+        "label": spot.label,
         "species": species,
         "species_name": score.PROFILES[species].name,
         "start": start.isoformat(),

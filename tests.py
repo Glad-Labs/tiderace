@@ -201,7 +201,7 @@ class Spots(unittest.TestCase):
             "8447386": "mount_hope",
             "8454000": "providence_river",
         }
-        EXPECTED = {"mount_hope": "mount_hope"}
+        EXPECTED = {spots.coord_key(41.6400, -71.2583): "mount_hope"}
         for s in spots.SPOTS:
             want = EXPECTED.get(s.key)
             if want:
@@ -215,6 +215,92 @@ class Spots(unittest.TestCase):
             if s.temp_station:
                 self.assertIn(s.temp_station, KNOWN,
                               f"{s.key} overrides to unknown gauge {s.temp_station}")
+
+    def test_a_spot_has_no_name(self):
+        """3 September 2026: the named landmarks went. A spot is a coordinate,
+        its key is that coordinate, and every ranking reports the position.
+        The dataclass carrying a `name` field again is the thing to catch."""
+        self.assertNotIn("name", spots.Spot.__dataclass_fields__)
+        for s in spots.public_only():
+            self.assertEqual(s.key, spots.coord_key(s.lat, s.lon), s.key)
+            self.assertEqual(s.label, f"{s.lat:.4f}, {s.lon:.4f}")
+        self.assertEqual(len(spots.public_only()), 19)
+
+    def test_the_landmark_names_are_gone_from_the_code(self):
+        """Not just off the dataclass: out of spots.py altogether, comments
+        included, so nothing can quietly put them back as a `notes` field or
+        a lookup table."""
+        import pathlib
+        src = (pathlib.Path(__file__).parent / "tiderace" / "spots.py").read_text()
+        for name in ("Whale Rock", "Beavertail", "Castle Hill", "Brenton",
+                     "Wetherill", "Mackerel Cove", "Rose Island", "Gould",
+                     "Dutch Island", "Dyer", "Mount Hope", "Hog Island",
+                     "Quonset", "Wickford", "Greenwich", "Conimicut",
+                     "Sakonnet", "Judith", "Harbor of Refuge",
+                     "whale_rock", "mount_hope", "pt_judith"):
+            self.assertNotIn(name, src, name)
+
+    def test_a_typed_coordinate_and_a_curated_one_share_a_key_scheme(self):
+        """The same water is the same key however you reached it: the curated
+        position, a mark saved without a handle, and a tap on the map."""
+        s = spots.public_only()[0]
+        self.assertEqual(s.key, f"at:{s.lat:.5f},{s.lon:.5f}")
+        mine = spots.Spot(s.lat, s.lon, s.current_station, s.tide_station,
+                          "mark", private=True)
+        self.assertEqual(mine.key, s.key)
+        handled = spots.Spot(s.lat, s.lon, s.current_station, s.tide_station,
+                             "mark", private=True, key="my_ledge")
+        self.assertEqual(handled.key, "my_ledge")
+
+    def test_a_private_marks_file_name_is_ignored(self):
+        """Older my_spots.json files carry a "name". It loads, and the name
+        goes nowhere: the mark is its key and its position."""
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "m.json")
+            with open(path, "w") as fh:
+                json.dump([{"key": "the_rockpile", "name": "The Rockpile",
+                            "lat": 41.5123, "lon": -71.3456,
+                            "current_station": "ACT2121"}], fh)
+            got = spots.load_private(path)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0].key, "the_rockpile")
+        self.assertTrue(got[0].private)
+        self.assertEqual(got[0].label, "41.5123, -71.3456")
+        self.assertFalse(hasattr(got[0], "name"))
+
+    def test_the_grid_and_the_page_report_positions_not_names(self):
+        """The server sends `label` (the position) and never a name; the
+        ranked list, the spots tab, the card and the marker read it."""
+        import pathlib
+        root = pathlib.Path(__file__).parent
+        srv = strip_py_comments((root / "tiderace" / "server.py").read_text())
+        grid = srv.split("def build_grid(")[1].split("\ndef ")[0]
+        self.assertEqual(grid.count('"label": spot.label'), 2,
+                         "both the scored and the errored entry carry the position")
+        self.assertNotIn("spot.name", grid)
+        self.assertNotIn('"name"', grid)
+        # The point report too: `tiderace at` printed rep['name'] and crashed
+        # with a KeyError the first time it ran after the rename, because the
+        # only test of that path needs NOAA. So the source is the test.
+        pt = strip_py_comments((root / "tiderace" / "point.py").read_text())
+        rep_body = pt.split("def report(")[1]
+        self.assertIn('"label": spot.label', rep_body)
+        self.assertNotIn('"name": spot.name', rep_body)
+        cli = strip_py_comments((root / "tiderace" / "cli.py").read_text())
+        at_body = cli.split("def _cmd_at(")[1].split("\ndef ")[0]
+        self.assertIn("rep['label']", at_body)
+        self.assertNotIn("rep['name']", at_body)
+        page = strip_comments((root / "tiderace" / "web" / "index.html").read_text())
+        for fn in ("function renderRank(){", "function renderDetail(){",
+                   "function renderLogForm(sp){", "function makeMarker(sp){",
+                   "function renderSpots(){"):
+            self.assertIn(fn, page, fn)
+            body = page.split(fn)[1].split("\nfunction ")[0]
+            self.assertNotIn("sp.name", body, fn)
+            self.assertNotIn(".name}", body, fn)
+            self.assertIn(".label", body, fn)
 
 
 class Bait(unittest.TestCase):
@@ -473,15 +559,27 @@ class Extraction(unittest.TestCase):
         self.assertIsNone(extract._match_spot("the south shore"))
         self.assertIsNone(extract._match_spot(""))
 
-    def test_place_matching_finds_real_spots(self):
-        for text, want in [("Whale Rock", "whale_rock"),
-                           ("the Mount Hope Bridge", "mount_hope"),
-                           ("off Beavertail", "beavertail"),
-                           ("Point Judith breachway", "pt_judith_breachway"),
-                           ("Fort Wetherill", "fort_wetherill")]:
-            got = extract._match_spot(text)
+    def test_place_matching_resolves_only_your_own_marks(self):
+        """The public positions carry no name (spots.py says why), so a
+        landmark in a report no longer resolves to a coordinate. The handle
+        you typed at `--save` is the one name left, and that still matches --
+        underscores read as spaces."""
+        mine = spots.Spot(41.372, -71.639, "ACT2286", "8452660", "mark",
+                          key="charlestown_breachway", private=True)
+        pool = list(spots.public_only()) + [mine]
+        for text in ("Charlestown Breachway", "at the charlestown breachway",
+                     "Charlestown"):
+            got = extract._match_spot(text, candidates=pool)
             self.assertIsNotNone(got, text)
-            self.assertEqual(got.key, want, text)
+            self.assertEqual(got.key, "charlestown_breachway", text)
+        # Landmarks are positions now, and a position has nothing to match.
+        for text in ("Whale Rock", "the Mount Hope Bridge", "off Beavertail",
+                     "Fort Wetherill"):
+            self.assertIsNone(extract._match_spot(text, candidates=pool), text)
+        # A tapped coordinate saved without a handle is not a name either.
+        anon = spots.Spot(41.44, -71.42, "ACT2201", "8452660", "mark", private=True)
+        self.assertIsNone(extract._match_spot("at:41.44000,-71.42000",
+                                              candidates=[anon]))
 
     def test_schemas_are_strict_and_demand_provenance(self):
         """Every extracted claim must carry a quote and a confidence, so a
@@ -910,7 +1008,9 @@ class Packaging(unittest.TestCase):
             r = subprocess.run([os.path.join(self.ROOT, "tiderace-cli"), "spots"],
                                cwd=d, capture_output=True, text=True, timeout=90)
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("whale_rock", r.stdout)
+            self.assertIn("41.4408, -71.4228", r.stdout)
+            self.assertNotIn("whale_rock", r.stdout)
+            self.assertNotIn("Whale Rock", r.stdout)
 
     def test_module_entry_point_is_callable(self):
         """pyproject wires tiderace.cli:run as the console script."""
@@ -1717,6 +1817,11 @@ class StationResolution(unittest.TestCase):
         than the coastline layer resolves. The right behaviour is to say so.
         """
         from tiderace import charts, spots as spotsmod
+        # This is one of Matt's own marks, from my_spots.json. Another
+        # install -- or a worktree without the file -- has no such key, and
+        # the honest answer is a skip, not a KeyError.
+        if "charlestown_inside" not in spotsmod.BY_KEY:
+            self.skipTest("private mark charlestown_inside not in my_spots.json")
         sp = spotsmod.get("charlestown_inside")
         if not charts.covers(sp.lat, sp.lon) or not charts.land_index():
             self.skipTest("land layer not cached for this area")
@@ -1782,7 +1887,7 @@ class AdHocSpots(unittest.TestCase):
         self.assertEqual(spot.prior("striped_bass"), 0.6)
 
     def test_thermometer_falls_back_to_the_tide_station(self):
-        sp = spots.get("whale_rock")
+        sp = spots.get(spots.coord_key(41.4408, -71.4228))
         self.assertEqual(sp.thermometer, sp.tide_station)
 
 
@@ -1816,25 +1921,29 @@ class Windows(unittest.TestCase):
 class CatchLogCoordinates(unittest.TestCase):
     def test_entries_carry_coordinates(self):
         from tiderace import log as catchlog
-        e = catchlog.Entry(spot="whale_rock", species="striped_bass",
+        e = catchlog.Entry(spot=spots.coord_key(41.4408, -71.4228),
+                           species="striped_bass",
                            started_at="2026-08-29T05:00", count=1)
         self.assertIsNone(e.lat)
         self.assertIn("lat", catchlog.EXTRACTION_SCHEMA)
 
     def test_a_known_spot_backfills_its_coordinate(self):
         """Spot keys can be renamed or retired; 41.4408,-71.4228 cannot. A log
-        that only says 'whale_rock' cannot be grouped spatially later."""
+        that only says a key cannot be grouped spatially later. (The public
+        keys are coordinates now, which makes this moot for them; a private
+        mark's handle is still a key that can be retired.)"""
         import json
         import tempfile
         from tiderace import log as catchlog
+        key = spots.coord_key(41.4408, -71.4228)
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "log.jsonl")
-            e = catchlog.Entry(spot="whale_rock", species="striped_bass",
+            e = catchlog.Entry(spot=key, species="striped_bass",
                                started_at="2026-08-29T05:00", count=0,
                                conditions={"current_speed": 1.0})
             catchlog.record(e, path)
             row = json.loads(open(path).read().strip())
-            sp = spots.get("whale_rock")
+            sp = spots.get(key)
             self.assertAlmostEqual(row["lat"], sp.lat)
             self.assertAlmostEqual(row["lon"], sp.lon)
 
@@ -4009,7 +4118,8 @@ class PhotoLog(unittest.TestCase):
 
     def test_a_session_near_a_known_spot_inherits_it(self):
         d = self._draft()
-        self.assertEqual(d["trips"][0]["spot"], "whale_rock")
+        self.assertEqual(d["trips"][0]["spot"],
+                         spots.coord_key(41.4408, -71.4228))
 
     def test_a_session_with_no_fix_says_so_rather_than_guessing(self):
         d = self._draft()

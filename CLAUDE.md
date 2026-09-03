@@ -153,6 +153,21 @@ A test asserts `species.py` carries no size/season/bag numbers. **A search
 result is not a source.** Regulations work belongs in the sibling `fishreg`
 repo, which plays amendment streams forward to compute current state.
 
+### A spot is a coordinate, not a name
+
+Since 3 September 2026 the nineteen built-in positions carry no name. The
+`Spot` dataclass has no `name` field, a public position's key is its
+coordinate (`spots.coord_key`, the same scheme as a tapped point), and every
+ranking, listing, card and map label reports `41.4408, -71.4228`. Matt asked
+for it: what you need on the boat is somewhere to steer to. A test asserts the
+landmark names are absent from `spots.py`, comments included, so do not
+reintroduce one as a note. The one name left in the system is the handle you
+give a private mark at `--save`, because the catch log links it by that.
+
+What this cost, so nobody rediscovers it: a landmark named in a voice or text
+report no longer resolves to a coordinate (`extract._match_spot` matches only
+your own marks now); the sighting is kept with its place text and reviewed.
+
 ### Provenance is not decoration
 
 Every datum in `survey.py` carries `{value, source, resolution_m, note, when}`.
