@@ -4404,6 +4404,28 @@ class DaylightAndEveryFish(unittest.TestCase):
         self.css = self.js.split("<style>")[1].split("</style>")[0]
 
     # ---- the picker ----
+    def test_the_spots_tab_reads_the_binding_that_exists(self):
+        """`GRID` is a module-scope let, so it is not a property of window and
+        `window.GRID` was always undefined -- the Spots tab showed "No
+        forecast loaded yet" from the day it was written, with a forecast
+        loaded and the ranked list beside it full. Same scope confusion as the
+        esc/tesc bugs: a binding in one place read through another."""
+        js = strip_comments(self.page)
+        fn = js.split("function renderSpots()")[1].split("\n  }")[0]
+        self.assertNotIn("window.GRID", fn,
+                         "GRID is not on window; this guard can never be false")
+
+    def test_a_spot_that_could_not_be_scored_is_not_scored_zero(self):
+        """build_grid sends `scores: []` for a spot whose station has no
+        current predictions -- three of the twenty-one are in that state --
+        and `|| 0` turned that into a spot scored zero, sorted last, reading
+        as "we looked and it is awful"."""
+        js = strip_comments(self.page)
+        fn = js.split("function renderSpots()")[1].split("\n  }")[0]
+        self.assertNotIn("[TI] || 0", fn, "empty is not zero")
+        self.assertIn("?? null", fn)
+        self.assertIn("'—'", fn, "an unscored spot must show a dash, not a number")
+
     def test_the_picker_offers_every_loggable_fish(self):
         """Six of thirty-five were on offer, so the other twenty-nine could not
         be looked at or logged from the map at all."""

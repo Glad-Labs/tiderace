@@ -3581,14 +3581,26 @@ window.surveyURL = (lat, lon) =>
   /* The ranked list, which used to arrive as part of a 1,075px slab of the old
      desktop sidebar dropped at the bottom of everything. */
   function renderSpots(){
-    if (!window.GRID || !GRID.spots){
+    // `GRID` is a module-scope `let`, so it is not a property of window and
+    // `window.GRID` was always undefined. The Spots tab has therefore shown
+    // "No forecast loaded yet" since it was written, with a forecast loaded
+    // and the ranked list beside it full. The same scope confusion as the
+    // `esc`/`tesc` bugs: a binding in one place read through another.
+    if (!GRID || !GRID.spots){
       body.innerHTML = '<div class="sdim">No forecast loaded yet.</div>';
       return;
     }
     const t = GRID.times ? GRID.times[TI] : null;
+    // `|| 0` turned a spot that could not be scored into a spot scored zero,
+    // which sorts it to the bottom and reads as "we looked and it is awful".
+    // Three of the twenty-one are in that state right now -- Mackerel Cove,
+    // Wickford Harbor and Greenwich Bay Entrance have no current predictions
+    // at their station at all -- and build_grid is careful to send `scores:
+    // []` rather than zeroes for exactly this reason. The interface was
+    // undoing that server-side care in one expression.
     const rows = GRID.spots
-      .map(sp => ({sp, s: (sp.scores || [])[TI] || 0}))
-      .sort((a, b) => b.s - a.s);
+      .map(sp => ({sp, s: (sp.scores || [])[TI] ?? null}))
+      .sort((a, b) => (b.s ?? -1) - (a.s ?? -1));
     body.innerHTML =
       `<div class="sgroup">${GRID.species_name || ''}` +
       `${t ? ' · ' + new Date(t).toLocaleString([], {weekday:'short', hour:'2-digit', minute:'2-digit'}) : ''}</div>` +
@@ -3598,8 +3610,10 @@ window.surveyURL = (lat, lon) =>
           ? `${d.current_speed.toFixed(2)} kt ${d.current_dir || ''}` : '';
         return `<div class="trip" data-spot="${esc(sp.key)}">
             <div class="when">${esc(sp.name)}</div>
-            <div class="fish">${Math.round(s)}</div>
-            <div class="meta">${esc(cur)}</div>
+            <div class="fish">${s == null ? '—' : Math.round(s)}</div>
+            <div class="meta">${s == null
+              ? esc((sp.error || 'not scored here').replace(/\.$/, ''))
+              : esc(cur)}</div>
           </div>`;
       }).join('');
     body.querySelectorAll('[data-spot]').forEach(el => el.onclick = () => {

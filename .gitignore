@@ -62,3 +62,5 @@ data/regs_applied.json
 
 # Screenshot written by tools/browser-check when run from the repo root.
 browser-check.png
+walkthrough-map.png
+walkthrough-desk.png
