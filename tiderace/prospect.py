@@ -226,3 +226,79 @@ def prospects(bbox, species: str = "striped_bass", n: int = 61,
         "at about %s m; the water is 1 to 6 km. Structure is not fish."
         % (area.get("score"), scan.get("sample_m")))
     return out
+
+
+# ---- where to go, for one fish, right now -------------------------------
+#
+# The app began by ranking twenty-one curated spots, and that is not the
+# question. The question is where to put the boat given everything known, and
+# nothing about a curated list answers it -- every one of those spots is
+# inside the bay, somebody chose them, and a coordinate two hundred metres
+# away that nobody named is invisible to a ranking built from that list.
+#
+# So this ranks coordinates, not spots. What makes that honest rather than
+# just finer is the measurement in this module's header: inside a box you
+# could drift, the water does not vary. Scored over a 2 km box for fluke, 576
+# cells came back spanning 49.4 to 57.2 -- sd 2.72 -- because every cell shares
+# a current station, an SST pixel and a chlorophyll pixel. Ranking coordinates
+# by that spread would be ranking noise.
+#
+# Two things do vary at the scale of a drift, and both are defensible:
+#
+#   relief   measured off the ~3 m model, tens of metres of variation
+#   depth    but ONLY for a species with a published band -- fluke and black
+#            sea bass have one, the other four do not, and for those the
+#            depth of a bump is reported and never scored
+#
+# So the ranking is relief, gated and then ordered by the species' own cited
+# band where one exists. For a fish with no band the answer says so instead of
+# quietly ranking by structure alone and letting it read as a fish forecast.
+
+def best(bbox, species: str = "striped_bass", n: int = 61,
+         when: datetime | None = None, limit: int = 12,
+         min_relief_ft: float = 3.0, deep: bool = False) -> dict:
+    """Ranked coordinates for one species, finest first."""
+    if species not in score.PROFILES:
+        raise ValueError("unknown species %r" % species)
+    out = prospects(bbox, species, n=n, when=when, limit=60,
+                    min_relief_ft=min_relief_ft, deep=deep)
+    prof = score.PROFILES[species]
+    banded = bool(prof.depth)
+
+    ranked = []
+    for c in out.get("prospects", []):
+        fit = None
+        if banded:
+            hit = [d for d in (c.get("depth_suits") or [])
+                   if d["species"] == species]
+            # Outside the published band is not a candidate for THIS fish. It
+            # may still be a fine bump; it is not one this species is cited as
+            # using.
+            if not hit:
+                continue
+            fit = hit[0]["fit"]
+        r = dict(c)
+        r["depth_fit"] = fit
+        # Relief is the measured thing and stays the spine of the order. Where
+        # a band exists it breaks ties, because a 12 ft bump inside the cited
+        # depth is a better answer than a 12 ft bump on its edge.
+        r["rank_on"] = ("relief within the published depth band" if banded
+                        else "relief only")
+        ranked.append(r)
+
+    ranked.sort(key=lambda r: (-(r.get("relief_ft") or 0),
+                               -(r.get("depth_fit") or 0)))
+    out["best"] = ranked[:limit]
+    out["depth_banded"] = banded
+    out["ranked_by"] = ("relief, restricted to the depths %s is cited at"
+                        % prof.name) if banded else (
+                       "relief alone — no published depth band for %s, so depth "
+                       "is reported and not scored" % prof.name)
+    out["note_best"] = (
+        "%d coordinate%s, ranked by what actually varies where you drift. The "
+        "area score (%s) is one number for the whole box: every cell here shares "
+        "a current station, an SST pixel and a chlorophyll pixel, so it decides "
+        "whether to come at all and cannot decide where."
+        % (len(out["best"]), "" if len(out["best"]) == 1 else "s",
+           (out.get("area") or {}).get("score")))
+    return out

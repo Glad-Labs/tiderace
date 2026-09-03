@@ -1523,8 +1523,14 @@ async function scanView(){
     const bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()]
       .map(v => v.toFixed(4)).join(',');
     const sp = ($('#species') && $('#species').value) || 'striped_bass';
+    /* /api/best, not /api/prospects: ranked coordinates for THIS fish rather
+       than every bump in the box. Where the species carries a published depth
+       band the ranking is restricted to the depths it is cited at, so the
+       biggest bump in the water can be correctly absent -- Whale Rock has the
+       most relief off Jamestown and its top is shallower than the fluke band
+       reaches. */
     const d = await (await fetch(
-      `/api/prospects?bbox=${bbox}&species=${encodeURIComponent(sp)}&n=61`)).json();
+      `/api/best?bbox=${bbox}&species=${encodeURIComponent(sp)}&n=61`)).json();
     if (d.error) throw new Error(d.error);
 
     if (!d.usable){
@@ -1532,13 +1538,14 @@ async function scanView(){
       toast(d.note);
       return;
     }
-    const list = d.prospects || d.bumps || [];
+    const list = d.best || d.prospects || d.bumps || [];
     list.forEach((bump, i) => {
       const el = document.createElement('div');
       el.className = 'bump' + (bump.novel ? ' novel' : '');
       el.textContent = Math.round(bump.relief_ft);
-      el.title = (bump.why || []).join('\n')
-        || `${bump.relief_ft} ft of relief · top ${bump.depth_ft} ft`;
+      el.textContent = String(i + 1);
+      el.title = [(d.ranked_by ? '#' + (i + 1) + ' — ' + d.ranked_by : null),
+                  ...(bump.why || [])].filter(Boolean).join('\n');
       el.onclick = () => {
         // The tap that finds it is the tap that means "tell me about here",
         // which is also where logging a trip starts.
@@ -1555,6 +1562,10 @@ async function scanView(){
     // point: the current station, the SST pixel and the chlorophyll pixel do
     // not change inside it. Only the bottom does.
     const a = d.area || {};
+    if (!list.length && d.usable)
+      toast(d.depth_banded
+        ? `Nothing in view sits in the depths ${d.species_name} is cited at.`
+        : `No structure found in view.`);
     if (list.length && a.score != null)
       toast(`Area ${a.score}/100 for ${d.species_name || 'this fish'}`
             + (a.limiting ? `, held back by ${a.limiting}` : '')
