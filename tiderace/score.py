@@ -43,9 +43,42 @@ Sources, consulted 2026-08-29 except the depth work, consulted 2026-09-02:
   [LANGAN] Langan, McManus, Schonfeld, Truesdale & Collie 2019, Mar. Coast.
            Fish. 11(1):76-85, doi:10.1002/mcf2.10065.
 
-Depth, added 2026-09-02, is scored for **two** of the six species. The other
-four are not "no number was found" -- three of them are "the source says depth
-is the wrong variable", which is a stronger answer and worth keeping:
+Second cohort, consulted 2026-09-02, for the inshore and nearshore species:
+  [EFH-WF]  Pereira, Goldberg, Ziskowski, Berrien, Morse & Johnson 1999, EFH
+           source doc NMFS-NE-138 (winter flounder) -- Table 1 and the ADULTS
+           section.
+  [EFH-MACK] Studholme, Packer, Berrien, Johnson, Zetlin & Morse 1999, EFH
+           source doc NMFS-NE-141 (Atlantic mackerel).
+  [EFH-SQ]  Cargnelli, Griesbach, Packer & Weissberger 1999, EFH source doc
+           NMFS-NE-146 (longfin inshore squid) -- Fig 8 is again the RIDEM
+           Narragansett Bay trawl survey, 1990-1996, the same series the fluke
+           and black sea bass depth bands come from.
+  [EFH-DOG] Stehlik 2007, EFH source doc NMFS-NE-203 (spiny dogfish).
+  [ASMFC-SCI] ASMFC 2017, Atlantic Sciaenid Habitats, Habitat Management
+           Series #14 -- ch. 7 (weakfish), ch. 8 (northern kingfish). Same
+           series as [ASMFC-SB], which is #9.
+  [SEAROBIN] Roberts-Goodwin 1981, Biological and Fisheries Data on Striped
+           Searobin, Prionotus evolans, NMFS Sandy Hook Laboratory.
+  [FGOM]   Bigelow & Schroeder 1953, Fishes of the Gulf of Maine, Fishery
+           Bulletin 74; species accounts read in the online edition. Already
+           the ancestor of [BB-SB] and [BB-TOG]; here it is read directly, for
+           weakfish and bonito.
+  [RIDEM-AB] RI Division of Marine Fisheries, "Albie and Bonito" pilot project
+           page, 2025: "Little tunny and Atlantic bonito are most prevalent in
+           our region from late May to late September."
+           dem.ri.gov/.../surveys/Albie_Bonito
+  [ASGA-LT] Calabrese (Univ. of Massachusetts Dartmouth / American Saltwater
+           Guides Association) 2023, Little Tunny literature review.
+  [COLLIE] Collie, Wood & Jeffries 2008, Can. J. Fish. Aquat. Sci.
+           65:1352-1365 -- the GSO trawl series. Its 25 species are 96% of
+           every animal caught in the series, out of 130 recorded.
+  [GSO]    the trawl series itself, read through `gso.build_trends()`. Annual
+           means per species at Fox Island and Whale Rock, 1959-2024.
+
+Depth, added 2026-09-02, is scored for **two** of the fourteen species. The
+other twelve are not "no number was found" -- most of them are "the source
+says depth is the wrong variable", which is a stronger answer and worth
+keeping. For the original six:
 
   * **fluke** and **black_sea_bass** have a depth band. Both come from the same
     RIDEM Narragansett Bay trawl survey the temperature work already leans on,
@@ -67,6 +100,45 @@ is the wrong variable", which is a stronger answer and worth keeping:
     adults as Tolerable "NIF", Optimal "NIF" -- No Information Found -- with
     only a reported range of 0.6-46 m. The coastwide habitat compendium looked
     and came back empty; this file is not going to do better by guessing.
+
+None of the eight added below earns one either, and the reasons are worth
+having in one place because four of them are findings rather than gaps:
+
+  * **winter_flounder**: [EFH-WF Table 1] gives adults "Most 1-30 m inshore".
+    That is 3-98 ft, which is nearly every cell in the bay. Envelope, not band
+    -- the same call as scup.
+  * **squid**: the closest thing to a band anywhere in this file's second
+    cohort, and refused anyway. [EFH-SQ] reports Narragansett Bay recruits at
+    3-37 m, "in spring and summer at 3-37 m with most at 30-34 m". A 98-112 ft
+    mode in THIS bay, from the same RIDEM survey as fluke -- but three things
+    are wrong with it. The document never says the mode is effort-controlled,
+    where the fluke statement explicitly is. The mode sits at the extreme deep
+    end of its own stated range, which is what an effort artifact looks like.
+    And the same document records that squid "make diurnal vertical migrations
+    up into the water column at night" -- so a daytime bottom trawl cannot see
+    the fishery, which in this bay is a night fishery under lights in twenty
+    feet of water off the Jamestown and Newport docks. Gear that cannot reach
+    the fish cannot describe where they are.
+  * **dogfish**: [EFH-DOG Table 4] gives three regional envelopes -- eastern
+    Long Island Sound 25-40 m, Scotian Shelf 36-364 m, New Zealand 100-300 m
+    -- and none of them is about this bay. The same document has them "near
+    the bottom in daylight" and rising 125 m off it at night [after Sameoto et
+    al. 1994], so even the depth they were caught at is a time of day.
+  * **weakfish**: a finding, like tautog's. [FGOM] says few descend deeper
+    than 5-6 fathoms in summer "but the precise level at which they are to be
+    caught at any given locality is governed by their food at the time", and
+    [ASMFC-SCI ch.7] says flatly that "specific habitat use or habitat
+    preference in adult weakfish has not been reported" and that they are
+    "pelagic, open water foragers". Depth is downstream of the bait.
+  * **atlantic_mackerel**: [EFH-MACK] has fall adults "spread from 10-340 m"
+    in the NEFSC bottom trawl. That is a shelf-wide envelope measured with a
+    bottom trawl on a fish that is not on the bottom -- the [EFH-BLU] failure
+    exactly, and the reason gso.py has no striped bass in it.
+  * **striped_searobin**: [SEAROBIN] describes an inshore-to-mid-shelf range
+    south of Cape Hatteras. Nothing about this bay at any depth.
+  * **bonito** and **false_albacore**: surface pelagics. The most specific
+    statement found is [ASGA-LT]: "Adult Little Tunny remain within the waters
+    of the continental shelf". That is a range, not a depth.
 
 A band also has to *discriminate* to be worth its weight. Measured over the
 40x40 lattice heat.py scores across the bay (878 water cells, median 24 ft):
@@ -91,6 +163,13 @@ from dataclasses import dataclass
 
 
 # ------------------------------------------------------------- response curves
+
+# Past this the current prediction is not about this water. stations.FAR_NM
+# is 3.0 and is what `resolve` already uses to call a binding poor; the same
+# number decides it here so the interface and the scorer agree about when a
+# reading has stopped being one.
+_FAR_BINDING_NM = 3.0
+
 
 def _clip(v, default: float = 0.0) -> float:
     """A signal into 0..1. Missing is 0, not a middling 0.5: nobody reporting
@@ -447,12 +526,33 @@ def score(species: str, feat: dict, exposed: bool = False,
                                else max((w for k, w in p.bottom.items()
                                          if k in b), default=0.15))
 
-    # SOLUNAR IS NOT HERE, AND THAT IS DELIBERATE. It peaks at lunar transit,
-    # lunar transit drives the tide and the tide drives the current, so solunar
-    # agreeing with `current` is one witness heard twice rather than two.
-    # `evaluate.solunar_baseline` scores it as the rival theory; folding it in
-    # would inflate confidence and destroy the only question worth asking,
-    # which is whether the moon beats the water.
+    # Where the current prediction came from decides two things at once, and
+    # they are the same decision seen from both ends.
+    #
+    # The scorer weights `current` more heavily than anything else and applied
+    # that weight identically whether the station was 1.5 nm away or 64. At
+    # the shelf edge the nearest in-bay station IS 64 nm off; a tidal
+    # prediction carried that far is not a reading of this water, and scoring
+    # it as one is how a forecast gets confident about places it knows nothing
+    # about.
+    #
+    # And solunar was excluded because it is collinear with current -- it
+    # peaks at lunar transit, transit drives the tide, the tide drives the
+    # current, so the two agreeing is one witness heard twice. That argument
+    # holds exactly where current is real, and dissolves where it is not. With
+    # no usable current there is no second hearing of the same witness, and
+    # solunar becomes an ordinary contested signal computed from lunar
+    # geometry at THIS coordinate rather than a duplicate of a number
+    # imported from sixty miles away.
+    #
+    # So: past FAR_NM the current term is dropped rather than discounted --
+    # it is not a weak reading, it is not a reading -- and solunar is admitted
+    # in its place for any profile that weights it.
+    nm = feat.get("current_nm")
+    far = nm is not None and nm > _FAR_BINDING_NM
+    if far:
+        available.pop("current", None)
+        available["solunar"] = _clip(feat.get("solunar"))
 
     terms = {k: v for k, v in available.items() if k in p.weights}
 

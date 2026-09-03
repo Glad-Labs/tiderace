@@ -997,14 +997,43 @@ class Solunar(unittest.TestCase):
         current speed counts the moon twice and calls it corroboration."""
         src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "tiderace", "score.py")).read()
-        # Mechanism, not vocabulary. The comment explaining why solunar is
-        # excluded names it, so a word search matches the paragraph that
-        # promises the opposite of what it looks for -- eighth time today.
-        code = strip_py_comments(src)
-        self.assertNotIn('feat.get("solunar")', code,
-                         "the scorer must not read solunar")
-        self.assertNotIn('"solunar"', code.split("PROFILES")[1].split("def _season")[0],
-                         "no profile may weight solunar")
+        # The rule is sharper than "never". Solunar is excluded because it is
+        # COLLINEAR with current -- it peaks at lunar transit, transit drives
+        # the tide, the tide drives the current -- and that argument holds
+        # exactly where current is a real reading. Past FAR_NM the current
+        # term is dropped, there is no second hearing of the same witness, and
+        # solunar is admitted in its place. So the invariant is that the two
+        # are never scored together.
+        from tiderace import score
+        base = {"month": 9, "week": 36, "water_temp_f": 68.0,
+                "light_phase": "day", "wind_kt": 8.0, "pressure_trend_3h": -0.5,
+                "spring_strength": 0.5, "current_speed": 1.4, "solunar": 0.9}
+        prof = score.PROFILES["striped_bass"]
+        prof.weights["solunar"] = 0.1
+        try:
+            near = score.score("striped_bass", dict(base, current_nm=1.2))
+            far = score.score("striped_bass", dict(base, current_nm=64.0))
+        finally:
+            del prof.weights["solunar"]
+        self.assertIn("current", near["terms"])
+        self.assertNotIn("solunar", near["terms"],
+                         "solunar scored alongside current is the moon counted twice")
+        self.assertNotIn("current", far["terms"],
+                         "a current carried 64 nm is not a reading of this water")
+        self.assertIn("solunar", far["terms"],
+                      "with no usable current, solunar is no longer a duplicate")
+
+    def test_solunar_stays_out_of_its_own_evaluation(self):
+        """evaluate scores solunar as the rival theory. A species that
+        weights solunar cannot then be graded against it -- that is marking
+        your own homework -- so evaluate must exclude those."""
+        import pathlib
+        ev = strip_py_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "evaluate.py").read_text())
+        self.assertIn("solunar_baseline", ev)
+        self.assertIn("weights", ev,
+                      "evaluate must check whether the species weights solunar "
+                      "before comparing it to the solunar baseline")
         self.assertIn("solunar", open(os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "tiderace", "evaluate.py")).read())
@@ -4258,6 +4287,18 @@ class TermsAreConfigurablePerSpecies(unittest.TestCase):
         out = score.score("fluke", self._feat(bottom="sand", depth_ft=45.0))
         self.assertNotIn("bottom", out["terms"],
                          "no profile cites a substrate yet, so nothing scores it")
+
+    def test_the_station_distance_reaches_the_features(self):
+        """The scorer drops `current` past FAR_NM, but only if it is told how
+        far. Without this the distance never leaves features, `far` is always
+        false, and a prediction carried 64 nm scores as a reading -- the
+        mutation removing the field passed until this existed."""
+        import inspect
+        from tiderace import features
+        src = strip_py_comments(inspect.getsource(features.build))
+        self.assertIn('"current_nm"', src,
+                      "features must publish how far the current came from")
+        self.assertIn("distance_nm", src)
 
     def test_the_charted_seabed_actually_reaches_the_features(self):
         """805 ENC samples in the bay, median 460 m apart. Absent stays

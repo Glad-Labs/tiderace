@@ -41,6 +41,20 @@ def baseline(feat: dict) -> float:
     return round(moving * 0.5 * 100 + light * 0.5 * 100, 1)
 
 
+def scores_solunar(species: str) -> bool:
+    """Does this species' profile weight solunar as a term?
+
+    Only true where the current binding is too far to be a reading, which is
+    the one case the scorer admits it -- see score.score. It matters here
+    because a species that scores solunar cannot honestly be graded against
+    the solunar baseline: that is marking your own homework, and it would show
+    the model beating the moon by containing it.
+    """
+    from .score import PROFILES
+    p = PROFILES.get(species)
+    return bool(p and "solunar" in p.weights)
+
+
 def solunar_baseline(feat: dict) -> float:
     """The rival theory, scored on its own terms.
 

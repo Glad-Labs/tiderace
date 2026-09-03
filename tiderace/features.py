@@ -70,6 +70,23 @@ def build(spot: Spot, start: datetime, hours: int = 48,
     pad_start = start - timedelta(days=1)
     pad_end = end + timedelta(days=1)
 
+    # How far the current prediction was carried to get here. The scorer
+    # weights current at 0.24-0.31 -- the heaviest term there is -- and until
+    # now it applied that weight identically whether the station was 1.5 nm
+    # away or 64. At the shelf edge the nearest in-bay station is 64 nm off,
+    # and a tidal prediction carried that far is not a reading of this water.
+    _cur_nm = None
+    try:
+        from . import stations as _st
+        _cat = _st.catalog()
+        for _row in _cat.get("current", []):
+            if _row.get("id") == spot.current_station:
+                _cur_nm = round(_st.distance_nm(spot.lat, spot.lon,
+                                                _row["lat"], _row["lon"]), 2)
+                break
+    except Exception:                                             # noqa: BLE001
+        _cur_nm = None
+
     cur_events = sources.current_events(spot.current_station, pad_start, pad_end)
     tides = sources.tide_extremes(spot.tide_station, pad_start, pad_end)
     temp_series = sources.water_temp(spot.thermometer, start - timedelta(days=2), end)
@@ -186,6 +203,7 @@ def build(spot: Spot, start: datetime, hours: int = 48,
             # substrate preference -- none do yet. The association is
             # researchable (fluke on sand, tautog on rock are among the
             # best-established in the literature) but it is not invented here.
+            "current_nm": _cur_nm,
             "bottom": (_bottom or {}).get("bottom"),
             "bottom_nm": (_bottom or {}).get("distance_nm"),
         })
