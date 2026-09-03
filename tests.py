@@ -4404,6 +4404,37 @@ class DaylightAndEveryFish(unittest.TestCase):
         self.css = self.js.split("<style>")[1].split("</style>")[0]
 
     # ---- the picker ----
+    def test_the_bar_does_not_clip_the_menu_that_hangs_off_it(self):
+        """#layers is a fixed-position child of #bar with an ~800px box.
+        `overflow-y:hidden` on the bar -- added to stop it wrapping to three
+        rows -- cut it to the bar's own 58px, so the menu was painted into
+        nothing and markers showed through where it should have been."""
+        rule = self.css.split("#bar{ left:calc(12px / var(--ui")[1].split("}")[0]
+        self.assertNotIn("overflow", rule,
+                         "overflow on #bar clips the chart menu")
+        self.assertIn("flex-wrap:nowrap", rule, "it must still stay one row")
+
+    def test_the_secondary_controls_stow_into_the_menu_on_touch(self):
+        """The bar was 957px of controls in a 314px window: only the brand
+        fitted. Making it scroll stopped the clipping and hid nine controls
+        instead, which is worse -- a clipped control is at least visible."""
+        js = strip_comments(self.page)
+        self.assertIn("function stowControls()", js)
+        for id_ in ("marks-wrap", "labels-wrap", "themebtn", "desklink",
+                    "offlinebtn"):
+            self.assertIn("'" + id_ + "'", js, "%s must be stowable" % id_)
+        # Moved, not rebuilt -- loadCharts rewrites the menu list and would
+        # destroy anything it owns, taking the handlers with it.
+        self.assertIn("layerchrome", js)
+        self.assertIn("$('#layerlist')", js,
+                      "loadCharts must own only the list, not the whole menu")
+        self.assertIn("appendChild", js.split("function stowControls()")[1][:900])
+
+    def test_the_species_picker_can_shrink(self):
+        """It sizes to its widest option -- "Fluke (Summer Flounder)" -- which
+        took 242px of a 314px bar and pushed the chart menu and scan off."""
+        self.assertIn("min-width:0", self.css.split("#bar > #species{")[1].split("}")[0])
+
     def test_the_map_contains_its_own_marker_z_indexes(self):
         """paint() gives every marker a z-index from its score, 0-100, and
         with #map at `auto` those competed in the ROOT stacking context --
@@ -4601,7 +4632,10 @@ class DaylightAndEveryFish(unittest.TestCase):
         i = self.css.index("#bar{ left:calc(12px / var(--ui")
         rule = self.css[i:self.css.index("}", i)]
         self.assertIn("flex-wrap:nowrap", rule)
-        self.assertIn("overflow-x:auto", rule)
+        # It used to scroll. It does not need to any more, and must not: the
+        # overflow that made it scroll also clipped the chart menu hanging off
+        # it. The controls that did not fit live in that menu now.
+        self.assertNotIn("overflow", rule)
 
     # ---- daylight ----
     def test_a_daylight_palette_exists_and_is_not_an_inversion(self):

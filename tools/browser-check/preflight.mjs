@@ -251,6 +251,74 @@ async function run(url) {
 
     ok(`phone/${scheme}: no uncaught page errors`, errs.length === 0, errs[0] || '');
 
+    // Every control has to be reachable without scrolling. The bar wrapped to
+    // three rows and got sliced by the sheet; making it one scrolling row
+    // fixed the slicing and hid nine controls off the right edge instead --
+    // 957px of content in a 314px window, with only the brand visible. They
+    // live in the chart menu now, and both halves are checked: nothing spills
+    // out of the bar, and what was moved is actually in the menu.
+    const controls = await p.evaluate(async () => {
+      // Pin --ui. It is innerWidth / min(screen.width, screen.height), and
+      // Playwright does not emulate `screen`, so the same Pixel 7 profile
+      // reported 1.24 in one run and 2.29 in another -- the bar's CSS width is
+      // divided by that, so the measurement swung by 140px for reasons that
+      // have nothing to do with the layout. On a real phone the ratio is
+      // honest; the Desktop-site case it exists for is measured separately
+      // below at a real 980px viewport.
+      document.documentElement.style.setProperty('--ui', '1');
+      await new Promise(r => setTimeout(r, 200));
+      const bar = document.getElementById('bar');
+      const br = bar.getBoundingClientRect();
+      const spill = [...bar.children].filter(c => {
+        const r = c.getBoundingClientRect();
+        return r.width > 0 && (r.right > br.right + 1 || r.left < br.left - 1);
+      }).map(c => c.id || c.className);
+      // Get the sheet out of the way first. It is z-index 40 and the menu is
+      // 6 inside a bar at 5, so with the sheet up the hit test at the menu's
+      // location correctly returns the SHEET -- which says nothing about
+      // whether a marker beats the menu, the thing actually under test.
+      if (typeof setSheet === 'function') setSheet('shut');
+      await new Promise(r => setTimeout(r, 400));
+      document.getElementById('layersbtn').click();
+      await new Promise(r => setTimeout(r, 500));
+      const stowed = ['marks-wrap', 'labels-wrap', 'themebtn', 'desklink', 'offlinebtn']
+        .filter(id => document.getElementById(id)?.closest('#layerchrome'));
+      // And the menu must not be clipped by the bar it hangs off: overflow on
+      // #bar cut an 800px menu down to the bar's own 58px, painting it into
+      // nothing and letting markers show through where it should have been.
+      const menu = document.getElementById('layers').getBoundingClientRect();
+      const one = Object.values(MARKERS)[0];
+      let menuWins = null;
+      if (one) {
+        one.el.style.zIndex = '99';
+        map.setCenter(one._lngLat);
+        await new Promise(r => setTimeout(r, 400));
+        const c = map.getCanvas();
+        map.panBy([c.clientWidth / 2 - (menu.left + menu.width / 2),
+                   c.clientHeight / 2 - (menu.top + 60)], { duration: 0 });
+        await new Promise(r => setTimeout(r, 800));
+        const bx = one.el.getBoundingClientRect();
+        const hit = document.elementFromPoint(Math.round(bx.left + bx.width / 2),
+                                              Math.round(bx.top + bx.height / 2));
+        menuWins = !!(hit && hit.closest('#layers'));
+      }
+      document.getElementById('layersbtn').click();
+      return { spill, stowed: stowed.length, menuWins,
+               barW: Math.round(bar.scrollWidth),
+               barH: Math.round(bar.getBoundingClientRect().height),
+               kids: [...bar.children].map(c => c.id || c.className),
+               menuOpen: document.getElementById('layers').classList.contains('open'),
+               fits: bar.scrollWidth <= bar.clientWidth + 1 };
+    });
+    ok(`phone/${scheme}: no control spills out of the bar`,
+       controls.spill.length === 0 && controls.fits,
+       `${controls.barW}px in ${controls.barH}px tall, spilling: ` +
+       `${controls.spill.join(', ') || 'none'}`);
+    ok(`phone/${scheme}: stowed controls are in the chart menu`,
+       controls.stowed === 5, `${controls.stowed} of 5`);
+    ok(`phone/${scheme}: the chart menu outranks a marker`,
+       controls.menuWins === true, String(controls.menuWins));
+
     // Whether the season is open, on the screen actually in his hand. This
     // lived only in the desktop sidebar for several commits.
     const legal = await p.evaluate(() => {
@@ -331,6 +399,41 @@ async function run(url) {
     ok(`phone/${scheme}: text meets AA (4.5:1)`, worst.ratio >= 4.5,
        `worst ${worst.sel} at ${worst.ratio}:1`);
 
+    await ctx.close();
+  }
+
+  // ---------- the Desktop-site case, which is the one --ui exists for ----
+  {
+    const ctx = await browser.newContext({
+      viewport: { width: 980, height: 1985 }, deviceScaleFactor: 2,
+      isMobile: true, hasTouch: true,
+      userAgent: devices['Pixel 7'].userAgent,
+    });
+    const p = await ctx.newPage();
+    await p.goto(url, { waitUntil: 'domcontentloaded' });
+    await ready(p);
+    await p.waitForTimeout(2500);
+    const r = await p.evaluate(() => {
+      const bar = document.getElementById('bar');
+      const ui = getComputedStyle(document.documentElement)
+        .getPropertyValue('--ui').trim();
+      return { ui, scrollW: bar.scrollWidth, clientW: bar.clientWidth,
+               h: Math.round(bar.getBoundingClientRect().height),
+               warns: /Desktop site/.test(
+                 (document.getElementById('diag') || {}).textContent || '') };
+    });
+    // Chrome's "Desktop site" reports a 980px viewport on a touch screen and
+    // the page compensates by scaling. The bar's content has to fit the
+    // divided width, and the app has to say what it noticed.
+    ok('desktop-site 980px: the bar still fits',
+       r.scrollW <= r.clientW + 1, `${r.scrollW} in ${r.clientW}, ui=${r.ui}`);
+    // The compensation itself cannot be exercised here. --ui is
+    // innerWidth / min(screen.width, screen.height) and Playwright reports the
+    // HOST's screen, so a 980px emulated viewport comes back with ui=1 and no
+    // warning. Asserting the warning would be asserting something this
+    // environment cannot produce -- exactly the kind of check that gets
+    // disabled later. What is checked is the part that does hold: at the width
+    // Chrome reports with Desktop site on, the bar's content still fits.
     await ctx.close();
   }
 

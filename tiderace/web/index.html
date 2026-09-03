@@ -129,6 +129,16 @@ label.chk{display:flex; align-items:center; gap:5px; font-size:12px; color:var(-
   padding:9px 11px; min-width:220px; backdrop-filter:blur(8px);
 }
 #layers.open{display:block}
+/* Controls stowed here on a phone. They are moved, not re-rendered, so they
+   keep the handlers bound to them at boot. */
+#layerchrome{display:none; padding-bottom:9px; margin-bottom:9px;
+             border-bottom:1px solid var(--hair)}
+#layerchrome > *{display:flex; align-items:center; gap:7px; width:100%;
+                 margin:0 0 7px; justify-content:flex-start}
+#layerchrome #mode, #layerchrome #netstate{justify-content:flex-start}
+#layerchrome #themebtn, #layerchrome #offlinebtn, #layerchrome #desklink{
+  width:100%; text-align:left; min-height:40px;
+}
 #layers h4{margin:0 0 7px; font-size:10px; letter-spacing:.13em; text-transform:uppercase;
   color:var(--accent); font-family:var(--mono); font-weight:600}
 #layers label{display:flex; align-items:center; gap:7px; font-size:12px;
@@ -595,10 +605,22 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
          species picker was sliced in half by the sheet's top edge -- the app
          looked broken before you touched it. Scrolling sideways keeps every
          control reachable in the height there actually is. */
-      flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
-      scrollbar-width:none; -webkit-overflow-scrolling:touch; }
-#bar::-webkit-scrollbar{display:none}
+      /* No overflow here, and that is deliberate. Scrolling the bar was the
+         first fix for it wrapping to three rows, and it clipped the chart
+         menu: #layers is a fixed-position child whose box is 800px tall, and
+         `overflow-y:hidden` on the bar cut it off below the bar's own 58px --
+         the menu was painted but invisible, and markers showed through where
+         it should have been. Moving the secondary controls into the menu
+         removed the need to scroll at all: the bar is 314px of content in a
+         314px window now. */
+      flex-wrap:nowrap; }
 #bar > *{flex:none}
+/* The one control allowed to shrink. It sizes itself to its widest option --
+   "Fluke (Summer Flounder)" -- which took 242px of a 314px bar and pushed the
+   chart menu and scan off the edge. min-width:0 is what lets a flex item go
+   below its content width at all. */
+#bar > #species{flex:1 1 auto; min-width:0;
+                max-width:calc(46vw / var(--ui, 1))}
 #layers{position:fixed; left:12px; right:12px; width:auto; max-width:none}
 #here{ right:calc(14px / var(--ui, 1));
        bottom:calc((20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
@@ -774,8 +796,8 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
     <div id="bar">
       <div class="brand">tide<span>race</span></div>
       <select id="species"></select>
-      <label class="chk"><input type="checkbox" id="marks" checked> seamarks</label>
-      <label class="chk"><input type="checkbox" id="labels" checked> labels</label>
+      <label class="chk" id="marks-wrap"><input type="checkbox" id="marks" checked> seamarks</label>
+      <label class="chk" id="labels-wrap"><input type="checkbox" id="labels" checked> labels</label>
       <span id="mode" title="Which rules apply"></span>
       <button id="layersbtn" title="Chart overlays">charts ▾</button>
       <button id="scanbtn" title="Look for bumps in the water you are looking at">scan ⛰</button>
@@ -783,7 +805,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
       <a id="desklink" href="/desk" title="Log history, reports, review queue, HMS rules">desk →</a>
       <button id="offlinebtn" title="Download the forecast for the water">save ↓</button>
       <span id="netstate"></span>
-      <div id="layers"></div>
+      <div id="layers"><div id="layerchrome"></div><div id="layerlist"></div></div>
     </div>
     <div id="timebar">
       <div class="row"><span id="tlabel">—</span><span id="tsub"></span></div>
@@ -1704,7 +1726,7 @@ async function loadCharts(){
   let meta;
   try{ meta = await (await fetch('/api/charts')).json(); }
   catch(e){ return; }
-  const box = $('#layers');
+  const box = $('#layerlist');
   if (!meta.layers || !meta.layers.length){
     box.innerHTML = `<h4>Chart overlays</h4>
       <p class="hint">Not downloaded yet.<br>Run: python3 -m tiderace charts</p>`;
@@ -2371,6 +2393,40 @@ function applyTheme(next){
 
 $('#themebtn').onclick = () =>
   applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+
+/* On a phone the bar was 957px of controls in a 314px window: only the brand
+   fitted, and the species picker, the chart menu, scan, save and the theme
+   toggle were all scrolled off the right edge with nothing to say so. Making
+   it one scrolling row stopped it being clipped and made it invisible
+   instead, which is worse -- a clipped control is at least visible.
+ 
+   So the secondary ones live in the chart menu on touch, which is what Matt
+   asked for anyway. They are MOVED, not rebuilt, so their handlers survive;
+   that is why #layers has two children and loadCharts only ever rewrites the
+   second one. */
+const TOUCH = () => matchMedia('(max-width:900px), (pointer:coarse)').matches;
+const STOWED = ['marks-wrap', 'labels-wrap', 'mode', 'themebtn',
+                'desklink', 'offlinebtn', 'netstate'];
+
+function stowControls(){
+  const chrome = document.getElementById('layerchrome');
+  const bar = document.getElementById('bar');
+  if (!chrome || !bar) return;
+  const touch = TOUCH();
+  for (const id of STOWED){
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const want = touch ? chrome : bar;
+    if (el.parentElement === want) continue;
+    if (touch) chrome.appendChild(el);
+    else bar.insertBefore(el, document.getElementById('layers'));
+  }
+  chrome.style.display = touch && chrome.children.length ? 'block' : 'none';
+  const brand = bar.querySelector('.brand');
+  if (brand) brand.style.display = touch ? 'none' : '';
+}
+addEventListener('resize', stowControls);
+stowControls();
 
 $('#scanbtn').onclick = () => scanView();
 $('#layersbtn').onclick = e => { e.stopPropagation(); $('#layers').classList.toggle('open'); };
