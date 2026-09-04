@@ -2156,6 +2156,86 @@ class AmendingTheLog(unittest.TestCase):
         self.assertIn("catchlog.amend(args.logged_at", cli)
 
 
+class PelagicBands(unittest.TestCase):
+    """tiderace/pelagic.py holds the offshore bands and their sources, and no
+    score. Every number has to trace to a document, the same rule as
+    score.PROFILES inshore, and the two species stay refused by the bay
+    scorer until an offshore scorer exists."""
+
+    @staticmethod
+    def _cited(text):
+        """Every source key inside square brackets: '[SAFMC2003 p. 96,
+        GIBBS1959]' cites two. The first cut read only the first."""
+        out = set()
+        for inner in re.findall(r"\[([^\]]+)\]", text):
+            out |= set(re.findall(r"\b([A-Z][A-Z0-9]+)\b", inner))
+        return out
+
+    def test_every_claim_cites_a_listed_source(self):
+        from tiderace import pelagic
+        for key, p in pelagic.PROFILES.items():
+            for field in ("sst_claim", "season_claim", "features_claim",
+                          "fish_depth_note"):
+                cited = self._cited(getattr(p, field))
+                self.assertTrue(cited, f"{key}.{field} cites nothing")
+                for c in cited:
+                    self.assertIn(c, pelagic.SOURCES, f"{key}.{field} cites unknown {c}")
+                    self.assertIn(c, p.sources, f"{key}.{field} cites {c} not in its sources")
+            # And the other way round: a source listed on the profile has to
+            # be doing work in a claim, or dropping a citation goes unnoticed.
+            used = set()
+            for field in ("sst_claim", "season_claim", "features_claim",
+                          "fish_depth_note"):
+                used |= self._cited(getattr(p, field))
+            for c in p.sources:
+                self.assertIn(c, pelagic.SOURCES)
+                self.assertIn(c, used, f"{key} lists {c} and never cites it")
+        for k, v in pelagic.SOURCES.items():
+            self.assertRegex(v, r"(19|20)\d\d|20\d\d", k + " has no year")
+
+    def test_the_bands_are_the_cited_celsius_converted_once(self):
+        """The Fahrenheit is derived, never typed: change a Celsius figure in
+        the source and the band moves with it."""
+        from tiderace import pelagic
+        f = pelagic.f
+        self.assertEqual(pelagic.PROFILES["bluefin"].sst, (f(4), f(15), f(20), f(26)))
+        self.assertEqual(pelagic.PROFILES["bluefin"].sst, (39, 59, 68, 79))
+        self.assertEqual(pelagic.PROFILES["mahi"].sst, (f(20), f(26), f(28), f(29.4)))
+        self.assertEqual(pelagic.PROFILES["mahi"].sst, (68, 79, 82, 85))
+        for key, p in pelagic.PROFILES.items():
+            a, b, c, d = p.sst
+            self.assertTrue(a < b <= c < d, f"{key} band is not a trapezoid")
+            for m in p.peak_months:
+                self.assertIn(m, p.months, f"{key} peaks in a month it is absent")
+        # The 20 C isotherm is the mahi floor and the tank tolerance is not.
+        self.assertEqual(pelagic.PROFILES["mahi"].sst[0], 68)
+        self.assertIn("tolerance in a tank", pelagic.PROFILES["mahi"].sst_claim)
+
+    def test_the_season_is_the_fetched_record_histogram(self):
+        """OBIS within 60 nm of 40.9 N 71.3 W on 3 September 2026. Pinned so a
+        refetch that disagrees is noticed rather than silently re-read."""
+        from tiderace import pelagic
+        self.assertIn("259 of 423 records in August",
+                      pelagic.PROFILES["bluefin"].season_claim)
+        self.assertEqual(pelagic.PROFILES["bluefin"].months, (6, 7, 8, 9, 10, 11))
+        self.assertIn("154 records in August and 102 in September",
+                      pelagic.PROFILES["mahi"].season_claim)
+        self.assertEqual(pelagic.PROFILES["mahi"].peak_months, (8, 9))
+
+    def test_nothing_scores_yet(self):
+        """Bands first, shown and agreed; weights and a scorer after. Until
+        then the bay scorer's refusal stands and the picker says 'no forecast'."""
+        import pathlib
+        from tiderace import pelagic, score
+        for key in pelagic.PROFILES:
+            self.assertNotIn(key, score.PROFILES)
+            self.assertIn(key, score.NOT_PROFILED)
+        src = strip_py_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "pelagic.py").read_text())
+        for word in ("weights", "def score"):
+            self.assertNotIn(word, src, "pelagic.py must not score until agreed")
+
+
 class DepthLayer(unittest.TestCase):
     def setUp(self):
         from tiderace import charts
