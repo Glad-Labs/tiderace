@@ -1281,7 +1281,7 @@ function renderRank(){
   }).join('') || (GRID.modelled === false
     ? `<p class="empty">No forecast for ${tesc(GRID.species_name || 'this fish')}. ` +
       `The water below is real — current, tide, wind, light — but nothing here ` +
-      `ranks spots for it, because no profile has been researched. Conditions ` +
+      `ranks positions for it, because no profile has been researched. Conditions ` +
       `and logging still work.</p>`
     : '<p class="empty">No spots scored at this time.</p>');
   $('#rank').querySelectorAll('button').forEach(b => b.onclick = () => select(b.dataset.k));
@@ -1301,8 +1301,10 @@ function sparkline(scores){
 
 function renderDetail(){
   if (!SEL){ $('#detail').innerHTML =
-    `<p class="ph">Spot</p><p class="empty">Pick a spot on the map or in the list to see its
-     conditions, its 48-hour curve, and to log a trip there.<br><br>
+    `<p class="ph">Spot</p><p class="empty">The positions on the map are prospected from the
+     charted soundings for this fish — structure, gated for its depth — and ranked by the
+     water at the slider time. Pick one to see its conditions, its 48-hour curve, and to
+     log a trip there.<br><br>
      Tap anywhere on the water for a report at that exact coordinate.</p>`; $('#logbox').innerHTML=''; return; }
   const sp = GRID.spots.find(s => s.key === SEL);
   if (!sp) return;
@@ -1311,7 +1313,7 @@ function renderDetail(){
     <p class="ph">Spot</p>
     <div class="card">
       <h3>${sp.label}</h3>
-      <div class="sub">${sp.kind}${sp.private ? ' · your mark' + (sp.key && !sp.key.startsWith('at:') ? ' ' + tesc(sp.key) : '') : ''}${sp.best_stage?' · best on '+sp.best_stage:''}</div>
+      <div class="sub">${sp.private ? 'your mark' + (sp.key && !sp.key.startsWith('at:') ? ' ' + tesc(sp.key) : '') : 'prospected ' + sp.kind}${sp.depth_ft != null ? ' · charted ' + Math.round(sp.depth_ft) + ' ft' : ''}${sp.best_stage?' · best on '+sp.best_stage:''}</div>
       <div class="big" style="color:${colour(s)};margin-top:10px">${s!=null?s.toFixed(1):'—'}</div>
       ${sp.scores.length ? sparkline(sp.scores) : ''}
       <dl class="kv">
@@ -2744,8 +2746,8 @@ async function saveForOffline() {
 
     // The conditions sheet is what you actually open on the water, and
     // /api/survey is per-coordinate so it cannot be cached exhaustively. But
-    // the places you fish are a short known list, and your own marks are
-    // already in GRID.spots beside the curated ones. Anywhere else still says
+    // the positions the forecast ranks are a short list, and your own marks
+    // are already in GRID.spots beside the prospected ones. Anywhere else still says
     // "nothing saved for this" offshore, which is honest: a real gap beats a
     // silently stale answer about the wrong piece of water.
     const seen = new Set();

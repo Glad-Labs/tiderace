@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
@@ -165,11 +166,15 @@ def record(entry: Entry, path: str = LOG_PATH) -> Entry:
     # A trip logged against a known spot still gets its coordinate written
     # down. Spot keys can be renamed or retired; 41.4408,-71.4228 cannot.
     if entry.lat is None or entry.lon is None:
-        try:
-            known = spots.get(entry.spot)
-            entry.lat, entry.lon = known.lat, known.lon
-        except KeyError:
-            pass
+        m = re.match(r"^at:(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$", entry.spot or "")
+        if m:
+            entry.lat, entry.lon = float(m.group(1)), float(m.group(2))
+        else:
+            try:
+                known = spots.get(entry.spot)
+                entry.lat, entry.lon = known.lat, known.lon
+            except KeyError:
+                pass
 
     if not entry.conditions:
         try:

@@ -1038,13 +1038,14 @@ NOT_PROFILED: dict[str, str] = {
         "Georges Bank animal; nothing describes a Narragansett Bay fishery."),
     # The offshore fourteen, refused together and for one structural reason
     # rather than for want of literature. Spelled out at the end of the module
-    # docstring: every spot in spots.SPOTS is inside the bay and every term
+    # docstring: every prospected position is inside the bay and every term
     # here that carries signal is built on bay tidal current.
-    **{k: ("Wrong scorer, not missing research. Every entry in spots.SPOTS is "
-           "inside Narragansett Bay (41.36-41.72 N) and this model's load-"
+    **{k: ("Wrong scorer, not missing research. Every position the forecast "
+           "scores is prospected inside prospect.CANDIDATE_BBOX -- the bay and "
+           "the south shore, north of 41.30 N -- and this model's load-"
            "bearing terms are bay tidal current -- a CO-OPS current-station "
            "prediction, plus tide-stage and spring-tide modifiers. A profile "
-           "here would score this fish at Whale Rock off an ebb rip forty "
+           "here would score this fish on an inshore ebb rip forty "
            "miles from the nearest one. Offshore needs its own scorer keyed "
            "on SST break gradient, chlorophyll and canyon structure; "
            "prospect.py already fetches all three.")

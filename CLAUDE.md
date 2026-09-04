@@ -165,20 +165,28 @@ A test asserts `species.py` carries no size/season/bag numbers. **A search
 result is not a source.** Regulations work belongs in the sibling `fishreg`
 repo, which plays amendment streams forward to compute current state.
 
-### A spot is a coordinate, not a name
+### There is no list of spots
 
-Since 3 September 2026 the nineteen built-in positions carry no name. The
-`Spot` dataclass has no `name` field, a public position's key is its
-coordinate (`spots.coord_key`, the same scheme as a tapped point), and every
-ranking, listing, card and map label reports `41.4408, -71.4228`. Matt asked
-for it: what you need on the boat is somewhere to steer to. A test asserts the
-landmark names are absent from `spots.py`, comments included, so do not
-reintroduce one as a note. The one name left in the system is the handle you
-give a private mark at `--save`, because the catch log links it by that.
+Since 3 September 2026 the app holds no curated positions. Matt: "the goal is
+for the system to come up with a list of coordinates that would be the best
+spots to try based on species and conditions." `prospect.candidates_for`
+does that: a bathymetric position index over the charted soundings finds
+structure bay-wide (radius 400 m, because that is the measured sounding
+spacing -- at 200 m the neighbour floor leaves only rocks awash), gates it
+for the fish (fishable depth, the published depth band, below the bridges
+for bonito and albies), binds each candidate to its stations, and the grid
+scores them over 48 hours. `spots.py` keeps the Spot type, the coordinate
+parser, `at_coord`, and your marks. A test asserts no Spot literal returns
+at module level and that the landmark names stay out of the file.
 
-What this cost, so nobody rediscovers it: a landmark named in a voice or text
+Two things this means for future work: a new species needs no spot listing,
+only its profile (and a depth band if one is published); and the nineteen
+hand-verified station bindings live on in `tests.py` as a table, since the
+resolver still has to reproduce them.
+
+What it cost, so nobody rediscovers it: a landmark named in a voice or text
 report no longer resolves to a coordinate (`extract._match_spot` matches only
-your own marks now); the sighting is kept with its place text and reviewed.
+your own marks); the sighting is kept with its place text and reviewed.
 
 ### Provenance is not decoration
 

@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import bait as baitmod
-from . import birds, charts, config as cfgmod, features, heat, point, regs, score, spots
+from . import birds, charts, config as cfgmod, features, heat, point, prospect, regs, score, spots
 from . import species as speciesmod
 from . import evaluate, prospect, structure
 from . import log as catchlog
@@ -54,12 +54,15 @@ def build_grid(species: str, start: datetime, hours: int = 48,
     # light, wind) and simply has no score, rather than the picker refusing to
     # show the fish at all.
     #
-    # `for_species` filters spots by which fish they are listed for, so it
-    # returns nothing for an unscored one; those get every spot. And
-    # `features.build` is passed species=None, which is what skips the bait,
-    # bird and thermal-season work that only means something with a profile.
+    # The positions are the system's, not a list: prospect.candidates_for
+    # finds structure in the charted soundings and gates it for the species
+    # (fishable depth, the published depth band where one exists, and the
+    # bridges for the two fall-run fish), then appends your marks. An unscored
+    # fish gets the ungated structure plus the marks, and `features.build`
+    # is passed species=None, which is what skips the bait, bird and
+    # thermal-season work that only means something with a profile.
     modelled = species in score.PROFILES
-    targets = list(spots.for_species(species)) if modelled else list(spots.SPOTS)
+    targets = prospect.candidates_for(species if modelled else None)
     feat_species = species if modelled else None
     # One eBird query for the whole set rather than one per spot.
     birds.prime([(s.lat, s.lon) for s in targets])
@@ -76,7 +79,13 @@ def build_grid(species: str, start: datetime, hours: int = 48,
             })
             continue
 
-        results = ([score.score(species, r, exposed=r["exposed"],
+        # Depth is the one term read per position rather than per station,
+        # and only where the profile carries a published band; a mark has no
+        # charted depth and scores without it, as before.
+        banded = modelled and score.PROFILES[species].depth and spot.depth_ft is not None
+        results = ([score.score(species,
+                                dict(r, depth_ft=spot.depth_ft) if banded else r,
+                                exposed=r["exposed"],
                                 prior=spot.prior(species),
                                 best_stage=spot.best_stage) for r in rows]
                    if modelled else [])
@@ -91,6 +100,7 @@ def build_grid(species: str, start: datetime, hours: int = 48,
             "private": spot.private,
             "kind": spot.kind, "notes": spot.notes, "best_stage": spot.best_stage,
             "prior": spot.prior(species) if modelled else None,
+            "depth_ft": spot.depth_ft,
             "bottom": charts.bottom_at(spot.lat, spot.lon),
             # Empty, not zero. A spot with no score is not a bad spot.
             "scores": [r["score"] for r in results] if modelled else [None] * len(rows),
@@ -333,7 +343,7 @@ class Handler(BaseHTTPRequestHandler):
                                 for sp in sorted(
                                     speciesmod.loggable(),
                                     key=lambda x: (not x.scored, x.name))],
-                    "spot_count": len(spots.SPOTS),
+                    "mark_count": len(spots.SPOTS),
                     # AGPL s13: users interacting over a network must be
                     # offered the corresponding source.
                     "source_url": __import__("tiderace").SOURCE_URL,
@@ -1156,7 +1166,7 @@ def serve(host: str = "127.0.0.1", port: int = 8765) -> int:
         print("  ! reach this machine — the whole wifi, if this is 0.0.0.0 — can read")
         print("  ! your catch log and your private marks.")
         print("  ! Prefer: tiderace serve --tailscale\n")
-    print(f"  {len(spots.SPOTS)} spots · {len(score.PROFILES)} species · ctrl-c to stop\n")
+    print(f"  {len(spots.SPOTS)} marks · {len(score.PROFILES)} species · ctrl-c to stop\n")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

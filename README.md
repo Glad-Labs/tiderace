@@ -200,15 +200,29 @@ is ripping past Whale Rock. Current does. There are 38 current-prediction
 stations inside the bay and the generic national fishing apps use none of
 them — they key everything off a single tide-height curve.
 
-## Any coordinate is a spot — and a spot is only a coordinate
+## There is no list of spots
 
-The nineteen built-in positions were landmarks with names until 3 September
-2026. They are positions now: the rankings, the spots tab, the map labels and
-the CLI report `41.4408, -71.4228` and nothing else, and a built-in position
-keys the same way as a point you tap (`at:41.44080,-71.42280`). What you need
-on the boat is somewhere to steer to, not a name off a chart. The marks that
-matter are the ones you found, and they are not on anybody's list. So any
-point on the water gets the same report:
+Until 3 September 2026 the app ranked nineteen named landmarks. Matt: that is
+not the goal. The goal is for the system to come up with the coordinates
+itself, for a species and the conditions. So the list is gone, and
+`prospect.candidates_for` finds the positions: a bathymetric position index
+over the 15,000 charted soundings in the bay finds the ledges and humps that
+stand up out of the bottom around them, each candidate is gated for the fish
+(fishable depth, the species' published depth band where one exists, and
+below the bridges for bonito and albies), bound to its own current, tide and
+temperature stations, and scored over 48 hours like any other position. The
+ranked list and the map are those candidates, ordered by the water at the
+slider time, plus your own marks after them. Every candidate says what it was
+computed from and how far apart the soundings were, because relief computed
+from soundings 400 m apart is a different claim from a drift-scale bump.
+
+```bash
+tiderace spots --species fluke      # the positions it will rank, and why
+```
+
+What you need on the boat is somewhere to steer to. The marks that matter
+are still the ones you found, and any point on the water gets the same
+report:
 
 ```bash
 tiderace at 41.4408,-71.4228
@@ -551,9 +565,9 @@ tide, current and weather.
   gitignored — they are the irreplaceable part and should never be pushed by
   accident.
 - **Your own marks go in `data/my_spots.json`** (see `my_spots.example.json`).
-  The nineteen built-in positions are public water on every chart; your marks
-  are not, and `spots.public_only()` is the only set anything shareable should
-  ever be built from. A mark's `key` is the handle you gave `--save` and the
+  The prospected positions are computed from public soundings and give
+  nothing away; your marks are the only positions in the system that are a
+  person's choice. A mark's `key` is the handle you gave `--save` and the
   thing the catch log links it by; a `name` in the file is ignored.
 - Weather lookups are the one place a coordinate leaves the machine, so they
   are rounded to ~1 km first. NWS grid cells are ~2.5 km, so nothing is lost

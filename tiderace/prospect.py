@@ -303,3 +303,137 @@ def best(bbox, species: str = "striped_bass", n: int = 61,
         % (len(out["best"]), "" if len(out["best"]) == 1 else "s",
            (out.get("area") or {}).get("score")))
     return out
+
+
+# ---- the positions the forecast ranks -----------------------------------
+#
+# Matt, 3 September 2026: "the goal is for the system to come up with a list
+# of coordinates that would be the best spots to try based on species and
+# conditions." Not a curated list with the names filed off -- no list.
+#
+# So the candidates come from the bottom. `structure.candidates` runs the
+# bathymetric position index over the charted soundings -- 15,352 of them in
+# the box, real measurements, not the model -- and returns the places that
+# stand up out of the water around them. That is the whole bay in a tenth of
+# a second, and it is honest in the way this module's header demands:
+# structure is the only input that distinguishes one coordinate from its
+# neighbour, so structure is what picks the candidates. The water then ranks
+# them, because the candidates bind to several different current stations
+# between them and the water really does differ from one to the next.
+#
+# The radius is 400 m, not the module's 200 m default, and that is measured:
+# charted soundings in this box are about 400 m apart, so at 200 m most of
+# them have fewer than three neighbours, the neighbour floor removes all but
+# the densely sounded hazards, and the whole bay yields 29 "bumps" every one
+# of which is a rock awash. At 400 m: 620 bumps, 167 in fishable water, 63
+# deeper than 30 ft. What that buys is coarser: a candidate here is a ledge
+# or a hump a few hundred metres across, not the fifty-metre feature the
+# 60 m viewport scan can see, and every candidate says how far apart the
+# soundings it was computed from are.
+#
+# What is gated, and why each gate is defensible:
+#
+#   depth >= 8 ft       a boat has to sit over it. The shallowest "bumps" the
+#                       index finds are rocks awash -- 27 ft of relief with a
+#                       top at 0.3 ft -- and a chart exists to keep you off
+#                       those, which is exactly why they are so well sounded.
+#   published band      fluke and black sea bass carry a cited depth band
+#                       (score.PROFILES). A bump outside it is not a candidate
+#                       for THAT fish. Twelve species have no band and get no
+#                       depth gate, which is a recorded finding, not a gap.
+#   NORTH_LIMIT         bonito and false albacore are a mouth-and-ocean fish
+#                       and are effectively never caught above the bridges.
+#                       This is the one piece of local knowledge kept from the
+#                       old list, because letting it go would put albies seven
+#                       miles up a bay they do not enter. Angling knowledge,
+#                       not measurement, and said so.
+#   CANDIDATE_BBOX      the bay and the south shore, north of 41.30. Block
+#                       Island Sound has structure too, but every profile the
+#                       scorer has is built on bay tidal current, and the
+#                       offshore refusal in score.NOT_PROFILED rests on this
+#                       box staying inside that water.
+#
+# Your own marks are appended, always. They are the one set of positions that
+# is still a person's choice, because they are yours.
+
+CANDIDATE_BBOX = (41.30, -71.95, 41.88, -71.10)     # south, west, north, east
+MIN_FISHABLE_FT = 8.0
+MIN_RELIEF_FT = 3.0
+CANDIDATE_RADIUS_M = 400.0      # sounding spacing in this box; see above
+CANDIDATE_NEIGHBOURS = 6
+CANDIDATE_CLUSTER_M = 400.0     # one candidate per feature, not per sounding
+CANDIDATE_LIMIT = 30
+NORTH_LIMIT = {"bonito": 41.50, "false_albacore": 41.50}
+
+_structure_cache: dict = {}
+_candidate_cache: dict = {}
+
+
+def bay_structure(limit: int = 120) -> list[dict]:
+    """Every fishable bump in the box, most relief first. Cached: the
+    soundings do not change between calls."""
+    if limit in _structure_cache:
+        return _structure_cache[limit]
+    found = structure.candidates(bbox=CANDIDATE_BBOX, radius_m=CANDIDATE_RADIUS_M,
+                                 min_relief_ft=MIN_RELIEF_FT,
+                                 min_neighbours=CANDIDATE_NEIGHBOURS,
+                                 cluster_m=CANDIDATE_CLUSTER_M, limit=limit * 4)
+    found = [b for b in found if (b.get("depth_ft") or 0) >= MIN_FISHABLE_FT]
+    structure.annotate(found)
+    found = found[:limit]
+    _structure_cache[limit] = found
+    return found
+
+
+def _describe(b: dict) -> str:
+    bits = ["stands %.0f ft above the bottom within %d m (top %.0f ft, around %.0f ft)"
+            % (b["relief_ft"], CANDIDATE_RADIUS_M, b["depth_ft"], b["surround_ft"])]
+    if b.get("drop_ft"):
+        bits.append("falls away %.0f ft on its deep side" % b["drop_ft"])
+    if b.get("novel"):
+        bits.append("no charted rock, wreck or obstruction within 100 m")
+    elif b.get("charted_hazard_m") is not None:
+        bits.append("%.0f m from a charted hazard" % b["charted_hazard_m"])
+    bits.append("from %d soundings about %.0f m apart" % (b.get("neighbours", 0),
+                                                          b.get("spacing_m") or 0))
+    return ". ".join(bits) + "."
+
+
+def candidates_for(species: str | None, limit: int = CANDIDATE_LIMIT,
+                   marks: bool = True) -> list:
+    """The positions to score for this fish: prospected structure, gated as
+    above, each bound to its own stations, plus your marks.
+
+    `species` None means no profile -- conditions only -- and gets the
+    ungated structure. A candidate whose stations cannot be resolved is
+    skipped rather than scored against a guess.
+    """
+    key = (species, limit)
+    if key in _candidate_cache:
+        out = list(_candidate_cache[key])
+    else:
+        bumps = bay_structure()
+        prof = score.PROFILES.get(species) if species else None
+        cap = NORTH_LIMIT.get(species)
+        if cap is not None:
+            bumps = [b for b in bumps if b["lat"] <= cap]
+        if prof is not None and prof.depth:
+            inband = [b for b in bumps
+                      if score.trapezoid(b["depth_ft"], *prof.depth) > 0]
+            # Inside the published band or nothing: a fluke candidate at 9 ft
+            # would be the scorer contradicting the paper it cites.
+            bumps = inband
+        bumps = bumps[:limit]
+        out = []
+        for b in bumps:
+            try:
+                spot, _ = spots.at_coord(b["lat"], b["lon"], kind="structure",
+                                         notes=_describe(b), depth_ft=b["depth_ft"],
+                                         private=False)
+            except (ValueError, KeyError):
+                continue
+            out.append(spot)
+        _candidate_cache[key] = list(out)
+    if marks:
+        out.extend(spots.SPOTS)
+    return out

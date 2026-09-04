@@ -73,7 +73,7 @@ async function walk(url) {
   // --- species: scored, scored-but-unruled, and unscored ----------------
   for (const [sp, want] of [['striped_bass', 'scored+ruled'],
                             ['weakfish', 'scored, no rule'],
-                            ['bonito', 'scored, curated spots'],
+                            ['bonito', 'scored, kept below the bridges'],
                             ['bluefin', 'not scored']]) {
     await page.selectOption('#species', sp).catch(() => {});
     await page.waitForTimeout(8000);

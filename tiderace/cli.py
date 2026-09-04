@@ -31,7 +31,9 @@ def _add_forecast_args(ap):
     ap.add_argument("--species", default="striped_bass",
                     choices=sorted(score.PROFILES), help="target species")
     ap.add_argument("--spot", action="append",
-                    help="spot key (repeatable). default: all spots for the species")
+                    help="one of your marks, by key (repeatable). default: the "
+                         "positions the system prospects for the species, plus "
+                         "your marks")
     ap.add_argument("--hours", type=int, default=48, help="forecast horizon")
     ap.add_argument("--start", help="YYYY-MM-DD[THH:MM] (default: now)")
     ap.add_argument("--top", type=int, default=8, help="windows to show")
@@ -54,7 +56,11 @@ def run(argv=None) -> int:
     fc = sub.add_parser("forecast", help="rank upcoming windows (default)")
     _add_forecast_args(fc)
 
-    sub.add_parser("spots", help="list the positions the forecast scores")
+    sp_ = sub.add_parser("spots", help="the positions the forecast will rank for a "
+                                      "species: prospected from the charted "
+                                      "soundings, not a list")
+    sp_.add_argument("--species", default="striped_bass",
+                     choices=sorted(score.PROFILES))
 
     at = sub.add_parser("at", help="conditions and windows for one coordinate")
     at.add_argument("coord", help="41.4408,-71.4228 · '41 26.448 N 71 25.368 W'")
@@ -68,7 +74,7 @@ def run(argv=None) -> int:
                     help="show how a coordinate resolves, and what was rejected")
 
     lg = sub.add_parser("log", help="record a trip, snapshotting conditions")
-    lg.add_argument("--spot", help="spot key, or a name if you pass --coord")
+    lg.add_argument("--spot", help="one of your marks, by key; or use --coord")
     lg.add_argument("--coord", help="log against a coordinate instead of a spot key")
     lg.add_argument("--species", required=True, choices=sorted(score.PROFILES))
     lg.add_argument("--count", type=int, required=True,
@@ -233,7 +239,7 @@ def run(argv=None) -> int:
     args = ap.parse_args(argv)
 
     if args.cmd == "spots":
-        return _cmd_spots()
+        return _cmd_spots(args)
     if args.cmd == "amend":
         return _cmd_amend(args)
     if args.cmd == "at":
@@ -316,17 +322,23 @@ def _cmd_amend(args) -> int:
     return 0
 
 
-def _cmd_spots() -> int:
-    # Positions, not names. The KEY column is what `--spot` takes; for the
-    # public positions it is the coordinate, and for your own marks it is the
-    # handle you gave `--save`, which is why it is printed at all.
+def _cmd_spots(args) -> int:
+    """The positions the forecast will rank for this fish. Prospected, not
+    listed: structure from the charted soundings, gated for the species, and
+    your own marks after them. The KEY column is what `--spot` takes and is
+    printed for marks only, because a mark's handle is a name you chose."""
+    from . import prospect
+    species = getattr(args, "species", None) or "striped_bass"
     print()
-    print(f"  {'POSITION':<22}{'KEY':<26}{'TYPE':<12}{'STAGE':<7}SPECIES")
-    print("  " + "─" * 92)
-    for s in spots.SPOTS:
+    print(f"  positions for {score.PROFILES[species].name} — prospected from the "
+          f"charted soundings, not a list")
+    print(f"  {'POSITION':<22}{'DEPTH':<8}{'KIND':<11}{'KEY':<24}NOTE")
+    print("  " + "─" * 100)
+    for s in prospect.candidates_for(species):
         key = s.key if s.private and not s.key.startswith("at:") else ""
-        print(f"  {s.label:<22}{key:<26}{s.kind:<12}"
-              f"{(s.best_stage or '—'):<7}{', '.join(s.species)}")
+        depth = f"{s.depth_ft:.0f} ft" if s.depth_ft is not None else "—"
+        note = s.notes.split(". ")[0] if s.notes else ""
+        print(f"  {s.label:<22}{depth:<8}{s.kind:<11}{key:<24}{note}")
     print()
     return 0
 
@@ -1331,13 +1343,15 @@ def _cmd_bait(args) -> int:
           f"{args.spot or f'{lat:.4f},{lon:.4f}'} ({when:%Y-%m-%d %H:%M})")
 
     # Which spots does this sighting actually move, and for which target?
+    # Which of your marks does this sighting actually move, and for which
+    # target? Marks only: the prospected positions carry no species listing.
     moved = []
     for sp in spots.SPOTS:
         best = max(
             ((baitmod.bait_at(sp.lat, sp.lon, when, t)["signal"], t) for t in sp.species),
             key=lambda x: abs(x[0]), default=(0.0, None))
         if abs(best[0]) > 0.05:
-            moved.append((sp.name, best[1], best[0]))
+            moved.append((sp.label, best[1], best[0]))
     moved.sort(key=lambda x: -abs(x[2]))
 
     if moved:
@@ -1366,15 +1380,16 @@ def _cmd_history() -> int:
 
 def _cmd_forecast(args) -> int:
     if getattr(args, "list_spots", False):
-        return _cmd_spots()
+        return _cmd_spots(args)
 
     start = (datetime.fromisoformat(args.start) if args.start
              else datetime.now().replace(minute=0, second=0, microsecond=0))
 
+    from . import prospect
     targets = ([spots.get(k) for k in args.spot] if args.spot
-               else spots.for_species(args.species))
+               else prospect.candidates_for(args.species))
     if not targets:
-        print(f"no spots carry {args.species}", file=sys.stderr)
+        print(f"no positions to score for {args.species}", file=sys.stderr)
         return 1
 
     profile = score.PROFILES[args.species]
@@ -1435,7 +1450,7 @@ def _cmd_forecast(args) -> int:
         # whether you may keep one -- but it does not go out unlabelled.
         print(f"  [RULES NOT MODELLED]  {speciesmod.unregulated_warning(args.species)}")
     print(f"  {start:%a %d %b %H:%M} → {start + timedelta(hours=args.hours):%a %d %b %H:%M}"
-          f"   ({len(targets)} spots)")
+          f"   ({len(targets)} positions)")
     print("  " + "─" * 74)
 
     if reg.get("known") and not reg["open"]:

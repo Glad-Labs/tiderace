@@ -175,61 +175,28 @@ class Regulations(unittest.TestCase):
         self.assertIn('slot 28–31"', regs.summary_line("striped_bass"))
 
 
-class Spots(unittest.TestCase):
-    def test_every_spot_species_is_modelled(self):
-        for s in spots.SPOTS:
-            for sp in s.species:
-                self.assertIn(sp, score.PROFILES, f"{s.key} lists unmodelled {sp}")
+class Marks(unittest.TestCase):
+    """spots.py holds your marks and the Spot type. The curated list of
+    nineteen landmarks it used to hold is gone (3 September 2026): the
+    positions the forecast ranks are prospected by prospect.candidates_for,
+    and these tests pin that the list stays gone."""
 
-    def test_priors_bounded_and_keys_unique(self):
-        self.assertEqual(len(spots.BY_KEY), len(spots.SPOTS), "duplicate spot key")
-        for s in spots.SPOTS:
-            for sp, v in s.quality.items():
-                self.assertTrue(0.0 <= v <= 1.0, f"{s.key}/{sp} prior out of range")
-                self.assertIn(sp, s.species, f"{s.key} rates {sp} it does not list")
-
-    def test_thermometers_are_in_the_same_water_as_the_spot(self):
-        # Nearest-by-distance is the WRONG test here. Wickford and Quonset are
-        # marginally closer to Newport, but they are shallow west-side spots
-        # that warm with the upper bay, so Conimicut is the better proxy.
-        # What matters is that the gauge sits in the same arm, because the arms
-        # do not mix freely. Mount Hope Bay is its own arm: Conimicut is around
-        # the corner in the Providence River and reads about a degree cooler.
-        ARM = {
-            "8452660": "east_passage_mouth",
-            "8452944": "upper_bay",
-            "8447386": "mount_hope",
-            "8454000": "providence_river",
-        }
-        EXPECTED = {spots.coord_key(41.6400, -71.2583): "mount_hope"}
-        for s in spots.SPOTS:
-            want = EXPECTED.get(s.key)
-            if want:
-                self.assertEqual(
-                    ARM.get(s.thermometer), want,
-                    f"{s.key} reads a gauge in another arm of the bay")
-
-    def test_temp_station_override_is_a_real_gauge(self):
-        KNOWN = {"8452660", "8452944", "8447386", "8454000"}
-        for s in spots.SPOTS:
-            if s.temp_station:
-                self.assertIn(s.temp_station, KNOWN,
-                              f"{s.key} overrides to unknown gauge {s.temp_station}")
-
-    def test_a_spot_has_no_name(self):
-        """3 September 2026: the named landmarks went. A spot is a coordinate,
-        its key is that coordinate, and every ranking reports the position.
-        The dataclass carrying a `name` field again is the thing to catch."""
-        self.assertNotIn("name", spots.Spot.__dataclass_fields__)
-        for s in spots.public_only():
-            self.assertEqual(s.key, spots.coord_key(s.lat, s.lon), s.key)
-            self.assertEqual(s.label, f"{s.lat:.4f}, {s.lon:.4f}")
-        self.assertEqual(len(spots.public_only()), 19)
+    def test_the_curated_list_is_gone(self):
+        import pathlib
+        src = (pathlib.Path(__file__).parent / "tiderace" / "spots.py").read_text()
+        code = strip_py_comments(src)
+        self.assertIn("SPOTS: list[Spot] = load_private()", code,
+                      "everything in SPOTS must come from my_spots.json")
+        self.assertEqual(code.count("\n    Spot("), 0,
+                         "a Spot literal at module level is the list coming back")
+        for name in ("for_species", "curated_for", "public_only", "NEWPORT"):
+            self.assertNotIn(name, code, name + " belonged to the curated list")
+        self.assertTrue(all(sp.private for sp in spots.SPOTS),
+                        "a non-private Spot in SPOTS is a curated one")
 
     def test_the_landmark_names_are_gone_from_the_code(self):
-        """Not just off the dataclass: out of spots.py altogether, comments
-        included, so nothing can quietly put them back as a `notes` field or
-        a lookup table."""
+        """Comments included, so nothing can quietly put them back as a
+        `notes` field or a lookup table."""
         import pathlib
         src = (pathlib.Path(__file__).parent / "tiderace" / "spots.py").read_text()
         for name in ("Whale Rock", "Beavertail", "Castle Hill", "Brenton",
@@ -240,16 +207,24 @@ class Spots(unittest.TestCase):
                      "whale_rock", "mount_hope", "pt_judith"):
             self.assertNotIn(name, src, name)
 
-    def test_a_typed_coordinate_and_a_curated_one_share_a_key_scheme(self):
-        """The same water is the same key however you reached it: the curated
-        position, a mark saved without a handle, and a tap on the map."""
-        s = spots.public_only()[0]
-        self.assertEqual(s.key, f"at:{s.lat:.5f},{s.lon:.5f}")
-        mine = spots.Spot(s.lat, s.lon, s.current_station, s.tide_station,
-                          "mark", private=True)
-        self.assertEqual(mine.key, s.key)
-        handled = spots.Spot(s.lat, s.lon, s.current_station, s.tide_station,
-                             "mark", private=True, key="my_ledge")
+    def test_a_spot_has_no_name(self):
+        self.assertNotIn("name", spots.Spot.__dataclass_fields__)
+        s = spots.Spot(41.4408, -71.4228, "ACT2201", "8452660", "structure")
+        self.assertEqual(s.key, spots.coord_key(41.4408, -71.4228))
+        self.assertEqual(s.label, "41.4408, -71.4228")
+        self.assertEqual(s.thermometer, s.tide_station,
+                         "no override means the tide station's thermometer")
+
+    def test_a_typed_coordinate_and_a_prospected_one_share_a_key_scheme(self):
+        """The same water is the same key however you reached it: a
+        prospected candidate, a mark saved without a handle, and a tap on the
+        map."""
+        c = spots.Spot(41.4408, -71.4228, "ACT2201", "8452660", "structure")
+        self.assertEqual(c.key, "at:41.44080,-71.42280")
+        mine = spots.Spot(41.4408, -71.4228, "ACT2201", "8452660", "mark", private=True)
+        self.assertEqual(mine.key, c.key)
+        handled = spots.Spot(41.4408, -71.4228, "ACT2201", "8452660", "mark",
+                             private=True, key="my_ledge")
         self.assertEqual(handled.key, "my_ledge")
 
     def test_a_private_marks_file_name_is_ignored(self):
@@ -269,6 +244,7 @@ class Spots(unittest.TestCase):
         self.assertTrue(got[0].private)
         self.assertEqual(got[0].label, "41.5123, -71.3456")
         self.assertFalse(hasattr(got[0], "name"))
+        self.assertIsNone(got[0].depth_ft, "a mark carries no charted depth")
 
     def test_the_grid_and_the_page_report_positions_not_names(self):
         """The server sends `label` (the position) and never a name; the
@@ -281,9 +257,6 @@ class Spots(unittest.TestCase):
                          "both the scored and the errored entry carry the position")
         self.assertNotIn("spot.name", grid)
         self.assertNotIn('"name"', grid)
-        # The point report too: `tiderace at` printed rep['name'] and crashed
-        # with a KeyError the first time it ran after the rename, because the
-        # only test of that path needs NOAA. So the source is the test.
         pt = strip_py_comments((root / "tiderace" / "point.py").read_text())
         rep_body = pt.split("def report(")[1]
         self.assertIn('"label": spot.label', rep_body)
@@ -566,7 +539,9 @@ class Extraction(unittest.TestCase):
         underscores read as spaces."""
         mine = spots.Spot(41.372, -71.639, "ACT2286", "8452660", "mark",
                           key="charlestown_breachway", private=True)
-        pool = list(spots.public_only()) + [mine]
+        bump = spots.Spot(41.4408, -71.4228, "ACT2201", "8452660", "structure",
+                          notes="stands 24 ft above the bottom within 400 m")
+        pool = [bump, mine]
         for text in ("Charlestown Breachway", "at the charlestown breachway",
                      "Charlestown"):
             got = extract._match_spot(text, candidates=pool)
@@ -1008,7 +983,8 @@ class Packaging(unittest.TestCase):
             r = subprocess.run([os.path.join(self.ROOT, "tiderace-cli"), "spots"],
                                cwd=d, capture_output=True, text=True, timeout=90)
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("41.4408, -71.4228", r.stdout)
+            self.assertIn("prospected from the charted soundings", r.stdout)
+            self.assertRegex(r.stdout, r"41\.\d{4}, -71\.\d{4}\s+\d+ ft\s+structure")
             self.assertNotIn("whale_rock", r.stdout)
             self.assertNotIn("Whale Rock", r.stdout)
 
@@ -1656,11 +1632,6 @@ class Privacy(unittest.TestCase):
         lat, lon = _coarse(41.512345, -71.345678)
         self.assertEqual((lat, lon), (41.51, -71.35))
 
-    def test_public_set_excludes_private_marks(self):
-        pub = spots.public_only()
-        self.assertTrue(all(not s.private for s in pub))
-        self.assertEqual(len(pub), len([s for s in spots.SPOTS if not s.private]))
-
 
 class Evaluation(unittest.TestCase):
     def _rows(self, n, kind):
@@ -1788,24 +1759,31 @@ class StationResolution(unittest.TestCase):
         if not charts.land_index():
             self.skipTest("land layer not cached — run: tiderace charts")
 
-    def test_reproduces_the_hand_verified_bindings(self):
-        """Nineteen spots were bound to their current stations by hand and
-        checked live against CO-OPS. The resolver has to agree with all of
-        them, or it is not trustworthy anywhere else.
+    # Nineteen positions were bound to their current stations by hand and
+    # checked live against CO-OPS, back when they were the curated list. The
+    # list is gone; the check is not. The resolver has to agree with all of
+    # them or it is not trustworthy anywhere else, and this table is the only
+    # place that knowledge still lives -- positions and station ids, no names.
+    HAND_VERIFIED = (
+        (41.4408, -71.4228, "ACT2201"), (41.4494, -71.3997, "ACT2201"),
+        (41.4622, -71.3628, "ACT2101"), (41.4256, -71.3611, "ACT2096"),
+        (41.4761, -71.3617, "ACT2106"), (41.4750, -71.3800, "ACT2111"),
+        (41.5033, -71.3317, "ACT2121"), (41.5250, -71.3367, "ACT2136"),
+        (41.5050, -71.4100, "ACT2216"), (41.5750, -71.2967, "ACT2146"),
+        (41.6400, -71.2583, "ACT2166"), (41.6467, -71.2950, "ACT2171"),
+        (41.5834, -71.3957, "nb0301"),  (41.5667, -71.4333, "ACT2226"),
+        (41.6667, -71.3933, "ACT2231"), (41.7167, -71.3433, "ACT2246"),
+        (41.5067, -71.2200, "ACT2071"), (41.3833, -71.5167, "ACT2276"),
+        (41.3580, -71.4958, "ACT2266"),
+    )
 
-        Scoped to those nineteen. `spots.SPOTS` also carries whatever is in
-        my_spots.json, and those marks were never part of the hand check -- a
-        test that silently graded the resolver against a station the user typed
-        would be measuring the wrong thing, and would break for anyone who
-        cloned this and added a mark of their own.
-        """
+    def test_reproduces_the_hand_verified_bindings(self):
+        self.assertEqual(len(self.HAND_VERIFIED), 19)
         wrong = []
-        for sp in spots.SPOTS:
-            if sp.private:
-                continue
-            got = self.stations.resolve(sp.lat, sp.lon)["current"]["id"]
-            if got != sp.current_station:
-                wrong.append(f"{sp.key}: hand={sp.current_station} got={got}")
+        for lat, lon, want in self.HAND_VERIFIED:
+            got = self.stations.resolve(lat, lon)["current"]["id"]
+            if got != want:
+                wrong.append(f"{lat},{lon}: hand={want} got={got}")
         self.assertEqual(wrong, [], "; ".join(wrong))
 
     def test_a_mark_behind_a_barrier_beach_is_flagged_not_guessed(self):
@@ -1873,15 +1851,16 @@ class AdHocSpots(unittest.TestCase):
         if not os.path.exists(stations.CATALOG_PATH):
             self.skipTest("no station catalog")
 
-    def test_a_typed_coordinate_never_joins_the_public_list(self):
-        """A coordinate you typed is a mark. Marks do not go in SPOTS, and
-        public_only() is the only set anything shareable is built from."""
+    def test_a_typed_coordinate_never_joins_your_marks(self):
+        """A coordinate you typed is not a saved mark until you save it, so
+        it does not go in SPOTS."""
         before = len(spots.SPOTS)
         spot, _ = spots.at_coord(41.4520, -71.4050)
         self.assertEqual(len(spots.SPOTS), before)
         self.assertNotIn(spot.key, spots.BY_KEY)
         self.assertTrue(spot.private)
-        self.assertNotIn(spot.key, [s.key for s in spots.public_only()])
+        self.assertEqual(spot.kind, "mark")
+        self.assertIsNone(spot.depth_ft)
 
     def test_no_local_knowledge_is_invented(self):
         spot, _ = spots.at_coord(41.4520, -71.4050)
@@ -1890,8 +1869,10 @@ class AdHocSpots(unittest.TestCase):
         self.assertEqual(spot.prior("striped_bass"), 0.6)
 
     def test_thermometer_falls_back_to_the_tide_station(self):
-        sp = spots.get(spots.coord_key(41.4408, -71.4228))
-        self.assertEqual(sp.thermometer, sp.tide_station)
+        sp, _ = spots.at_coord(41.4408, -71.4228)
+        self.assertEqual(sp.thermometer, sp.temp_station or sp.tide_station)
+        bare = spots.Spot(41.44, -71.42, "ACT2201", "8452660", "mark")
+        self.assertEqual(bare.thermometer, "8452660")
 
 
 class Windows(unittest.TestCase):
@@ -1932,13 +1913,14 @@ class CatchLogCoordinates(unittest.TestCase):
 
     def test_a_known_spot_backfills_its_coordinate(self):
         """Spot keys can be renamed or retired; 41.4408,-71.4228 cannot. A log
-        that only says a key cannot be grouped spatially later. (The public
-        keys are coordinates now, which makes this moot for them; a private
-        mark's handle is still a key that can be retired.)"""
+        that only says a key cannot be grouped spatially later. An at: key IS
+        a coordinate and is read as one -- there is no list to look it up in
+        any more -- and a mark's handle is looked up in your marks."""
         import json
         import tempfile
         from tiderace import log as catchlog
         key = spots.coord_key(41.4408, -71.4228)
+        self.assertNotIn(key, spots.BY_KEY, "an at: key must not need a lookup")
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "log.jsonl")
             e = catchlog.Entry(spot=key, species="striped_bass",
@@ -1946,9 +1928,8 @@ class CatchLogCoordinates(unittest.TestCase):
                                conditions={"current_speed": 1.0})
             catchlog.record(e, path)
             row = json.loads(open(path).read().strip())
-            sp = spots.get(key)
-            self.assertAlmostEqual(row["lat"], sp.lat)
-            self.assertAlmostEqual(row["lon"], sp.lon)
+            self.assertAlmostEqual(row["lat"], 41.4408)
+            self.assertAlmostEqual(row["lon"], -71.4228)
 
 
 class FishPhotos(unittest.TestCase):
@@ -2499,7 +2480,8 @@ class ReviewRegressions(unittest.TestCase):
         birds._get = lambda path, **kw: (calls.append(kw), real(path, **kw))[1]
         try:
             birds.forget_regions()
-            targets = list(spots.for_species("striped_bass"))
+            from tiderace import prospect
+            targets = prospect.candidates_for("striped_bass", marks=False)
             self.assertGreater(len(targets), 10)
             if not birds.prime([(s.lat, s.lon) for s in targets]):
                 self.skipTest("spots too spread out for one circle")
@@ -4334,10 +4316,13 @@ class PhotoLog(unittest.TestCase):
             for c in t["catch"]:
                 self.assertIsNone(c["count"])
 
-    def test_a_session_near_a_known_spot_inherits_it(self):
+    def test_a_session_with_a_fix_is_keyed_by_its_own_coordinate(self):
+        """There is no list to snap to any more (only your marks, and the
+        fixture has none), so the session's key is the mean fix itself."""
         d = self._draft()
-        self.assertEqual(d["trips"][0]["spot"],
-                         spots.coord_key(41.4408, -71.4228))
+        t = d["trips"][0]
+        self.assertEqual(t["spot"], spots.coord_key(t["lat"], t["lon"]))
+        self.assertAlmostEqual(t["lat"], 41.4434, places=3)
 
     def test_a_session_with_no_fix_says_so_rather_than_guessing(self):
         d = self._draft()
@@ -4954,8 +4939,8 @@ class DaylightAndEveryFish(unittest.TestCase):
             (pathlib.Path(__file__).parent / "tiderace" / "server.py").read_text())
         fn = srv.split("def build_grid(")[1].split("\ndef ")[0]
         self.assertIn("modelled = species in score.PROFILES", fn)
-        self.assertIn("spots.SPOTS", fn,
-                      "for_species returns nothing for an unscored fish")
+        self.assertIn("prospect.candidates_for(species if modelled else None)", fn,
+                      "an unscored fish gets the ungated structure, not nothing")
         self.assertIn("[None] * len(rows)", fn, "empty, not zero")
         self.assertIn("feat_species", fn,
                       "features.build takes species=None for the unscored path")
@@ -6976,15 +6961,17 @@ class RefusalsAreRecorded(unittest.TestCase):
                          "the offshore refusal is one structural fact, so it "
                          "should read as one sentence, not fourteen")
         reason = reasons.pop()
-        self.assertIn("spots.SPOTS", reason)
+        self.assertIn("prospect.CANDIDATE_BBOX", reason)
         self.assertIn("prospect.py", reason,
                       "the refusal has to say where the work does belong")
-        # And the premise has to still be true: every spot inside the bay.
-        lats = [s.lat for s in spots.SPOTS]
-        self.assertGreater(min(lats), 41.3)
-        self.assertLess(max(lats), 41.8,
-                        "a spot has moved outside Narragansett Bay, which is "
-                        "the premise the offshore refusal rests on")
+        # And the premise has to still be true: every prospected position is
+        # inside the box the refusal names, and the box is the bay.
+        from tiderace import prospect
+        south, west, north, east = prospect.CANDIDATE_BBOX
+        self.assertGreaterEqual(south, 41.3)
+        self.assertLessEqual(north, 41.9,
+                               "the candidate box has left Narragansett Bay, which "
+                               "is the premise the offshore refusal rests on")
         for k in offshore:
             self.assertNotIn(k, score.PROFILES)
 
@@ -7001,66 +6988,110 @@ class RefusalsAreRecorded(unittest.TestCase):
         self.assertEqual(speciesmod.resolve("a bluefin tuna"), "bluefin")
 
 
-class SpotsForNewlyScoredSpecies(unittest.TestCase):
-    """`for_species` filtered on a listing that only ever named six fish."""
+class ProspectedCandidates(unittest.TestCase):
+    """Matt, 3 September 2026: the goal is for the system to come up with the
+    coordinates itself, for a species and the conditions. So there is no list.
+    prospect.candidates_for finds structure in the charted soundings, gates it
+    for the fish, binds each position to its stations, and the grid scores
+    them. These tests pin what the gates claim."""
 
-    def test_an_uncurated_species_gets_every_spot_rather_than_none(self):
-        """Empty said "this fish is nowhere" and meant "nobody wrote down
-        where it is". Those are different, and the empty list broke both
-        callers: the CLI printed "no spots carry squid" and exited 1, and
-        build_grid took the modelled path and produced a grid with no spots in
-        it -- so a fish got worse by being researched."""
+    def setUp(self):
+        from tiderace import prospect, stations, structure
+        self.prospect = prospect
+        if not os.path.exists(structure.SOUNDINGS):
+            self.skipTest("soundings not cached — run: tiderace charts")
+        if not os.path.exists(stations.CATALOG_PATH):
+            self.skipTest("no station catalog — run: tiderace stations --refresh")
+
+    def test_every_forecast_species_gets_positions_inside_the_box(self):
         from tiderace import score, spots
-        for key in ("squid", "weakfish", "winter_flounder",
-                    "atlantic_mackerel", "dogfish", "striped_searobin"):
-            self.assertIn(key, score.PROFILES)
-            self.assertFalse(spots.curated_for(key))
-            self.assertEqual(len(spots.for_species(key)), len(spots.SPOTS),
-                             "%s is uncurated and should fall back to every "
-                             "spot" % key)
+        south, west, north, east = self.prospect.CANDIDATE_BBOX
         for key in score.PROFILES:
-            self.assertTrue(spots.for_species(key),
-                            "%s can be forecast and has nowhere to fish it"
-                            % key)
+            cands = self.prospect.candidates_for(key, marks=False)
+            self.assertGreaterEqual(len(cands), 10, "%s has nowhere to fish" % key)
+            for c in cands:
+                self.assertTrue(south <= c.lat <= north and west <= c.lon <= east, c.key)
+                self.assertEqual(c.key, spots.coord_key(c.lat, c.lon))
+                self.assertEqual(c.kind, "structure")
+                self.assertFalse(c.private)
+                self.assertGreaterEqual(c.depth_ft, self.prospect.MIN_FISHABLE_FT)
+                self.assertIn("soundings", c.notes,
+                              "a candidate has to say what it was computed from")
+                self.assertEqual(c.quality, {}, "no invented prior on a candidate")
+                self.assertIsNone(c.best_stage)
 
-    def test_the_curated_exception_is_only_the_two_fall_run_species(self):
-        """Curation is a claim about where a fish is, at the same tier as
-        `quality`. Two species carry one because their distribution inside the
-        bay is sharply uneven; letting them fall back would put albies seven
-        miles up a bay they do not enter. A third appearing means somebody
-        started filling the rest in by feel."""
-        from tiderace import score, spots
-        curated = {k for k in score.PROFILES if spots.curated_for(k)}
-        self.assertEqual(
-            curated - {"striped_bass", "bluefish", "fluke", "black_sea_bass",
-                       "scup", "tautog"},
-            {"bonito", "false_albacore"})
-        # Ocean-facing only. The claim is that these fish do not come up the
-        # bay, so a curated spot above the bridges would contradict it.
+    def test_a_published_depth_band_is_a_gate_not_a_label_here(self):
+        """Inside the band or not a candidate for that fish. A fluke position
+        at 9 ft would be the scorer contradicting the paper it cites."""
+        from tiderace import score
+        for key, prof in score.PROFILES.items():
+            if not prof.depth:
+                continue
+            cands = self.prospect.candidates_for(key, marks=False)
+            self.assertTrue(cands, key)
+            for c in cands:
+                self.assertGreater(score.trapezoid(c.depth_ft, *prof.depth), 0,
+                                   "%s candidate at %.0f ft is outside its band"
+                                   % (key, c.depth_ft))
+        fluke = self.prospect.candidates_for("fluke", marks=False)
+        self.assertTrue(all(c.depth_ft >= 30 for c in fluke))
+        # And the gate did something: the ungated structure has shallower bumps.
+        ungated = self.prospect.candidates_for(None, marks=False)
+        self.assertTrue(any(c.depth_ft < 30 for c in ungated))
+
+    def test_the_fall_run_fish_stay_below_the_bridges(self):
+        """The one piece of local knowledge kept from the curated list: bonito
+        and false albacore are a mouth-and-ocean fish. Letting the gate go
+        would put albies seven miles up a bay they do not enter."""
         for key in ("bonito", "false_albacore"):
-            for spot in spots.for_species(key):
-                self.assertLess(
-                    spot.lat, 41.50,
-                    "%s is listed at %s (%.4f N), which is up the bay past the "
-                    "bridges — the opposite of what the listing claims"
-                    % (key, spot.key, spot.lat))
+            cap = self.prospect.NORTH_LIMIT[key]
+            self.assertLessEqual(cap, 41.50)
+            for c in self.prospect.candidates_for(key, marks=False):
+                self.assertLessEqual(c.lat, cap, "%s at %.4f N" % (key, c.lat))
+        # The cap removes something, or it is not a gate.
+        bass = self.prospect.candidates_for("striped_bass", marks=False)
+        self.assertTrue(any(c.lat > 41.50 for c in bass),
+                        "no striped bass candidate above the bridges, so the "
+                        "bonito cap is not being tested against anything")
 
-    def test_a_curated_prior_is_bounded_and_belongs_to_a_listed_species(self):
-        """The existing spot tests cover this for the file as a whole; this
-        pins it for the two species added on 2026-09-02, because a prior for a
-        fish a spot does not list is scored and then thrown away."""
+    def test_your_marks_ride_along_and_can_be_left_out(self):
         from tiderace import spots
-        for key in ("bonito", "false_albacore"):
-            listed = spots.for_species(key)
-            self.assertGreaterEqual(len(listed), 5)
-            for spot in listed:
-                self.assertIn(key, spot.quality,
-                              "%s lists %s with no prior" % (spot.key, key))
-                self.assertTrue(0.0 <= spot.quality[key] <= 1.0)
-            # Default prior for everyone else, which is the honest 0.6.
-            for spot in spots.SPOTS:
-                if key not in spot.species:
-                    self.assertEqual(spot.prior(key), 0.6, spot.key)
+        mine = spots.Spot(41.372, -71.639, "ACT2286", "8452660", "mark",
+                          key="my_ledge", private=True)
+        saved = list(spots.SPOTS)
+        spots.SPOTS[:] = [mine]
+        try:
+            with_marks = self.prospect.candidates_for("tautog")
+            self.assertIs(with_marks[-1], mine, "marks come after the prospected positions")
+            self.assertTrue(all(not c.private for c in with_marks[:-1]))
+            self.assertNotIn(mine, self.prospect.candidates_for("tautog", marks=False))
+        finally:
+            spots.SPOTS[:] = saved
+
+    def test_the_radius_is_the_sounding_spacing_and_it_matters(self):
+        """400 m, not the module default of 200 m, and measured: at 200 m the
+        neighbour floor leaves only the densely sounded hazards, every one a
+        rock awash. If the soundings ever get dense enough for 200 m to work,
+        this fails and the constant should move."""
+        from tiderace import structure
+        P = self.prospect
+        self.assertEqual(P.CANDIDATE_RADIUS_M, 400.0)
+        pts = structure.load_soundings()
+        near = structure.candidates(bbox=P.CANDIDATE_BBOX, radius_m=200.0,
+                                    min_relief_ft=P.MIN_RELIEF_FT,
+                                    min_neighbours=P.CANDIDATE_NEIGHBOURS,
+                                    limit=5000, points=pts)
+        wide = structure.candidates(bbox=P.CANDIDATE_BBOX, radius_m=P.CANDIDATE_RADIUS_M,
+                                    min_relief_ft=P.MIN_RELIEF_FT,
+                                    min_neighbours=P.CANDIDATE_NEIGHBOURS,
+                                    cluster_m=P.CANDIDATE_CLUSTER_M,
+                                    limit=5000, points=pts)
+        fishable = lambda cs: [c for c in cs if c["depth_ft"] >= P.MIN_FISHABLE_FT]
+        self.assertLess(len(fishable(near)), 40,
+                        "200 m now sees fishable structure; reconsider the radius")
+        self.assertGreater(len(fishable(wide)), 100)
+        self.assertGreater(sum(1 for c in fishable(wide) if c["depth_ft"] >= 30), 30,
+                           "deep structure is what the fluke band needs")
 
 
 class ZoomedChromeStaysOnTheGlass(unittest.TestCase):
