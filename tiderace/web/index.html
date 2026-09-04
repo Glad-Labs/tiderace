@@ -338,6 +338,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
    literal. Both are per-theme tokens now. */
 #slegal .lg.open b{color:var(--good)}
 #slegal .lg.shut{background:var(--crit-wash)}
+#slegal .lg.adv b{color:var(--ink-2)}
 #slegal .lg.shut b{color:var(--crit)}
 #slegal .lg .sz{font:700 13px/1 var(--display); color:var(--ink)}
 #slegal .lg .ln{color:var(--muted); font-size:11px}
@@ -1242,7 +1243,9 @@ function paint(){
   const d = new Date(t);
   $('#tlabel').textContent = d.toLocaleString([], {weekday:'short', hour:'2-digit', minute:'2-digit'});
   const det = GRID.spots.find(s=>s.detail.length)?.detail[TI];
-  $('#tsub').textContent = det
+  $('#tsub').textContent = GRID.offshore
+    ? `offshore · SST ${GRID.sst_date || '?'} · unvalidated`
+    : det
     ? `${det.light_phase} · moon ${det.moon_phase.toLowerCase()}` +
       (det.season_note ? ` · ${det.season_note}` : '')
     : '';
@@ -1266,6 +1269,18 @@ function paint(){
   renderRank(); renderDetail();
 }
 
+// What an offshore row is made of, in place of the current that does not
+// exist out there: the surface temperature, the nearest break, the wall.
+function offshoreLine(d, sp){
+  const bits = [];
+  if (d.sst_f != null) bits.push(d.sst_f.toFixed(0) + ' °F');
+  if (sp && sp.kind === 'front' && d.front_grad_f_nm != null) bits.push(d.front_grad_f_nm.toFixed(2) + ' °F/nm break');
+  else if (d.front_nm != null) bits.push('break ' + d.front_nm.toFixed(1) + ' nm');
+  if (sp && sp.kind === 'shelf break' && d.structure_slope != null) bits.push(Math.round(d.structure_slope) + ' m/km wall');
+  else if (d.structure_nm != null) bits.push('wall ' + Math.round(d.structure_nm) + ' nm');
+  return bits.join(' · ');
+}
+
 function renderRank(){
   const rows = GRID.spots
     .map(sp => ({sp, s: sp.scores[TI]}))
@@ -1275,7 +1290,7 @@ function renderRank(){
     const d = r.sp.detail[TI] || {};
     return `<button data-k="${r.sp.key}" class="${SEL===r.sp.key?'on':''}">
       <span class="s" style="color:${colour(r.s)}">${r.s.toFixed(0)}</span>
-      <span>${r.sp.label}<br><span class="m">${(d.current_speed??0).toFixed(2)} kt ${d.current_dir||''}</span></span>
+      <span>${r.sp.label}<br><span class="m">${GRID.offshore ? offshoreLine(d, r.sp) : `${(d.current_speed??0).toFixed(2)} kt ${d.current_dir||''}`}</span></span>
       <span class="m">${d.wind_kt!=null?d.wind_kt.toFixed(0)+' kt':''}</span>
     </button>`;
   }).join('') || (GRID.modelled === false
@@ -1313,16 +1328,22 @@ function renderDetail(){
     <p class="ph">Spot</p>
     <div class="card">
       <h3>${sp.label}</h3>
-      <div class="sub">${sp.private ? 'your mark' + (sp.key && !sp.key.startsWith('at:') ? ' ' + tesc(sp.key) : '') : 'prospected ' + sp.kind}${sp.depth_ft != null ? ' · charted ' + Math.round(sp.depth_ft) + ' ft' : ''}${sp.best_stage?' · best on '+sp.best_stage:''}</div>
+      <div class="sub">${sp.private ? 'your mark' + (sp.key && !sp.key.startsWith('at:') ? ' ' + tesc(sp.key) : '') : (GRID.offshore ? 'found ' : 'prospected ') + sp.kind}${sp.depth_ft != null ? (GRID.offshore ? ' · modelled ' : ' · charted ') + Math.round(sp.depth_ft) + ' ft' : ''}${sp.best_stage?' · best on '+sp.best_stage:''}${GRID.offshore ? ' · unvalidated' : ''}</div>
       <div class="big" style="color:${colour(s)};margin-top:10px">${s!=null?s.toFixed(1):'—'}</div>
       ${sp.scores.length ? sparkline(sp.scores) : ''}
       <dl class="kv">
+        ${GRID.offshore ? `
+        <dt>surface</dt><dd>${d.sst_f!=null?d.sst_f.toFixed(1)+' °F':'—'} <span style="color:var(--muted)">· MUR ${tesc(GRID.sst_date||'')}</span></dd>
+        <dt>break</dt><dd>${d.front_nm!=null?d.front_nm.toFixed(1)+' nm · '+(d.front_grad_f_nm!=null?d.front_grad_f_nm.toFixed(2)+' °F/nm':''):'none found'}</dd>
+        <dt>wall</dt><dd>${d.structure_nm!=null?Math.round(d.structure_nm)+' nm · '+Math.round(d.structure_slope||0)+' m/km':'none located'}</dd>
+        <dt>seas</dt><dd>${d.wave_m!=null?d.wave_m.toFixed(1)+' m':'—'} <span style="color:var(--muted)">· buoy 44097, fishability</span></dd>
+        <dt>wind</dt><dd>${d.wind_kt!=null?d.wind_kt.toFixed(0)+' kt '+(d.wind_dir||''):'—'}</dd>` : `
         <dt>current</dt><dd>${(d.current_speed??0).toFixed(2)} kt ${d.current_dir||''}</dd>
         <dt>water</dt><dd>${d.water_temp_f!=null?d.water_temp_f.toFixed(1)+' °F':'—'}</dd>
         <dt>wind</dt><dd>${d.wind_kt!=null?d.wind_kt.toFixed(0)+' kt '+(d.wind_dir||''):'—'}</dd>
         <dt>light</dt><dd>${d.light_phase||'—'}</dd>
         <dt>moon</dt><dd>${d.moon_phase||'—'} ${d.moon_illum!=null?'('+Math.round(d.moon_illum*100)+'%)':''}</dd>
-        <dt>tide</dt><dd>${d.next_tide||'—'}</dd>
+        <dt>tide</dt><dd>${d.next_tide||'—'}</dd>`}
         ${d.bait_note ? `<dt>bait</dt><dd style="color:#5FE3C0">${d.bait_note}</dd>` : ''}
         ${sp.bottom ? `<dt>bottom</dt><dd>${sp.bottom.bottom}${sp.bottom.quality?' ('+sp.bottom.quality+')':''}
            <span style="color:var(--muted)">· ${sp.bottom.distance_nm} nm</span></dd>` : ''}
@@ -2231,6 +2252,7 @@ else initTrip();
  * and drawing them buries the part that matters under a line to the ramp.
  */
 let TRIPS = [], TRIP_SHOWN = null;
+let LAST_OFFSHORE = false;
 
 // The sheet's own esc() lives inside its IIFE and is not reachable from here.
 // Duplicating four lines beats reaching into another scope, and beats the
@@ -2833,6 +2855,19 @@ async function loadGrid(){
   GRID = await (await fetch(`/api/grid?species=${sp}&hours=48`)).json();
 
   syncMarkers();
+  // Offshore positions sit 20-90 nm south of the bay view; an inshore set
+  // sits in it. When the species crosses that line the map goes with it,
+  // otherwise a tuna forecast is an empty bay and a ranked list of places
+  // off the bottom of the screen.
+  if (MAP_READY && GRID.spots.length && !!GRID.offshore !== LAST_OFFSHORE){
+    const b = new maplibregl.LngLatBounds();
+    GRID.spots.forEach(sp => b.extend([sp.lon, sp.lat]));
+    // On the phone the peek sheet keeps the bottom 210px, so the fit has to
+    // clear it or the southern half of the positions land under the sheet.
+    const bottom = window.matchMedia('(max-width:900px), (pointer:coarse)').matches ? 260 : 120;
+    map.fitBounds(b, {padding: {top: 90, bottom, left: 40, right: 40}, duration: 800, maxZoom: 11});
+  }
+  LAST_OFFSHORE = !!GRID.offshore;
 
   const t = $('#time');
   t.max = Math.max(0, GRID.times.length - 1);
@@ -2853,11 +2888,15 @@ async function loadGrid(){
       .map(d => `<br>· ${d}`).join('');
     $('#regsbox').innerHTML =
       `<p class="ph">Rules</p>
-       <div id="regs" class="${r.open ? '' : 'closed'}">
-         <b>${r.open ? 'OPEN' : 'CLOSED'}</b> — ${GRID.regulations_line}
+       <div id="regs" class="${r.open === false ? 'closed' : ''}">
+         <b>${r.open === true ? 'OPEN' : r.open === false ? 'CLOSED' : 'HMS'}</b> — ${tesc(GRID.regulations_line)}
          ${GRID.license_mode === 'commercial' && diffs
             ? `<br><span style="color:var(--muted)">differs from recreational:</span>${diffs}` : ''}
-         ${r.advisory
+         ${r.hms
+            ? `<br>${tesc(r.permit || '')}<span class="warn">Quota-driven: confirm the category
+               status on <a href="${tesc(r.source || '')}" target="_blank" rel="noopener">NOAA's HMS page ↗</a>
+               before keeping one.</span>`
+            : r.advisory
             ? `<span class="warn">Commercial limits change in-season —
                confirm on ${r.hotline} before landing fish.</span>` : ''}
        </div>`;
@@ -2886,16 +2925,22 @@ function paintLegal(){
   if (!r.known){
     // Silence here would read as "no limits". It means nobody checked.
     const sp = $('#species') && $('#species').selectedOptions[0];
+    // The server's sentence knows a federal fish from a state one; the RIDEM
+    // table is the wrong place to send anyone for a tuna.
     el.innerHTML = `<div class="lg"><b>RULES NOT MODELLED</b>` +
-      `<span>for ${q((sp && sp.textContent) || 'this species')} — check the ` +
-      `RIDEM table before keeping one.</span></div>`;
+      `<span>${GRID && GRID.rules_not_modelled
+        ? q(GRID.rules_not_modelled)
+        : 'for ' + q((sp && sp.textContent) || 'this species') + ' — check the RIDEM table before keeping one.'}</span></div>`;
     return;
   }
   // The headline is one glance: open or shut, and the size. Everything else
   // is a tap. The first cut put all of it on screen at once and took 173px --
   // 44% of the sheet -- which is the same fault the tab restructure fixed:
   // the most important thing loses by being shown alongside everything else.
-  const size = r.slot ? `slot ${q(r.slot)}`
+  // No chip for a federal fish: its line already carries the minimum and
+  // the measure it is taken with, and "min 27"" twice reads as two rules.
+  const size = r.hms ? null
+             : r.slot ? `slot ${q(r.slot)}`
              : r.min_inches ? `min ${r.min_inches}"` : null;
   const diffs = (GRID.regulations_differences || []);
   /* Rules RIDEM published that this app applied on its own, each with the
@@ -2923,19 +2968,25 @@ function paintLegal(){
     (app ? `<div class="ld dim">applied automatically from RIDEM:</div>` + app : '') +
     (GRID.license_mode === 'commercial' && diffs.length
       ? diffs.map(d => `<div class="ld">· ${q(d)}</div>`).join('') : '') +
-    (r.advisory
+    (r.hms
+      ? `<div class="ld">${q(r.permit || '')}</div>` +
+        `<div class="ld warn">Quota-driven: categories close mid-season and this app does not ` +
+        `track that. Confirm the status on <a href="${q(r.source || '')}" target="_blank" ` +
+        `rel="noopener">NOAA's HMS page ↗</a> before keeping one.</div>` +
+        (r.season ? `<div class="ld dim">${q(r.season)}</div>` : '')
+      : r.advisory
       ? `<div class="ld warn">Commercial limits change in-season — confirm on ` +
         `${q(r.hotline || '')} before landing fish.</div>` : '') +
-    (r.checked_on ? `<div class="ld dim">read from RIDEM ${q(r.checked_on)}` +
-      `${r.days_since_checked > 30 ? ' — stale, re-check' : ''}</div>` : '');
+    (r.checked_on ? `<div class="ld dim">read from ${r.hms ? 'NOAA HMS' : 'RIDEM'} ${q(r.checked_on)}` +
+      `${(r.hms ? r.stale : r.days_since_checked > 30) ? ' — stale, re-check' : ''}</div>` : '');
 
   el.innerHTML =
-    `<div class="lg ${r.open ? 'open' : 'shut'}">` +
-      `<b>${r.open ? 'OPEN' : 'CLOSED'}</b>` +
+    `<div class="lg ${r.open === true ? 'open' : r.open === false ? 'shut' : 'adv'}">` +
+      `<b>${r.open === true ? 'OPEN' : r.open === false ? 'CLOSED' : 'HMS'}</b>` +
       (size ? `<span class="sz">${size}</span>` : '') +
-      `<span class="ln">${q(r.season || GRID.regulations_line || '')}</span>` +
+      `<span class="ln">${q(r.hms ? (GRID.regulations_line || '') : (r.season || GRID.regulations_line || ''))}</span>` +
     `</div>` +
-    (detail ? `<details class="lmore"><summary>commercial detail</summary>`
+    (detail ? `<details class="lmore"><summary>${r.hms ? 'federal detail' : 'commercial detail'}</summary>`
               + detail + `</details>` : '');
 }
 window.paintLegal = paintLegal;
@@ -4000,7 +4051,8 @@ window.surveyURL = (lat, lon) =>
       `${t ? ' · ' + new Date(t).toLocaleString([], {weekday:'short', hour:'2-digit', minute:'2-digit'}) : ''}</div>` +
       rows.map(({sp, s}) => {
         const d = (sp.detail || [])[TI] || {};
-        const cur = d.current_speed != null
+        const cur = GRID.offshore ? offshoreLine(d, sp)
+          : d.current_speed != null
           ? `${d.current_speed.toFixed(2)} kt ${d.current_dir || ''}` : '';
         return `<div class="trip" data-spot="${esc(sp.key)}">
             <div class="when">${esc(sp.label)}</div>

@@ -13,7 +13,7 @@ from . import cache
 from . import bait as baitmod
 from . import birds as birdmod
 from . import config as cfgmod
-from . import features, fetch, gso, regs, score, spots
+from . import features, fetch, gso, pelagic, regs, score, spots
 from . import log as catchlog
 from . import species as speciesmod
 from .point import windows as _windows
@@ -29,7 +29,7 @@ def _bar(v: float, width: int = 20) -> str:
 
 def _add_forecast_args(ap):
     ap.add_argument("--species", default="striped_bass",
-                    choices=sorted(score.PROFILES), help="target species")
+                    choices=sorted(score.PROFILES) + sorted(pelagic.PROFILES), help="target species")
     ap.add_argument("--spot", action="append",
                     help="one of your marks, by key (repeatable). default: the "
                          "positions the system prospects for the species, plus "
@@ -60,7 +60,7 @@ def run(argv=None) -> int:
                                       "species: prospected from the charted "
                                       "soundings, not a list")
     sp_.add_argument("--species", default="striped_bass",
-                     choices=sorted(score.PROFILES))
+                     choices=sorted(score.PROFILES) + sorted(pelagic.PROFILES))
 
     at = sub.add_parser("at", help="conditions and windows for one coordinate")
     at.add_argument("coord", help="41.4408,-71.4228 · '41 26.448 N 71 25.368 W'")
@@ -76,7 +76,7 @@ def run(argv=None) -> int:
     lg = sub.add_parser("log", help="record a trip, snapshotting conditions")
     lg.add_argument("--spot", help="one of your marks, by key; or use --coord")
     lg.add_argument("--coord", help="log against a coordinate instead of a spot key")
-    lg.add_argument("--species", required=True, choices=sorted(score.PROFILES))
+    lg.add_argument("--species", required=True, choices=sorted(score.PROFILES) + sorted(pelagic.PROFILES))
     lg.add_argument("--count", type=int, required=True,
                     help="fish landed; 0 is a valid and useful entry")
     lg.add_argument("--at", help="ISO datetime the session began (default: now)")
@@ -155,7 +155,7 @@ def run(argv=None) -> int:
     rv.add_argument("--kind", choices=("regulation", "bait", "catch_report"))
 
     rg = sub.add_parser("regs", help="compare recreational and commercial rules")
-    rg.add_argument("--species", choices=sorted(score.PROFILES))
+    rg.add_argument("--species", choices=sorted(score.PROFILES) + sorted(pelagic.PROFILES))
 
     ofs = sub.add_parser("offshore",
                          help="conditions offshore — facts, not a score")
@@ -329,6 +329,19 @@ def _cmd_spots(args) -> int:
     printed for marks only, because a mark's handle is a name you chose."""
     from . import prospect
     species = getattr(args, "species", None) or "striped_bass"
+    if species in pelagic.PROFILES:
+        pos, ctx = pelagic.candidates(species)
+        print()
+        prof = pelagic.PROFILES[species]
+        what = " and ".join(w for w, on in (("temperature breaks", "front" in prof.features),
+                                            ("the shelf break", "shelf_break" in prof.features)) if on)
+        print(f"  positions for {prof.name} — {what} (SST {ctx.get('sst_date')}), not a list")
+        print(f"  {'POSITION':<22}{'KIND':<13}NOTE")
+        print("  " + "─" * 100)
+        for c in pos:
+            print(f"  {c['label']:<22}{c['kind']:<13}{c['notes']}")
+        print()
+        return 0
     print()
     print(f"  positions for {score.PROFILES[species].name} — prospected from the "
           f"charted soundings, not a list")
@@ -1378,9 +1391,45 @@ def _cmd_history() -> int:
     return 0
 
 
+def _cmd_forecast_offshore(args) -> int:
+    """The offshore scorer, printed. Flat across the horizon by construction
+    (nothing the literature gives these fish varies within a day), so this is
+    a ranked list for the day rather than windows."""
+    start = (datetime.fromisoformat(args.start) if args.start
+             else datetime.now().replace(minute=0, second=0, microsecond=0))
+    prof = pelagic.PROFILES[args.species]
+    try:
+        g = pelagic.grid(args.species, start, args.hours, 60)
+    except Exception as exc:                                      # noqa: BLE001
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+    rows = sorted(g["spots"], key=lambda r: -(r["scores"][0] or 0))
+    if args.json:
+        print(json.dumps([{"lat": r["lat"], "lon": r["lon"], "kind": r["kind"],
+                           "score": r["scores"][0], "why": r["detail"][0]["why"]}
+                          for r in rows[:args.top]], indent=2))
+        return 0
+    b = g.get("buoy") or {}
+    print()
+    print(f"  {prof.name.upper()}  —  offshore, south of Rhode Island")
+    print(f"  [UNVALIDATED]  bands cited in pelagic.py; weights are priors; no offshore trips logged")
+    print(f"  {start:%a %d %b}   SST {g.get('sst_date')} · buoy 44097 "
+          f"{b.get('wave_m') if b else '?'} m seas   ({len(rows)} positions)")
+    print("  " + "─" * 74)
+    for r in rows[:args.top]:
+        sc = r["scores"][0]
+        print(f"\n  {sc if sc is not None else 0:>5.1f}  {_bar(sc or 0)}  {r['label']}   {r['kind']}")
+        print(f"         {r['notes']}")
+        print(f"         → {r['detail'][0]['why']}")
+    print()
+    return 0
+
+
 def _cmd_forecast(args) -> int:
     if getattr(args, "list_spots", False):
         return _cmd_spots(args)
+    if args.species in pelagic.PROFILES:
+        return _cmd_forecast_offshore(args)
 
     start = (datetime.fromisoformat(args.start) if args.start
              else datetime.now().replace(minute=0, second=0, microsecond=0))

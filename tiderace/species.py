@@ -69,9 +69,11 @@ class Species:
 
     @property
     def scored(self) -> bool:
-        """Does the forecast model have an opinion about this fish?"""
+        """Does a forecast model have an opinion about this fish? Two of them
+        can: score.PROFILES inshore, pelagic.PROFILES offshore."""
         from .score import PROFILES
-        return self.key in PROFILES
+        from .pelagic import PROFILES as OFFSHORE
+        return self.key in PROFILES or self.key in OFFSHORE
 
     @property
     def regulated(self) -> bool:

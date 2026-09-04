@@ -74,7 +74,8 @@ async function walk(url) {
   for (const [sp, want] of [['striped_bass', 'scored+ruled'],
                             ['weakfish', 'scored, no rule'],
                             ['bonito', 'scored, kept below the bridges'],
-                            ['bluefin', 'not scored']]) {
+                            ['bluefin', 'offshore, unvalidated'],
+                            ['haddock', 'not scored']]) {
     await page.selectOption('#species', sp).catch(() => {});
     await page.waitForTimeout(8000);
     const g = await page.evaluate(() => ({

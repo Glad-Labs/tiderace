@@ -1047,9 +1047,10 @@ NOT_PROFILED: dict[str, str] = {
            "prediction, plus tide-stage and spring-tide modifiers. A profile "
            "here would score this fish on an inshore ebb rip forty "
            "miles from the nearest one. Offshore needs its own scorer keyed "
-           "on SST break gradient, chlorophyll and canyon structure; "
-           "prospect.py already fetches all three.")
-       for k in ("bluefin", "yellowfin", "bigeye", "albacore", "mahi",
+           "on SST break gradient and canyon structure. Four fish have that "
+           "scorer now -- bluefin, yellowfin, bigeye and mahi, in pelagic.py, "
+           "each band cited -- and this one waits on the same reading.")
+       for k in ("albacore",
                  "wahoo", "swordfish", "blue_marlin", "white_marlin",
                  "mako", "thresher", "porbeagle", "blue_shark", "haddock")},
 }

@@ -132,11 +132,24 @@ claimed:
 
 - **loggable** — all 35 species. Costs nothing, claims nothing.
 - **scored** — the 14 in `score.PROFILES`, temperature bands grounded in cited
-  literature. Adding a fifteenth means doing that research, not guessing. Six
-  until 2 September 2026, when the inshore and nearshore species got the same
-  treatment; the other 21 sit in `score.NOT_PROFILED` with a reason each, and
-  for 11 of them the reason is that somebody read the literature and the
-  answer was no. An absence and a refusal are different facts.
+  literature, plus 4 offshore in `pelagic.PROFILES` (bluefin, yellowfin,
+  bigeye, mahi) under their own scorer. Adding one means doing that research,
+  not guessing. Six until 2 September 2026, when the inshore and nearshore
+  species got the same treatment; the other 17 sit in `score.NOT_PROFILED`
+  with a reason each, and for 11 of them the reason is that somebody read the
+  literature and the answer was no. An absence and a refusal are different
+  facts.
+
+  The offshore scorer (3 September 2026) keeps two tiers of claim apart on
+  purpose: the bands in `pelagic.py` each name the document and page they
+  came from (NOAA's 2017 HMS EFH Amendment 10; SAFMC's 2003 Dolphin Wahoo
+  FMP) and the season months are OBIS records; the weights are priors no
+  document can give and every score carries `unvalidated`. Bigeye has no SST
+  band and gets none -- reported, not scored, like depth inshore. Mahi's weed
+  lines are unmeasurable and the score says so. Positions are the sharpest
+  temperature breaks in the MUR grid and the steepest bottom in the DEM grid,
+  one candidate per feature; the wall's steepness carries the structure term
+  because a candidate found on the wall is 0 nm from it by construction.
 - **regulated** — only where the rule was actually read out of a RIDEM or DMF
   notice. **Scored no longer implies regulated**, and that is deliberate: 8 of
   the 14 have no transcribed rule, because the only way to keep the old

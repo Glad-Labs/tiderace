@@ -2203,8 +2203,19 @@ class PelagicBands(unittest.TestCase):
         self.assertEqual(pelagic.PROFILES["mahi"].sst, (f(20), f(26), f(28), f(29.4)))
         self.assertEqual(pelagic.PROFILES["mahi"].sst, (68, 79, 82, 85))
         for key, p in pelagic.PROFILES.items():
+            if p.sst is None:
+                self.assertEqual(key, "bigeye", "only bigeye has no band, and says why")
+                self.assertIn("REPORTED", p.sst_claim)
+                continue
             a, b, c, d = p.sst
-            self.assertTrue(a < b <= c < d, f"{key} band is not a trapezoid")
+            self.assertTrue(a <= b <= c <= d and a < d, f"{key} band is not a trapezoid")
+        # yellowfin is a step, on purpose: the source gives a range and no
+        # preference inside it.
+        y = pelagic.PROFILES["yellowfin"].sst
+        self.assertEqual((y[0], y[3]), (64, 88))
+        self.assertEqual(y[0], y[1]); self.assertEqual(y[2], y[3])
+        self.assertIn("A step, not a trapezoid", pelagic.PROFILES["yellowfin"].sst_claim)
+        for key, p in pelagic.PROFILES.items():
             for m in p.peak_months:
                 self.assertIn(m, p.months, f"{key} peaks in a month it is absent")
         # The 20 C isotherm is the mahi floor and the tank tolerance is not.
@@ -2222,18 +2233,272 @@ class PelagicBands(unittest.TestCase):
                       pelagic.PROFILES["mahi"].season_claim)
         self.assertEqual(pelagic.PROFILES["mahi"].peak_months, (8, 9))
 
-    def test_nothing_scores_yet(self):
-        """Bands first, shown and agreed; weights and a scorer after. Until
-        then the bay scorer's refusal stands and the picker says 'no forecast'."""
+    def test_the_weights_are_stated_priors_and_every_score_says_so(self):
+        """The bands trace to documents; the weights cannot, and every score
+        carries the flag the interface prints."""
+        from tiderace import pelagic
+        for key, w in pelagic.WEIGHTS.items():
+            self.assertIn(key, pelagic.PROFILES)
+            self.assertAlmostEqual(sum(w.values()), 1.0, places=6, msg=key)
+            prof = pelagic.PROFILES[key]
+            # A term only where the literature gives the fish a reason for it.
+            self.assertEqual("front" in w, "front" in prof.features, key)
+            self.assertEqual("structure" in w, "shelf_break" in prof.features, key)
+            self.assertEqual("sst" in w, prof.sst is not None, key)
+        res = pelagic.score("bluefin", {"sst_f": 63, "front_nm": 1, "front_grad_c_nm": 0.3,
+                                        "structure_nm": 2, "structure_slope": 150,
+                                        "month": 8, "wave_m": 0.5})
+        self.assertTrue(res["unvalidated"])
+        self.assertIn("Unvalidated", pelagic.explain(res, {"sst_f": 63, "front_nm": 1,
+                                                          "front_grad_c_nm": 0.3,
+                                                          "structure_nm": 2,
+                                                          "structure_slope": 150,
+                                                          "month": 8, "wave_m": 0.5}))
+
+
+class PelagicScorer(unittest.TestCase):
+    """The offshore scorer, on synthetic inputs so nothing here needs the
+    ocean. What it pins: which term each fish gets, what a missing input
+    does, that sea state only ever lowers a score, and that a wall's
+    steepness -- not just its distance -- carries the structure term."""
+
+    FEAT = {"sst_f": 63, "front_nm": 1.0, "front_grad_c_nm": 0.3,
+            "structure_nm": 2.0, "structure_slope": 150.0, "month": 8, "wave_m": 0.5}
+
+    def test_bigeye_reports_surface_temperature_and_never_scores_it(self):
+        from tiderace import pelagic
+        cold = pelagic.score("bigeye", dict(self.FEAT, sst_f=40))
+        warm = pelagic.score("bigeye", dict(self.FEAT, sst_f=80))
+        self.assertEqual(cold["score"], warm["score"])
+        self.assertNotIn("sst", cold["terms"])
+        self.assertIn("reported not scored",
+                      pelagic.explain(warm, dict(self.FEAT, sst_f=80)))
+
+    def test_mahi_has_no_structure_term_and_says_what_it_cannot_see(self):
+        from tiderace import pelagic
+        res = pelagic.score("mahi", self.FEAT)
+        self.assertNotIn("structure", res["terms"])
+        self.assertTrue(any("weed" in u for u in res["unmeasurable"]))
+        far = pelagic.score("mahi", dict(self.FEAT, structure_nm=80, structure_slope=10))
+        self.assertEqual(res["score"], far["score"], "the shelf break must not move mahi")
+
+    def test_the_band_moves_the_score_and_a_step_is_a_step(self):
+        from tiderace import pelagic
+        inside = pelagic.score("bluefin", dict(self.FEAT, sst_f=63))["score"]
+        edge = pelagic.score("bluefin", dict(self.FEAT, sst_f=73))["score"]
+        out = pelagic.score("bluefin", dict(self.FEAT, sst_f=85))["score"]
+        self.assertGreater(inside, edge)
+        self.assertGreater(edge, out)
+        # yellowfin: 64-88 F is a step, so 65 and 87 score alike and 63 does not
+        y = lambda t: pelagic.score("yellowfin", dict(self.FEAT, sst_f=t))["score"]
+        self.assertEqual(y(65), y(87))
+        self.assertLess(y(63), y(65))
+
+    def test_steepness_carries_the_wall_so_walls_do_not_all_score_alike(self):
+        """Every shelf-break candidate is 0 nm from the shelf break by
+        construction. With distance alone, yellowfin and bigeye ranked flat at
+        100 across twelve positions on the first live run."""
+        from tiderace import pelagic
+        steep = pelagic.score("bigeye", dict(self.FEAT, structure_nm=0, structure_slope=160))
+        mild = pelagic.score("bigeye", dict(self.FEAT, structure_nm=0, structure_slope=60))
+        self.assertGreater(steep["score"], mild["score"])
+        self.assertEqual(steep["terms"]["structure"], 1.0)
+
+    def test_sea_state_only_ever_lowers_and_is_called_fishability(self):
+        from tiderace import pelagic
+        calm = pelagic.score("bluefin", dict(self.FEAT, wave_m=0.5))
+        lumpy = pelagic.score("bluefin", dict(self.FEAT, wave_m=3.0))
+        gale = pelagic.score("bluefin", dict(self.FEAT, wave_m=9.0))
+        self.assertEqual(calm["sea"], 1.0)
+        self.assertGreater(calm["score"], lumpy["score"])
+        self.assertGreaterEqual(lumpy["score"], gale["score"])
+        self.assertEqual(gale["sea"], pelagic.SEA_FLOOR)
+        self.assertIn("fishability", pelagic.explain(lumpy, dict(self.FEAT, wave_m=3.0)))
+        unknown = pelagic.score("bluefin", dict(self.FEAT, wave_m=None))
+        self.assertEqual(unknown["sea"], 1.0, "no buoy is not a bad sea")
+
+    def test_a_missing_input_is_an_absent_term_not_a_zero(self):
+        from tiderace import pelagic
+        res = pelagic.score("bluefin", dict(self.FEAT, front_nm=None, front_grad_c_nm=None))
+        self.assertNotIn("front", res["terms"])
+        self.assertIn("front", res["absent"])
+        self.assertAlmostEqual(sum(res["weights"].values()), 1.0, places=6,
+                               msg="weights renormalise over the terms present")
+        nothing = pelagic.score("bigeye", {"month": None})
+        self.assertIsNone(nothing["score"])
+
+    def test_the_season_is_the_records(self):
+        from tiderace import pelagic
+        aug = pelagic.score("bigeye", dict(self.FEAT, month=8))["terms"]["season"]
+        sep = pelagic.score("bigeye", dict(self.FEAT, month=9))["terms"]["season"]
+        feb = pelagic.score("bigeye", dict(self.FEAT, month=2))["terms"]["season"]
+        self.assertEqual((sep, aug, feb), (1.0, pelagic.SEASON_SHOULDER, 0.0))
+
+
+class FederalFishRules(unittest.TestCase):
+    """A tuna is a federal fish. regs.py has never heard of one and the legal
+    strip sent you to the RIDEM table; hms.py had the Angling-category rule
+    transcribed with its source all along. The grid carries it now, and it
+    will not say OPEN or CLOSED for it, because HMS categories close on quota
+    mid-season and this app does not track that."""
+
+    def test_the_grid_carries_the_hms_rule_without_claiming_a_status(self):
+        from datetime import datetime
+        from tiderace import server
+        r = server._rules("bluefin", datetime(2026, 9, 3, 6, 0))
+        reg = r["regulations"]
+        self.assertTrue(reg["known"])
+        self.assertTrue(reg["hms"])
+        self.assertIsNone(reg["open"], "OPEN/CLOSED is a quota claim the app cannot make")
+        self.assertEqual(reg["min_inches"], 27.0)
+        self.assertIn("permit", reg["permit"].lower())
+        self.assertTrue(reg["source"].startswith("https://www.fisheries.noaa.gov/"))
+        self.assertIn('min 27"', r["regulations_line"])
+        self.assertIsNone(r["rules_not_modelled"])
+        # A state fish is untouched by the branch.
+        b = server._rules("striped_bass", datetime(2026, 9, 3, 6, 0))
+        self.assertNotIn("hms", b["regulations"])
+
+    def test_the_page_has_a_third_state_and_stops_pointing_at_ridem(self):
         import pathlib
-        from tiderace import pelagic, score
-        for key in pelagic.PROFILES:
-            self.assertNotIn(key, score.PROFILES)
-            self.assertIn(key, score.NOT_PROFILED)
-        src = strip_py_comments(
-            (pathlib.Path(__file__).parent / "tiderace" / "pelagic.py").read_text())
-        for word in ("weights", "def score"):
-            self.assertNotIn(word, src, "pelagic.py must not score until agreed")
+        page = strip_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text())
+        strip = page.split("function paintLegal(){")[1].split("\nwindow.paintLegal")[0]
+        self.assertIn("r.open === true ? 'OPEN' : r.open === false ? 'CLOSED' : 'HMS'", strip)
+        self.assertIn("GRID.rules_not_modelled", strip,
+                      "the server's sentence knows a federal fish from a state one")
+        self.assertIn("NOAA's HMS page", strip)
+        load = page.split("async function loadGrid(){")[1].split("\n}\n")[0]
+        self.assertIn("r.open === true ? 'OPEN' : r.open === false ? 'CLOSED' : 'HMS'", load)
+        self.assertIn("#slegal .lg.adv", page)
+
+
+class PelagicPositions(unittest.TestCase):
+    """The candidate finder and the grid, on a synthetic ocean: a warm
+    tongue with one sharp edge, and a bottom with one wall."""
+
+    def _sst(self):
+        # 41 x 41 points over the box; 22 C water with a 26 C tongue whose
+        # edge runs north-south at -71.3
+        s, w, n, e = 39.5, -72.2, 41.3, -70.4
+        pts = []
+        for i in range(41):
+            for j in range(41):
+                la = s + (n - s) * i / 40
+                lo = w + (e - w) * j / 40
+                pts.append((round(la, 4), round(lo, 4), 26.0 if lo > -71.3 else 22.0))
+        return {"date": "2026-09-02", "points": pts}
+
+    def _bathy(self):
+        # 61 x 61 grid indexed [row=lat][col=lon]; shelf at -80 m, dropping
+        # to -1500 m south of row 8 (about 39.7 N): one wall, one place.
+        g = []
+        for i in range(61):
+            g.append([(-1500.0 if i < 8 else -80.0) for _ in range(61)])
+        return g
+
+    def test_fronts_are_one_candidate_per_break(self):
+        from tiderace import pelagic
+        fr = pelagic.fronts(self._sst())
+        self.assertTrue(fr)
+        for a in fr:
+            self.assertAlmostEqual(a["lon"], -71.3, delta=0.06, msg="the edge is at -71.3")
+        for i, a in enumerate(fr):
+            for b in fr[i + 1:]:
+                self.assertGreaterEqual(pelagic._nm(a["lat"], a["lon"], b["lat"], b["lon"]),
+                                        pelagic.CLUSTER_NM)
+
+    def test_structure_is_the_wall_and_nothing_on_the_flat(self):
+        from tiderace import pelagic
+        st = pelagic.structure(self._bathy())
+        self.assertTrue(st)
+        for c in st:
+            self.assertAlmostEqual(c["lat"], 39.5 + 1.8 * 8 / 60, delta=0.05)
+            self.assertGreaterEqual(c["slope_m_per_km"], pelagic.STRUCTURE_MIN_M_PER_KM)
+        flat = [[-80.0] * 61 for _ in range(61)]
+        self.assertEqual(pelagic.structure(flat), [])
+
+    def test_the_bathymetry_cache_lives_under_data_cache_not_beside_the_code(self):
+        """cache.write_json takes a path; the first cut gave it a bare key and
+        the grid landed as a file in the checkout root. The path is pinned
+        and a cached grid must be read from it without a fetch."""
+        import json
+        import os
+        import tempfile
+        from tiderace import bathy, cache, pelagic
+        path = pelagic._bathy_path()
+        self.assertIn(os.path.join("data", "cache", "pelagic"), os.path.abspath(path))
+        self.assertTrue(path.endswith(".json"))
+        with tempfile.TemporaryDirectory() as d:
+            fake = os.path.join(d, "bathy.json")
+            cache.write_json(fake, {"n": 3, "grid": [[-1.0] * 3] * 3})
+            real_path, real_fetch = pelagic._bathy_path, bathy.sample_grid
+            pelagic._bathy_path = lambda bbox=None, n=None: fake
+            bathy.sample_grid = lambda *a, **k: (_ for _ in ()).throw(AssertionError("fetched"))
+            try:
+                pelagic._bathy_cache.clear()
+                self.assertEqual(pelagic._bathy(n=3), [[-1.0] * 3] * 3)
+            finally:
+                pelagic._bathy_path, bathy.sample_grid = real_path, real_fetch
+                pelagic._bathy_cache.clear()
+
+    def test_the_grid_is_the_shape_the_page_reads(self):
+        from datetime import datetime
+        from tiderace import pelagic, spots
+        saved = list(spots.SPOTS)
+        spots.SPOTS[:] = []
+        try:
+            g = pelagic.grid("bluefin", datetime(2026, 8, 15, 6, 0), 6, 60,
+                             sst_grid=self._sst(), bathy_grid=self._bathy())
+        finally:
+            spots.SPOTS[:] = saved
+        self.assertTrue(g["offshore"] and g["unvalidated"])
+        self.assertEqual(len(g["times"]), 6)
+        kinds = {sp["kind"] for sp in g["spots"]}
+        self.assertEqual(kinds, {"front", "shelf break"})
+        for sp in g["spots"]:
+            for k in ("key", "label", "lat", "lon", "private", "kind", "notes",
+                      "depth_ft", "scores", "detail"):
+                self.assertIn(k, sp)
+            self.assertEqual(len(sp["scores"]), 6)
+            self.assertEqual(len(set(sp["scores"])), 1, "flat across the day, by construction")
+            d = sp["detail"][0]
+            self.assertTrue(d["unvalidated"])
+            self.assertIn("Unvalidated", d["why"])
+            self.assertEqual(sp["key"], spots.coord_key(sp["lat"], sp["lon"]))
+            self.assertIsNone(d["current_speed"], "there is no current out here")
+        # mahi gets the fronts only; bigeye the wall only
+        m = pelagic.grid("mahi", datetime(2026, 8, 15), 2, 60,
+                         sst_grid=self._sst(), bathy_grid=self._bathy())
+        self.assertEqual({sp["kind"] for sp in m["spots"]}, {"front"})
+        b = pelagic.grid("bigeye", datetime(2026, 8, 15), 2, 60,
+                         sst_grid=self._sst(), bathy_grid=self._bathy())
+        self.assertEqual({sp["kind"] for sp in b["spots"]}, {"shelf break"})
+
+    def test_the_server_the_registry_the_cli_and_the_page_carry_it(self):
+        import pathlib
+        from tiderace import species as spmod
+        root = pathlib.Path(__file__).parent
+        self.assertTrue(spmod.get("bluefin").scored)
+        self.assertTrue(spmod.get("mahi").scored)
+        self.assertFalse(spmod.get("wahoo").scored)
+        srv = strip_py_comments((root / "tiderace" / "server.py").read_text())
+        fn = srv.split("def build_grid(")[1].split("\ndef ")[0]
+        self.assertIn("if species in pelagic.PROFILES:", fn)
+        self.assertLess(fn.index("pelagic.grid("), fn.index("prospect.candidates_for("),
+                        "the offshore branch has to come before the inshore work")
+        self.assertIn('"modelled": True', fn)
+        cli = strip_py_comments((root / "tiderace" / "cli.py").read_text())
+        self.assertIn("if args.species in pelagic.PROFILES:", cli)
+        self.assertIn("def _cmd_forecast_offshore(", cli)
+        page = strip_comments((root / "tiderace" / "web" / "index.html").read_text())
+        self.assertIn("function offshoreLine(d, sp){", page)
+        for fn_name in ("function renderRank(){", "function renderSpots(){", "function renderDetail(){"):
+            body = page.split(fn_name)[1].split("\nfunction ")[0]
+            self.assertIn("GRID.offshore", body, fn_name + " does not know an offshore grid")
+        load = page.split("async function loadGrid(){")[1].split("\n}\n")[0]
+        self.assertIn("map.fitBounds", load, "the map has to follow the fish offshore")
+        self.assertIn("unvalidated", page.split("function paint(){")[1].split("\nfunction ")[0])
 
 
 class DepthLayer(unittest.TestCase):
@@ -4469,7 +4734,9 @@ class SpeciesRegistry(unittest.TestCase):
         # researched. Pinned as a literal on purpose: this number may only go
         # up by doing the reading, so moving it is a diff someone has to
         # justify with a citation in score.py.
-        self.assertEqual(len(speciesmod.scored()), 14)
+        # 18 since 2026-09-03: the fourteen, plus bluefin, yellowfin, bigeye
+        # and mahi under the offshore scorer in pelagic.py, each band cited.
+        self.assertEqual(len(speciesmod.scored()), 18)
         # The gap between the two tiers is the whole design, and it must not
         # close by accident.
         self.assertGreater(len(speciesmod.loggable()), len(speciesmod.scored()))
@@ -6972,10 +7239,15 @@ class RefusalsAreRecorded(unittest.TestCase):
         """No species may simply not appear. This is the floor the whole class
         rests on: if it stops holding, the tests below are checking a subset
         and passing on the rest by not looking."""
-        from tiderace import score, species as speciesmod
+        from tiderace import pelagic, score, species as speciesmod
         keys = {s.key for s in speciesmod.SPECIES}
         self.assertEqual(len(keys), 35)
-        covered = set(score.PROFILES) | set(score.NOT_PROFILED)
+        # Two scorers now: score.PROFILES inshore, pelagic.PROFILES offshore.
+        # A fish in both would be scored twice; a fish in neither and not
+        # refused would be the silence this test exists to catch.
+        self.assertEqual(set(score.PROFILES) & set(pelagic.PROFILES), set())
+        self.assertEqual(set(score.NOT_PROFILED) & set(pelagic.PROFILES), set())
+        covered = set(score.PROFILES) | set(score.NOT_PROFILED) | set(pelagic.PROFILES)
         self.assertEqual(
             keys - covered, set(),
             "these species are neither modelled nor refused in writing, so "
@@ -7041,17 +7313,21 @@ class RefusalsAreRecorded(unittest.TestCase):
         reading list is a backlog and somebody will work through it. Every one
         of the fourteen gets the identical sentence for the identical reason.
         """
-        from tiderace import score, species as speciesmod, spots
+        from tiderace import pelagic, score, species as speciesmod, spots
         offshore = {s.key for s in speciesmod.SPECIES
-                    if s.group == speciesmod.OFFSHORE}
-        self.assertEqual(len(offshore), 14)
+                    if s.group == speciesmod.OFFSHORE} - set(pelagic.PROFILES)
+        self.assertEqual(len(offshore), 10,
+                         "bluefin, yellowfin, bigeye and mahi have the offshore "
+                         "scorer; the other ten are still refused")
+        for k in ("bluefin", "yellowfin", "bigeye", "mahi"):
+            self.assertNotIn(k, score.NOT_PROFILED)
         reasons = {score.NOT_PROFILED[k] for k in offshore}
         self.assertEqual(len(reasons), 1,
                          "the offshore refusal is one structural fact, so it "
                          "should read as one sentence, not fourteen")
         reason = reasons.pop()
         self.assertIn("prospect.CANDIDATE_BBOX", reason)
-        self.assertIn("prospect.py", reason,
+        self.assertIn("pelagic.py", reason,
                       "the refusal has to say where the work does belong")
         # And the premise has to still be true: every prospected position is
         # inside the box the refusal names, and the box is the bay.

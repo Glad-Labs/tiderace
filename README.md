@@ -200,6 +200,26 @@ is ripping past Whale Rock. Current does. There are 38 current-prediction
 stations inside the bay and the generic national fishing apps use none of
 them — they key everything off a single tide-height curve.
 
+## Offshore has its own scorer
+
+Seventeen miles out there is no current station, so the bay scorer refuses
+the offshore fish and says why. Since 3 September 2026 four of them have a
+scorer of their own in `pelagic.py`: bluefin, yellowfin, bigeye and mahi.
+Pick one in the picker and the map goes south with it. The positions are the
+sharpest temperature breaks in the 1 km MUR grid and the steepest bottom in
+the modelled bathymetry -- the shelf break and the canyon walls -- one
+candidate per feature, ranked by surface temperature inside a cited band,
+distance to a break, the wall's steepness, and the month on the occurrence
+records, with sea state from buoy 44097 as a fishability multiplier. Every
+band names its document and page. The weights are priors, and every score
+says `unvalidated` until there are offshore trips in the log to check it
+against.
+
+```bash
+tiderace forecast --species bluefin    # ranked positions, and what each is made of
+tiderace spots --species mahi          # the breaks it would fish today
+```
+
 ## There is no list of spots
 
 Until 3 September 2026 the app ranked nineteen named landmarks. Matt: that is

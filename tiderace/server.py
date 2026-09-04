@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import bait as baitmod
-from . import birds, charts, config as cfgmod, features, heat, point, prospect, regs, score, spots
+from . import birds, charts, config as cfgmod, features, heat, pelagic, point, prospect, regs, score, spots
 from . import species as speciesmod
 from . import evaluate, prospect, structure
 from . import log as catchlog
@@ -38,6 +38,46 @@ _grid_lock = threading.Lock()
 _grid: dict[tuple, dict] = {}
 
 
+def _rules(species: str, start: datetime) -> dict:
+    """The legal block every grid carries, inshore or offshore. The forecast
+    and the rulebook can be absent independently, and each says so."""
+    cfg = cfgmod.load()
+    mode, program = cfg["license_mode"], cfg.get("aggregate_program")
+    sp = speciesmod.get(species)
+    if sp and sp.hms:
+        # Federal fish. hms.py transcribed the Angling-category rule with its
+        # source and the date it was checked; regs.py has never heard of it
+        # and would send you to the RIDEM table. `open` is None on purpose:
+        # HMS categories close on quota mid-season and this app does not
+        # track that, so it will not say OPEN or CLOSED, only what the rule
+        # is and where to confirm it.
+        from . import hms as hmsmod
+        h = hmsmod.status(species, start.date())
+        if h.get("known"):
+            return {
+                "license_mode": mode,
+                "regulations": {
+                    "known": True, "open": None, "hms": True, "advisory": True,
+                    "min_inches": h["min_inches"], "measure": h["measure"],
+                    "bag": h["bag"], "season": h["note"], "permit": h["permit"],
+                    "permit_url": h["permit_url"], "source": h["source"],
+                    "landings": h["landings"], "checked_on": h["checked_on"],
+                    "stale": h["stale"], "hotline": None,
+                },
+                "regulations_line": hmsmod.summary_line(species),
+                "regulations_differences": [],
+                "rules_not_modelled": None,
+            }
+    return {
+        "license_mode": mode,
+        "regulations": regs.status(species, start.date(), mode, program),
+        "regulations_line": regs.summary_line(species, start.date(), mode, program),
+        "regulations_differences": regs.differences(species, start.date()),
+        "rules_not_modelled": (None if regs.status(species, start.date(), mode).get("known")
+                               else speciesmod.unregulated_warning(species)),
+    }
+
+
 def build_grid(species: str, start: datetime, hours: int = 48,
                step_minutes: int = 30) -> dict:
     """Score every position for this species across the horizon."""
@@ -45,6 +85,26 @@ def build_grid(species: str, start: datetime, hours: int = 48,
     with _grid_lock:
         if key in _grid:
             return _grid[key]
+
+    # Offshore fish have their own scorer. pelagic.grid returns the same
+    # shape -- positions, times, scores, detail -- so everything downstream
+    # of here, page included, does not know the difference except by the
+    # `offshore` flag it uses to say what the number is made of.
+    if species in pelagic.PROFILES:
+        grid = pelagic.grid(species, start, hours, step_minutes)
+        grid.update(_rules(species, start))
+        grid.update({
+            "species": species,
+            "species_name": pelagic.PROFILES[species].name,
+            "modelled": True,
+            "not_modelled": None,
+            "notes": pelagic.PROFILES[species].sst_claim,
+            "start": start.isoformat(),
+            "step_minutes": step_minutes,
+        })
+        with _grid_lock:
+            _grid[key] = grid
+        return grid
 
     times: list[str] = []
     out_spots = []
@@ -130,14 +190,7 @@ def build_grid(species: str, start: datetime, hours: int = 48,
         # forecast actually has an opinion about, so the interface can show
         # conditions without pretending to a score it does not have.
         "modelled": modelled,
-        "license_mode": cfgmod.load()["license_mode"],
-        "regulations": regs.status(species, start.date(),
-                                   cfgmod.load()["license_mode"],
-                                   cfgmod.load().get("aggregate_program")),
-        "regulations_line": regs.summary_line(
-            species, start.date(), cfgmod.load()["license_mode"],
-            cfgmod.load().get("aggregate_program")),
-        "regulations_differences": regs.differences(species, start.date()),
+        **_rules(species, start),
         "notes": (score.PROFILES[species].notes if modelled
                   else (speciesmod.get(species).notes or "")),
         # Two different absences, and they used to be one. Until 2 Sep 2026
@@ -149,9 +202,6 @@ def build_grid(species: str, start: datetime, hours: int = 48,
         # so on its own.
         "not_modelled": (None if modelled else
                          speciesmod.unregulated_warning(species)),
-        "rules_not_modelled": (None if regs.status(
-            species, start.date(), cfgmod.load()["license_mode"]).get("known")
-            else speciesmod.unregulated_warning(species)),
         "start": start.isoformat(),
         "step_minutes": step_minutes,
         "times": times,
