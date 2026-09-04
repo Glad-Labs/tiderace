@@ -2126,6 +2126,15 @@ class AmendingTheLog(unittest.TestCase):
             self.assertNotIn("amended", row)
             self.assertEqual(open(path).read(), before)
 
+    def test_the_backup_is_gitignored(self):
+        """amend() copies the log to catch_log.jsonl.bak before rewriting it.
+        The first amend on the real log left that copy untracked in the
+        checkout -- the log is ignored by name and its backup was not -- which
+        is the scarcest file in the project one `git add -A` from a push."""
+        import pathlib
+        ig = (pathlib.Path(__file__).parent / ".gitignore").read_text()
+        self.assertIn("data/*.bak", ig.splitlines())
+
     def test_the_route_the_page_and_the_cli_reach_it(self):
         import pathlib
         root = pathlib.Path(__file__).parent

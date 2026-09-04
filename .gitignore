@@ -5,6 +5,9 @@ __pycache__/
 # Your catch log is yours. It is the only irreplaceable thing here and it
 # should never be pushed anywhere by accident.
 data/catch_log.jsonl
+# And the copy `tiderace amend` keeps before it rewrites the log. A backup of
+# the most sensitive file is the most sensitive file.
+data/*.bak
 # Bait sightings carry coordinates. Where you saw bait is where you were
 # fishing, so this is spot information by another name.
 data/bait_log.jsonl
