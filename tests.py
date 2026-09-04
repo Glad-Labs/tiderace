@@ -2501,6 +2501,62 @@ class PelagicPositions(unittest.TestCase):
         self.assertIn("unvalidated", page.split("function paint(){")[1].split("\nfunction ")[0])
 
 
+class ChartNumbersOnThePhone(unittest.TestCase):
+    """Matt: I can't read the depths on the soundings or contours on the
+    phone anymore. Measured on a Pixel 7 emulation, daylight theme, soundings
+    on at zoom 13.6: sounding ink #9FB6BB on water #80deea is 1.37:1. The
+    grey was chosen for the dark chart; the contour numbers went theme-aware
+    with the daylight palette and the soundings did not. And on top of the
+    chart sat thirty coordinate labels of mono text, which MapLibre's own
+    collision logic cannot see."""
+
+    def setUp(self):
+        import pathlib
+        self.page = strip_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text())
+
+    def test_sounding_ink_follows_the_theme_like_the_contour_numbers(self):
+        sym = self.page.split("if (st.kind === 'symbol'){")[1].split("\n    }\n")[0]
+        self.assertIn("'text-color': themeColour('--chart-ink', st.colour)", sym)
+        self.assertNotIn("'text-color': st.colour", sym,
+                         "a fixed grey is 1.37:1 on the daylight water")
+
+    def test_the_phone_keeps_a_few_coordinate_labels_and_the_one_you_picked(self):
+        fn = self.page.split("function clampLabels(){")[1].split("\nfunction ")[0]
+        self.assertIn("LABEL_CAP_PHONE", fn)
+        self.assertIn("el.dataset.key !== SEL", fn, "the selected marker always keeps its label")
+        self.assertIn("labelled++", fn)
+        self.assertLess(self.page.index("const LABEL_CAP_PHONE = "),
+                        self.page.index("function clampLabels(){"),
+                        "a const read from above its declaration is the temporal dead zone")
+        self.assertRegex(self.page, r"const LABEL_CAP_PHONE = [3-8];")
+
+    def test_contour_and_bathymetry_lines_follow_the_theme(self):
+        """Matt, a minute later: it's even difficult to see the contour and
+        bathy lines in the light view mode. rgba(79,179,199,.55) on #80deea
+        composites to about 1.1:1. The lines take a token per theme now,
+        and both palettes have to define it or the dark chart loses its
+        lines the day the light one gets them."""
+        page = self.page
+        self.assertEqual(page.count("--chart-line:"), 2, "one per palette")
+        self.assertEqual(page.count("--chart-line-2:"), 2)
+        style = page.split("const CHART_STYLE = {")[1].split("\n};")[0]
+        contours = style.split("  contours: {")[1].split("\n  }")[0]
+        bathy = style.split("  bathy: {")[1].split("\n  }")[0]
+        self.assertIn("line_token: '--chart-line'", contours)
+        self.assertIn("line_token: '--chart-line-2'", bathy)
+        line = page.split("type:'line', source:'c-' + l.name")[1].split("ABOVE_BASEMAP()")[0]
+        self.assertIn("themeColour(st.line_token, st.colour)", line)
+        self.assertNotIn("{'line-color': st.colour,", line)
+
+    def test_the_time_bar_ends_before_the_buttons(self):
+        touch = self.page.split("@media (max-width:900px), (pointer:coarse){", 1)[1]
+        # 60px of zoomed space (the buttons' width) plus screen clearance:
+        # a plain 90px cleared them at --ui 1 and not at 1.6.
+        self.assertRegex(touch, r"#timebar\{ right:calc\(60px \+ (1\d|2\d|3\d)px / var\(--ui, 1\)\)",
+                         "HERE and REC live in the bottom-right, in zoomed units")
+
+
 class DepthLayer(unittest.TestCase):
     def setUp(self):
         from tiderace import charts

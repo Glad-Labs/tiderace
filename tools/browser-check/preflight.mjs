@@ -301,6 +301,77 @@ async function run(url) {
       red: document.getElementById('trip').classList.contains('rec') }));
     await p.evaluate(() => { localStorage.removeItem('tiderace:trip'); window.setSheet('full'); });
     await p.waitForTimeout(400);
+    // The chart's own numbers have to be readable on this theme. Sounding
+    // ink was a fixed grey chosen for the dark chart and measured 1.37:1 on
+    // the daylight water; the contour numbers had gone theme-aware and the
+    // soundings had not. Read straight off the MapLibre paint against the
+    // basemap's water fill, with the soundings layer switched on the way a
+    // person does it, at a zoom where they draw.
+    const ink = await p.evaluate(async () => {
+      const cb = document.querySelector('input[data-layer="soundings"]');
+      if (cb && !cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change', {bubbles: true})); }
+      map.jumpTo({center: [-71.36, 41.47], zoom: 13.6});
+      await new Promise(r => setTimeout(r, 6000));
+      const lum = hex => { const c = hex.replace('#', ''); const f = i => { let v = parseInt(c.substr(i, 2), 16) / 255;
+        return v <= .03928 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); }; return .2126 * f(0) + .7152 * f(2) + .0722 * f(4); };
+      const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + .05) / (y + .05); };
+      const wl = map.getStyle().layers.find(l => l.id === 'water' || (l.id.includes('water') && l.type === 'fill'));
+      const water = wl ? map.getPaintProperty(wl.id, 'fill-color') : null;
+      const out = { water, drawn: {} };
+      for (const id of ['c-soundings', 'c-contours-lbl']) {
+        if (!map.getLayer(id)) { out[id] = { missing: true }; continue; }
+        const colour = map.getPaintProperty(id, 'text-color');
+        let n = 0; try { n = map.queryRenderedFeatures({layers: [id]}).length; } catch (_) {}
+        out[id] = { colour, drawn: n,
+                    contrast: (typeof colour === 'string' && colour.startsWith('#') && typeof water === 'string' && water.startsWith('#'))
+                      ? +ratio(colour, water).toFixed(2) : null };
+      }
+      // The lines too, composited: a translucent line over the water is
+      // whatever the two make together, and that is what a person sees.
+      const toRgb = c => { if (c.startsWith('#')) return [1, 3, 5].map(i => parseInt(c.substr(i, 2), 16)).concat([1]);
+        const m = /rgba?\(([^)]+)\)/.exec(c); if (!m) return null; const p = m[1].split(',').map(Number); return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1]; };
+      const hex = rgb => '#' + rgb.slice(0, 3).map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+      for (const id of ['c-contours', 'c-bathy']) {
+        if (!map.getLayer(id)) { out[id] = { missing: true }; continue; }
+        const colour = map.getPaintProperty(id, 'line-color');
+        const fg = typeof colour === 'string' ? toRgb(colour) : null, bg = typeof water === 'string' ? toRgb(water) : null;
+        let n = 0; try { n = map.queryRenderedFeatures({layers: [id]}).length; } catch (_) {}
+        if (!fg || !bg) { out[id] = { colour, drawn: n, contrast: null }; continue; }
+        const a = fg[3], comp = [0, 1, 2].map(i => a * fg[i] + (1 - a) * bg[i]);
+        out[id] = { colour, drawn: n, composited: hex(comp), contrast: +ratio(hex(comp), hex(bg)).toFixed(2) };
+      }
+      return out;
+    });
+    for (const id of ['c-soundings', 'c-contours-lbl']) {
+      const r = ink[id] || {};
+      ok(`phone/${scheme}: ${id === 'c-soundings' ? 'sounding' : 'contour'} numbers are drawn and readable on the water`,
+         !r.missing && r.drawn > 0 && r.contrast != null && r.contrast >= 4.5,
+         JSON.stringify({ ...r, water: ink.water }));
+    }
+    for (const id of ['c-contours', 'c-bathy']) {
+      const r = ink[id] || {};
+      ok(`phone/${scheme}: ${id === 'c-contours' ? 'contour' : 'bathymetry'} lines are drawn and visible on the water`,
+         !r.missing && r.drawn > 0 && r.contrast != null && r.contrast >= 3.0,
+         JSON.stringify({ ...r, water: ink.water }));
+    }
+
+    // With the sheet shut the buttons sit at the bottom right and the time
+    // bar runs along the bottom; they used to overlap by the bar's right
+    // end. Measured as rectangles, in the state where both are on screen.
+    const bar = await p.evaluate(async () => {
+      window.setSheet('shut');
+      await new Promise(r => setTimeout(r, 500));
+      const R = id => { const b = document.getElementById(id).getBoundingClientRect();
+        return { l: b.left, t: b.top, r: b.right, b: b.bottom }; };
+      const hit = (a, b) => a.r > b.l && a.l < b.r && a.b > b.t && a.t < b.b;
+      const tb = R('timebar'), here = R('here'), trip = R('trip');
+      const visible = getComputedStyle(document.getElementById('timebar')).display !== 'none';
+      return { visible, hereOverBar: hit(here, tb), tripOverBar: hit(trip, tb), tb, here };
+    });
+    ok(`phone/${scheme}: HERE and REC do not sit on the time bar`,
+       bar.visible && !bar.hereOverBar && !bar.tripOverBar, JSON.stringify(bar));
+    await p.evaluate(() => window.setSheet('full'));
+
     ok(`phone/${scheme}: a tap on REC starts a trip and a second tap ends it`,
        rec.onclick === 'function' && started.state && started.red && !stopped.state && !stopped.red,
        JSON.stringify({ onclick: rec.onclick, started, stopped }));

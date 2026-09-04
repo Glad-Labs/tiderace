@@ -39,6 +39,14 @@ async function walk(url) {
   step('map loads with markers', true,
        `${await page.evaluate(() => Object.keys(MARKERS).length)} markers`);
 
+  // The grid cache is keyed by the hour, so the first load after the top of
+  // the hour rebuilds cold: about 25 s for thirty positions. A fixed sleep
+  // here failed 3 of 26 the first time a run straddled an hour boundary, on
+  // "No forecast loaded yet." -- the harness's assumption, not the app's
+  // fault. Wait for the grid, however long the water takes.
+  await page.waitForFunction(() => typeof GRID !== 'undefined' && GRID && GRID.spots && GRID.spots.length > 0,
+                             null, { timeout: 120000 }).catch(() => {});
+
   // --- open a coordinate, then every tab in the sheet -------------------
   await page.evaluate(() => window.showConditions(41.4344, -71.3975, 'walkthrough'));
   await page.waitForTimeout(9000);
@@ -77,7 +85,12 @@ async function walk(url) {
                             ['bluefin', 'offshore, unvalidated'],
                             ['haddock', 'not scored']]) {
     await page.selectOption('#species', sp).catch(() => {});
-    await page.waitForTimeout(8000);
+    // Wait for THIS species' grid, not a fixed 8 s: a cold rebuild at the
+    // top of the hour takes longer than that and the old wait read the
+    // previous species' grid as the new one.
+    await page.waitForFunction(k => GRID && GRID.species === k && GRID.spots.length > 0,
+                               sp, { timeout: 120000 }).catch(() => {});
+    await page.waitForTimeout(1500);
     const g = await page.evaluate(() => ({
       species: GRID && GRID.species, modelled: GRID && GRID.modelled,
       spots: GRID ? GRID.spots.length : 0,

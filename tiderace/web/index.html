@@ -28,6 +28,12 @@
   --hair-a:rgba(39,64,72,.5); --halo:rgba(11,21,24,.9);
   --scrim:rgba(11,21,24,.86); --crit-wash:rgba(229,62,62,.14);
   --chart-ink:#8FDCEA; --chart-ink-2:#B7C6CB;
+  /* The chart lines themselves. Survey contours, then the modelled bottom,
+     which stays dimmer and dashed. These were literals in CHART_STYLE and
+     the daylight palette left them on cyan water at about 1.1:1. The dark
+     contour was 55% cyan, "deliberately faint", and measured 2.56:1 on the
+     night water; 75% composites to 3.6:1, which is the bar for a line. */
+  --chart-line:rgba(79,179,199,.75); --chart-line-2:rgba(140,163,168,.75);
   --display:'Archivo','Helvetica Neue',Arial,sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;
 }
@@ -49,6 +55,9 @@
   --hair-a:rgba(80,105,113,.34); --halo:rgba(255,255,255,.92);
   --scrim:rgba(242,245,246,.9); --crit-wash:rgba(155,35,23,.13);
   --chart-ink:#0A5567; --chart-ink-2:#3D5257;
+  /* Composited over the daylight water (#80deea): 3.5:1 and 3.2:1. Lines are
+     graphics, so 3:1 is the bar, and the modelled one is still the dimmer. */
+  --chart-line:rgba(10,85,103,.8); --chart-line-2:rgba(61,82,87,.75);
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
@@ -660,7 +669,11 @@ body.sheet-peek #here{
   bottom:calc(210px + (20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
 body.sheet-peek #trip{
   bottom:calc(210px + 72px + (20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
-#timebar{ right:calc(12px / var(--ui, 1)); bottom:calc(44px / var(--ui, 1));
+/* Ends short of the right edge, where HERE and REC live; with the sheet
+   shut the bar sat under the slider's right end. The buttons are 60px in
+   zoomed units and 14px of screen from the edge, so the clearance is written
+   the same way -- a plain 90px cleared them at --ui 1 and not at 1.6. */
+#timebar{ right:calc(60px + 26px / var(--ui, 1)); bottom:calc(44px / var(--ui, 1));
           left:calc(12px / var(--ui, 1)); width:auto; }
 }
 
@@ -1171,6 +1184,11 @@ function markerVisibility(box, barBottom, sheetTop, sheetLeft){
   return {marker: '', label: ''};
 }
 
+// Declared above the function that reads it: a `const` read from above its
+// declaration is the temporal dead zone, and that has taken this whole
+// script down twice.
+const LABEL_CAP_PHONE = 5;
+
 function clampLabels(){
   // MARKERS is replaced, not mutated, when the grid reloads -- read the live
   // binding rather than a captured alias.
@@ -1207,6 +1225,13 @@ function clampLabels(){
   const tbox = tb && tb.offsetParent !== null ? tb.getBoundingClientRect() : null;
   const hits = (a, b) => a.right > b.left && a.left < b.right
                       && a.bottom > b.top && a.top < b.bottom;
+  // On the phone the labels are what covers the chart: thirty positions
+  // with a coordinate each is a page of mono text over the soundings. The
+  // best few keep theirs, the selected one always does, and the ranked list
+  // has every coordinate anyway. MapLibre's collision logic cannot see HTML
+  // markers, so nothing else was going to give the numbers room.
+  const cap = window.matchMedia('(max-width:900px), (pointer:coarse)').matches ? LABEL_CAP_PHONE : Infinity;
+  let labelled = 0;
 
   for (const m of entries){
     const el = m.el;
@@ -1218,6 +1243,7 @@ function clampLabels(){
     if (!lbl) continue;
 
     let show = wanted && v.marker !== 'hidden' && v.label !== 'hidden';
+    if (show && labelled >= cap && el.dataset.key !== SEL) show = false;
     if (show){
       // Measure the label where it will actually be, which means unhiding it
       // first -- a hidden element still has a box, but one left over from the
@@ -1231,7 +1257,7 @@ function clampLabels(){
       // Breachway publishes an inside and an east-side mark a few hundred
       // metres apart, so at bay zoom their labels land in the same place.
       else if (kept.some(k => hits(lb, k))) show = false;
-      else kept.push(lb);
+      else { kept.push(lb); labelled++; }
     }
     lbl.style.visibility = show ? '' : 'hidden';
   }
@@ -1474,7 +1500,7 @@ const CHART_STYLE = {
      as a chart. */
   bathy: {
     kind: 'line', lazy: true, model: true,
-    colour: 'rgba(140,163,168,.75)',
+    colour: 'rgba(140,163,168,.75)', line_token: '--chart-line-2',
     width: ['interpolate', ['linear'], ['zoom'], 9, 0.5, 13, 1.0],
     dash: [2, 2],
     label: ['case', ['has','depth_ft'],
@@ -1484,7 +1510,7 @@ const CHART_STYLE = {
   },
   contours: {
     kind: 'line',
-    colour: 'rgba(79,179,199,.55)',
+    colour: 'rgba(79,179,199,.55)', line_token: '--chart-line',
     width: ['interpolate', ['linear'], ['zoom'], 11, 0.4, 14, 1.1],
     label: ['case', ['has','depth_ft'],
             ['concat', ['to-string', ['round', ['get','depth_ft']]], ''], ''],
@@ -1877,7 +1903,10 @@ async function loadCharts(){
         minzoom: st.minzoom || 0,
         layout:{visibility: CHART_ON[l.name] ? 'visible' : 'none',
                 'line-join':'round', 'line-cap':'round'},
-        paint:Object.assign({'line-color': st.colour,
+        // A layer that names a token follows the theme; the rest keep their
+        // literal. Contours and the modelled bottom were welded to a dark
+        // palette and vanished on the daylight water.
+        paint:Object.assign({'line-color': st.line_token ? themeColour(st.line_token, st.colour) : st.colour,
                              'line-width': st.width || 0.8},
                             st.dash ? {'line-dasharray': st.dash} : {})
       }, ABOVE_BASEMAP());
@@ -1911,8 +1940,13 @@ async function loadCharts(){
         layout:{visibility: CHART_ON[l.name] ? 'visible' : 'none',
                 'text-field': st.label, 'text-font':['Noto Sans Regular'],
                 'text-size':10, 'text-allow-overlap':false},
-        paint:{'text-color': st.colour, 'text-halo-color': themeColour('--halo', 'rgba(11,21,24,.9)'),
-               'text-halo-width':1.1}
+        // Not st.colour. That grey was chosen for the dark chart and measured
+        // 1.37:1 on the daylight water -- the soundings were drawn and could
+        // not be read on the phone. The contour numbers went theme-aware with
+        // the daylight palette; these did not.
+        paint:{'text-color': themeColour('--chart-ink', st.colour),
+               'text-halo-color': themeColour('--halo', 'rgba(11,21,24,.9)'),
+               'text-halo-width':1.4}
       }, ABOVE_BASEMAP());
       continue;
     }
