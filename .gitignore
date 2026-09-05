@@ -32,6 +32,10 @@ data/photos/
 # NOAA station catalog. Regenerate with `tiderace stations --refresh`.
 data/stations.json
 
+# USGS GNIS place names, clipped to the charted box. Public domain and
+# regenerable with `tiderace gazetteer --refresh`; a few hundred KB.
+data/gazetteer.json
+
 # GSO spreadsheets and the climatology derived from them. Regenerate with
 # `python3 -m tiderace gso --rebuild`. Their data use policy asks for citation,
 # so redistributing copies here would be the wrong default.

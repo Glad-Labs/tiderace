@@ -525,36 +525,53 @@ class WebFetching(unittest.TestCase):
 class Extraction(unittest.TestCase):
     def test_place_matching_rejects_generic_geography(self):
         """Regression: matching on shared generic words put 'Newport Bridge'
-        at the Mount Hope Bridge, and 'Block Island' -- twelve miles offshore --
-        at Rose Island."""
-        self.assertIsNone(extract._match_spot("Newport Bridge area"))
-        self.assertIsNone(extract._match_spot("Block Island"))
-        self.assertIsNone(extract._match_spot("the south shore"))
-        self.assertIsNone(extract._match_spot(""))
+        at the Mount Hope Bridge and 'Block Island' -- twelve miles offshore
+        -- at Rose Island. Public names resolve now (gazetteer.py), so the
+        claim is sharper: generic words alone never match, a bridge the
+        gazetteer does not know stays unmatched rather than landing on the
+        nearest neck, and Block Island is Block Island."""
+        pool = [
+            {"name": "Newport Neck", "lat": 41.4648, "lon": -71.3270, "kind": "Cape", "source": "gnis"},
+            {"name": "Mount Hope Point", "lat": 41.6665, "lon": -71.2389, "kind": "Cape", "source": "gnis"},
+            {"name": "Rose Island", "lat": 41.4965, "lon": -71.3412, "kind": "Island", "source": "gnis"},
+            {"name": "Block Island", "lat": 41.1918, "lon": -71.5745, "kind": "Island", "source": "gnis"},
+        ]
+        self.assertIsNone(extract._match_spot("Newport Bridge area", candidates=[], gazetteer=pool))
+        self.assertIsNone(extract._match_spot("the south shore", candidates=[], gazetteer=pool))
+        self.assertIsNone(extract._match_spot("", candidates=[], gazetteer=pool))
+        from tiderace import gazetteer
+        self.assertEqual(gazetteer.resolve("Block Island", candidates=pool)["lat"], 41.1918)
+        self.assertEqual(gazetteer.resolve("the Mount Hope Bridge", candidates=pool)["name"],
+                         "Mount Hope Point")
 
-    def test_place_matching_resolves_only_your_own_marks(self):
-        """The public positions carry no name (spots.py says why), so a
-        landmark in a report no longer resolves to a coordinate. The handle
-        you typed at `--save` is the one name left, and that still matches --
-        underscores read as spaces."""
+    def test_place_matching_tries_your_marks_first_then_public_names(self):
+        """Your own marks win by the handle you gave them. A landmark the
+        gazetteer knows resolves to a public coordinate; one it does not know
+        stays unmatched, and without a gazetteer nothing but marks resolve."""
         mine = spots.Spot(41.372, -71.639, "ACT2286", "8452660", "mark",
                           key="charlestown_breachway", private=True)
         bump = spots.Spot(41.4408, -71.4228, "ACT2201", "8452660", "structure",
                           notes="stands 24 ft above the bottom within 400 m")
         pool = [bump, mine]
-        for text in ("Charlestown Breachway", "at the charlestown breachway",
-                     "Charlestown"):
-            got = extract._match_spot(text, candidates=pool)
-            self.assertIsNotNone(got, text)
-            self.assertEqual(got.key, "charlestown_breachway", text)
-        # Landmarks are positions now, and a position has nothing to match.
-        for text in ("Whale Rock", "the Mount Hope Bridge", "off Beavertail",
-                     "Fort Wetherill"):
-            self.assertIsNone(extract._match_spot(text, candidates=pool), text)
-        # A tapped coordinate saved without a handle is not a name either.
+        for text in ("Charlestown Breachway", "at the charlestown breachway", "Charlestown"):
+            got = extract._match_spot(text, candidates=pool, gazetteer=[])
+            self.assertIs(got, mine, text)
+        for text in ("Whale Rock", "off Beavertail", "Fort Wetherill"):
+            self.assertIsNone(extract._match_spot(text, candidates=pool, gazetteer=[]), text)
         anon = spots.Spot(41.44, -71.42, "ACT2201", "8452660", "mark", private=True)
-        self.assertIsNone(extract._match_spot("at:41.44000,-71.42000",
-                                              candidates=[anon]))
+        self.assertIsNone(extract._match_spot("at:41.44000,-71.42000", candidates=[anon], gazetteer=[]))
+
+    def test_the_generic_word_filter_is_the_gate(self):
+        """Every rule in the resolver leans on this one set. If it stops
+        dropping the words that carry no identity, 'the point' matches
+        anything with a point in it."""
+        from tiderace import gazetteer
+        self.assertEqual(gazetteer._tokens("the south shore off the point"), set())
+        self.assertEqual(gazetteer._tokens("Whale Rock Light"), {"whale"})
+        self.assertEqual(gazetteer._tokens("Newport Harbor Buoy 4"), {"newport"})
+        self.assertEqual(gazetteer._tokens("Newport Bridge"), {"newport", "bridge"},
+                         "bridge carries identity here: GNIS names none, so a phrase "
+                         "with one must not fall back to the nearest neck")
 
     def test_schemas_are_strict_and_demand_provenance(self):
         """Every extracted claim must carry a quote and a confidence, so a
@@ -2554,6 +2571,122 @@ class ChartNumbersOnThePhone(unittest.TestCase):
         # a plain 90px cleared them at --ui 1 and not at 1.6.
         self.assertRegex(touch, r"#timebar\{ right:calc\(60px \+ (1\d|2\d|3\d)px / var\(--ui, 1\)\)",
                          "HERE and REC live in the bottom-right, in zoomed units")
+
+
+class Gazetteer(unittest.TestCase):
+    """Matt: landmark naming should be searchable based on maps. It is, from
+    two public sources -- the cached charts' own rock and buoy names, and the
+    USGS gazetteer -- and the ranking never sees a name. The matcher is
+    conservative on purpose, and every rule below was written against a
+    phrase that went wrong on the real file first."""
+
+    POOL = [
+        {"name": "Whale Rock", "lat": 41.4437, "lon": -71.4237, "kind": "Pillar", "source": "gnis"},
+        {"name": "Whale Rock Light", "lat": 41.4437, "lon": -71.4240, "kind": "Populated Place", "source": "gnis"},
+        {"name": "Hope", "lat": 41.7334, "lon": -71.5626, "kind": "Populated Place", "source": "gnis"},
+        {"name": "Mount Hope", "lat": 41.8240, "lon": -72.1709, "kind": "Populated Place", "source": "gnis"},
+        {"name": "Mount Hope Bay", "lat": 41.68, "lon": -71.21, "kind": "Bay", "source": "gnis"},
+        {"name": "Mount Hope Point", "lat": 41.6665, "lon": -71.2389, "kind": "Cape", "source": "gnis"},
+        {"name": "Fort Neck", "lat": 41.3807, "lon": -71.6467, "kind": "Cape", "source": "gnis"},
+        {"name": "Fort Adams", "lat": 41.4754, "lon": -71.3400, "kind": "Military", "source": "gnis"},
+        {"name": "Point Judith", "lat": 41.3612, "lon": -71.4806, "kind": "Cape", "source": "gnis"},
+        {"name": "Point Judith Harbor Buoy 2", "lat": 41.3674, "lon": -71.5142, "kind": "buoy", "source": "chart"},
+        {"name": "Newport", "lat": 41.4901, "lon": -71.3128, "kind": "Populated Place", "source": "gnis"},
+        {"name": "Newport Harbor Buoy 4", "lat": 41.4812, "lon": -71.3349, "kind": "buoy", "source": "chart"},
+        {"name": "Seal Rock", "lat": 41.3214, "lon": -71.8630, "kind": "rock", "source": "chart"},
+        {"name": "Sandy Point", "lat": 41.2326, "lon": -71.5776, "kind": "Cape", "source": "gnis"},
+        {"name": "Beavertail Point", "lat": 41.4490, "lon": -71.3995, "kind": "Cape", "source": "gnis"},
+    ]
+
+    def r(self, q):
+        from tiderace import gazetteer
+        hit = gazetteer.resolve(q, candidates=self.POOL)
+        return hit["name"] if hit else None
+
+    def test_exact_and_contained_names_resolve_to_the_most_specific_feature(self):
+        self.assertEqual(self.r("Whale Rock"), "Whale Rock")           # not the Light
+        self.assertEqual(self.r("off Beavertail"), "Beavertail Point")
+        self.assertEqual(self.r("Seal Rock"), "Seal Rock")
+        self.assertEqual(self.r("Fort Adams"), "Fort Adams")
+        self.assertEqual(self.r("Wicopesset Rock Buoy 7"), None, "not in this pool")
+
+    def test_a_short_town_name_inside_a_long_phrase_is_not_a_match(self):
+        """'the Mount Hope Bridge' contained 'Hope' (a town inland) and then
+        'Mount Hope' (a town in Connecticut). The bay's point is what was
+        meant, and it wins on the words both share."""
+        self.assertEqual(self.r("the Mount Hope Bridge"), "Mount Hope Point")
+
+    def test_one_shared_word_is_not_a_match_unless_it_is_the_whole_phrase(self):
+        """'Fort Wetherill' shared 'fort' with Fort Neck, ten miles away and
+        the wrong side of the bay. No match is the right answer."""
+        self.assertIsNone(self.r("Fort Wetherill"))
+        self.assertEqual(self.r("sandy"), "Sandy Point", "the whole phrase is the word")
+
+    def test_buoys_are_named_after_places_and_rank_last(self):
+        self.assertEqual(self.r("Point Judith breachway"), "Point Judith")
+        self.assertEqual(self.r("off Newport"), "Newport")
+        self.assertEqual(self.r("Newport Harbor Buoy 4"), "Newport Harbor Buoy 4",
+                         "unless the phrase is the buoy")
+
+    def test_generic_geography_alone_never_matches(self):
+        for q in ("the south shore", "the point", "the reef off the island", "", "   "):
+            self.assertIsNone(self.r(q), q)
+
+    def test_gnis_parsing_clips_to_the_box_and_the_water_classes(self):
+        from tiderace import gazetteer
+        hdr = "feature_id|feature_name|feature_class|state_name|prim_lat_dec|prim_long_dec"
+        rows = [
+            "1|Whale Rock|Pillar|Rhode Island|41.4437|-71.4237",
+            "2|Intracoastal Waterway|Channel|Alabama|32.0771|-80.9506",    # outside the box
+            "3|Worden Pond|Lake|Rhode Island|41.4400|-71.5800",            # class not kept
+            "4|Fort Adams|Military|Rhode Island|41.4754|-71.3400",
+            "5|Broken|Cape|Rhode Island|not|a-number",
+        ]
+        out = gazetteer.parse_gnis("\ufeff" + "\n".join([hdr] + rows))
+        self.assertEqual([r["name"] for r in out], ["Whale Rock", "Fort Adams"])
+        self.assertEqual(out[0]["source"], "gnis")
+        with self.assertRaises(ValueError):
+            gazetteer.parse_gnis("a|b|c\n1|2|3")
+
+    def test_the_chart_names_come_off_the_cached_layers(self):
+        import json
+        import tempfile
+        from tiderace import gazetteer
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "rocks.geojson"), "w") as fh:
+                json.dump({"type": "FeatureCollection", "features": [
+                    {"type": "Feature", "properties": {"name": "Seal Rock", "depth_ft": 2},
+                     "geometry": {"type": "Point", "coordinates": [-71.863, 41.3214]}},
+                    {"type": "Feature", "properties": {"depth_ft": 9},
+                     "geometry": {"type": "Point", "coordinates": [-71.9, 41.3]}}]}, fh)
+            got = gazetteer.chart_names(d)
+        self.assertEqual(got, [{"name": "Seal Rock", "lat": 41.3214, "lon": -71.863,
+                                "kind": "rock", "source": "chart"}])
+
+    def test_the_extractor_tries_your_marks_first_then_the_public_names(self):
+        from tiderace import extract, spots
+        mine = spots.Spot(41.372, -71.639, "ACT2286", "8452660", "mark",
+                          key="charlestown_breachway", private=True)
+        got = extract._match_spot("the Charlestown Breachway", candidates=[mine], gazetteer=self.POOL)
+        self.assertIs(got, mine)
+        if not os.path.exists(__import__("tiderace.stations", fromlist=["x"]).CATALOG_PATH):
+            self.skipTest("no station catalog")
+        land = extract._match_spot("off Beavertail", candidates=[mine], gazetteer=self.POOL)
+        self.assertIsNotNone(land)
+        self.assertEqual(land.kind, "landmark")
+        self.assertFalse(land.private, "a public name is not your mark")
+        self.assertIn("Beavertail Point", land.notes)
+        self.assertEqual(land.key, spots.coord_key(41.4490, -71.3995))
+        self.assertIsNone(extract._match_spot("the south shore", candidates=[mine], gazetteer=self.POOL))
+
+    def test_the_gazetteer_file_is_ignored_and_regenerable(self):
+        import pathlib
+        root = pathlib.Path(__file__).parent
+        self.assertIn("data/gazetteer.json", (root / ".gitignore").read_text())
+        cli = strip_py_comments((root / "tiderace" / "cli.py").read_text())
+        self.assertIn('sub.add_parser("gazetteer"', cli)
+        srv = strip_py_comments((root / "tiderace" / "server.py").read_text())
+        self.assertIn('url.path == "/api/place"', srv)
 
 
 class DepthLayer(unittest.TestCase):

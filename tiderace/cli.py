@@ -88,6 +88,11 @@ def run(argv=None) -> int:
                     help="a photo of the fish to keep with the entry (repeatable); "
                          "stays on this machine")
 
+    gz = sub.add_parser("gazetteer", help="public place names that resolve to a coordinate")
+    gz.add_argument("--refresh", action="store_true",
+                    help="download the USGS GNIS files for RI, MA and CT into data/")
+    gz.add_argument("place", nargs="?", help="a place to resolve, e.g. 'off Beavertail'")
+
     am = sub.add_parser("amend", help="correct one logged trip, keeping what it said")
     am.add_argument("--logged-at", required=True, metavar="ISO",
                     help="the entry's logged_at, to the second (see `tiderace history`)")
@@ -242,6 +247,8 @@ def run(argv=None) -> int:
         return _cmd_spots(args)
     if args.cmd == "amend":
         return _cmd_amend(args)
+    if args.cmd == "gazetteer":
+        return _cmd_gazetteer(args)
     if args.cmd == "at":
         return _cmd_at(args)
     if args.cmd == "stations":
@@ -298,6 +305,29 @@ def run(argv=None) -> int:
         return serve("tailscale" if args.tailscale else args.host, args.port)
 
     return _cmd_forecast(args)
+
+
+def _cmd_gazetteer(args) -> int:
+    from . import gazetteer as gaz
+    if args.refresh:
+        try:
+            r = gaz.refresh()
+        except Exception as exc:                                  # noqa: BLE001
+            print(f"  {exc}", file=sys.stderr)
+            return 1
+        print(f"  {r['names']} names from GNIS ({', '.join(gaz.GNIS_STATES)}) → {r['path']}")
+        print("  (gitignored, regenerable; the charts' own rock and buoy names need no fetch)")
+    if args.place:
+        hit = gaz.resolve(args.place)
+        if not hit:
+            print(f"  nothing public matches {args.place!r}")
+            return 1
+        print(f"  {hit['name']}  {hit['lat']:.4f}, {hit['lon']:.4f}  ({hit['source']} {hit['kind']})")
+    elif not args.refresh:
+        n = gaz.names()
+        print(f"  {len(n)} names on file: {sum(1 for x in n if x['source']=='chart')} from the "
+              f"charts, {sum(1 for x in n if x['source']=='gnis')} from GNIS")
+    return 0
 
 
 def _cmd_amend(args) -> int:

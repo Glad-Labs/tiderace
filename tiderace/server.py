@@ -853,6 +853,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._static(url.path[len("/static/"):])
             if url.path.startswith("/photos/"):
                 return self._photo(url.path[len("/photos/"):])
+            if url.path == "/api/place":
+                # A place said in prose, resolved to a public coordinate.
+                from . import gazetteer as gaz
+                hit = gaz.resolve(q.get("q", [""])[0])
+                return self._send_json({"query": q.get("q", [""])[0], "match": hit})
             self._send_json({"error": "not found"}, 404)
         except Exception as exc:                                  # noqa: BLE001
             traceback.print_exc()

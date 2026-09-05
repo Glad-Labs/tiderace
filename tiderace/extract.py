@@ -407,18 +407,18 @@ def normalize_species(name: str) -> tuple[str | None, str]:
     return SPECIES_ALIASES.get(raw.lower().strip()), raw
 
 
-def _match_spot(place: str, candidates=None):
-    """Map a place name in prose onto one of YOUR marks. Deliberately
-    conservative -- an unmatched sighting is better than one pinned to the
-    wrong rock.
+def _match_spot(place: str, candidates=None, gazetteer=None):
+    """Map a place name in prose onto a coordinate. Deliberately conservative
+    -- an unmatched sighting is better than one pinned to the wrong rock.
 
-    The public positions carry no name any more (see spots.py), so a landmark
-    named in a report -- "Whale Rock", "the Mount Hope Bridge" -- does not
-    resolve to a coordinate here. That is the honest outcome: the sighting is
-    kept with its place text and no position, and the reviewer pins it. The
-    only names left in the system are the handles you gave your own marks at
-    `--save`, and those match, underscores read as spaces."""
-    from . import spots
+    Your own marks first, by the handle you gave them (underscores read as
+    spaces). Then the public gazetteer: named rocks and buoys off the cached
+    charts, and USGS GNIS points, islands, bays and towns (gazetteer.py). A
+    landmark resolves to a Spot built at its coordinate, marked as such in
+    `notes`; nothing about the ranking sees or uses the name. `candidates`
+    and `gazetteer` exist so tests can hand in a pool without the files.
+    """
+    from . import gazetteer as gaz, spots
     if not place:
         return None
     p = place.lower().strip()
@@ -431,27 +431,31 @@ def _match_spot(place: str, candidates=None):
     for s in pool:
         if handle(s) in p or p in handle(s):
             return s
-    # Generic geography carries no identity. Matching on it alone put
-    # "Newport Bridge" at the Mount Hope Bridge and "Block Island" -- twelve
-    # miles offshore -- at Rose Island. Only distinguishing words count.
-    GENERIC = {"island", "bridge", "point", "harbor", "harbour", "bay", "rock",
-               "rocks", "cove", "beach", "river", "reef", "entrance", "pond",
-               "north", "south", "east", "west", "upper", "lower", "area",
-               "shore", "light", "neck", "hill", "refuge", "breachway"}
 
     def keywords(text: str) -> set[str]:
         return {t for t in text.replace("-", " ").replace(",", " ").split()
-                if len(t) > 3 and t not in GENERIC}
+                if len(t) > 3 and t not in gaz.GENERIC}
 
     tokens = keywords(p)
-    if not tokens:
+    if tokens:
+        best, score = None, 0
+        for s in pool:
+            overlap = len(tokens & keywords(handle(s)))
+            if overlap > score:
+                best, score = s, overlap
+        if best is not None:
+            return best
+
+    hit = gaz.resolve(place, candidates=gazetteer)
+    if not hit:
         return None
-    best, score = None, 0
-    for s in pool:
-        overlap = len(tokens & keywords(handle(s)))
-        if overlap > score:
-            best, score = s, overlap
-    return best if score >= 1 else None
+    try:
+        spot, _ = spots.at_coord(hit["lat"], hit["lon"], kind="landmark",
+                                 notes=f"{hit['name']} ({hit['source']} {hit['kind']})",
+                                 private=False)
+    except (ValueError, KeyError):
+        return None
+    return spot
 
 
 # ------------------------------------------------------------ review queue
