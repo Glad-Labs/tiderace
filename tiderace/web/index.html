@@ -348,6 +348,10 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 #slegal .lg.open b{color:var(--good)}
 #slegal .lg.shut{background:var(--crit-wash)}
 #slegal .lg.adv b{color:var(--ink-2)}
+#waterkey{margin-top:8px; border-top:1px solid var(--hair); padding-top:6px}
+#waterkey .wrow{display:grid; grid-template-columns:auto 1fr; gap:6px 8px; align-items:center;
+                font:11px/1.35 var(--mono); color:var(--ink-2); margin:4px 0}
+#waterkey .wrow .hint{grid-column:1 / -1; margin:0}
 #slegal .lg.shut b{color:var(--crit)}
 #slegal .lg .sz{font:700 13px/1 var(--display); color:var(--ink)}
 #slegal .lg .ln{color:var(--muted); font-size:11px}
@@ -1466,6 +1470,20 @@ const CHART_STYLE = {
      interpolation between soundings that may be decades old. Mixing them into
      one indistinguishable set of blue lines is how a model ends up being read
      as a chart. */
+  /* The water itself, as satellite pictures fetched through the server and
+     drawn as image sources: no tiles, no key, one picture per box per day.
+     Fixed colour scales, so a colour means the same thing every day; the
+     legend under the menu says what. */
+  sst: {
+    kind: 'image', lazy: true, water: true,
+    swatch: 'linear-gradient(90deg,#2c1e8f,#2fb2c8,#f5e93a,#c92a1c)',
+    minzoom: 0
+  },
+  chl: {
+    kind: 'image', lazy: true, water: true,
+    swatch: 'linear-gradient(90deg,#2c1e8f,#2fb2c8,#5fd35f,#f5e93a)',
+    minzoom: 0
+  },
   bathy: {
     kind: 'line', lazy: true, model: true,
     colour: 'rgba(140,163,168,.75)', line_token: '--chart-line-2',
@@ -1555,6 +1573,7 @@ const CHART_STYLE = {
 // come from the on-demand grid and follow you to Montauk and the shelf, so
 // making them the default is what makes the wider water look charted at all.
 const CHART_ON = {depth_area:false, rocks:false, wrecks:true, obstructions:false,
+                  sst:false, chl:false,
                   turbulence:true, kelp:false, seabed:false,
                   // Soundings are the same information as contours at ten times
                   // the weight, so they stay on demand.
@@ -1808,19 +1827,33 @@ async function loadCharts(){
     return;
   }
 
-  box.innerHTML = '<h4>Chart overlays</h4>' + meta.layers.map(l => {
+  // The water pictures ride in the same menu as the chart layers, after
+  // them, so one list holds everything the map can draw.
+  let water = {layers: []};
+  try{ water = await (await fetch('/api/water')).json(); }catch(_){}
+  WATER_META = water;
+  const waterLayers = (water.layers || []).map(w => ({name: w.name, label: w.label, url: null, water: true}));
+  const all = meta.layers.concat(waterLayers);
+  box.innerHTML = '<h4>Chart overlays</h4>' + all.map(l => {
     const st = CHART_STYLE[l.name] || {};
     return `<label title="${l.label}">
-      <span class="sw${st.kind==='fill'?' ramp':''}"
+      <span class="sw${st.kind==='fill'||st.kind==='image'?' ramp':''}"
             style="background:${st.swatch||'#8CA3A8'}"></span>
       <input type="checkbox" data-layer="${l.name}" ${CHART_ON[l.name]?'checked':''}>
-      ${l.name}<span class="cnt" id="cnt-${l.name}"></span></label>`;
-  }).join('') + depthLegend() + heatSection()
+      ${l.water ? l.label.split(' — ')[0].toLowerCase() : l.name}<span class="cnt" id="cnt-${l.name}"></span></label>`;
+  }).join('') + depthLegend() + waterLegend(water) + heatSection()
     + `<p class="hint">NOAA ENC · public domain<br>click any feature for detail</p>`;
+
+  for (const l of waterLayers){
+    const st = CHART_STYLE[l.name];
+    if (!st || !MAP_READY) continue;
+    if (!CHART_ON[l.name] || map.getSource('c-' + l.name)) continue;
+    await addWaterLayer(l.name);
+  }
 
   for (const l of meta.layers){
     const st = CHART_STYLE[l.name];
-    if (!st) continue;
+    if (!st || st.kind === 'image') continue;
     if (MAP_READY && map.getSource('c-' + l.name)) continue;
       // Soundings are 26,000 points and 4 MB. Downloading them on boot to draw
       // nothing -- they are off by default and only render past zoom 13 -- is
@@ -1952,6 +1985,13 @@ async function loadCharts(){
       const name = cb.dataset.layer;
       const id = 'c-' + name;
       CHART_ON[name] = cb.checked;
+      // A water picture is an image source, added on demand, not GeoJSON.
+      if ((CHART_STYLE[name] || {}).kind === 'image') {
+        if (cb.checked && MAP_READY && !map.getSource(id)) { addWaterLayer(name); return; }
+        if (MAP_READY && map.getLayer(id))
+          map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none');
+        return;
+      }
       // A lazy layer has no source until now, so switching it on is what
       // fetches it. Show that something is happening: 4 MB on a boat is not
       // instant, and a checkbox that does nothing for ten seconds reads broken.
@@ -1969,6 +2009,39 @@ async function loadCharts(){
         if (MAP_READY && map.getLayer(lid))
           map.setLayoutProperty(lid, 'visibility', cb.checked ? 'visible' : 'none');
     });
+}
+
+let WATER_META = {layers: []};
+
+async function addWaterLayer(name){
+  const b = (WATER_META && WATER_META.bbox) || [41.0, -72.2, 41.9, -70.4];   // s, w, n, e
+  const [s, w, n, e] = b;
+  const url = `/water/${name}.png?bbox=${s},${w},${n},${e}`;
+  const cnt = document.querySelector('#cnt-' + name);
+  if (cnt) cnt.textContent = '…';
+  // Fetch first so a cloudy day (or no signal) is a message, not a blank
+  // rectangle that reads as "no plankton".
+  let r;
+  try { r = await fetch(url); } catch (_) { if (cnt) cnt.textContent = 'offline'; return; }
+  if (!r.ok){ if (cnt) cnt.textContent = 'no picture'; return; }
+  const day = r.headers.get('X-Water-Date') || '';
+  if (cnt) cnt.textContent = day;
+  if (map.getSource('c-' + name)) return;
+  map.addSource('c-' + name, {type: 'image', url,
+    coordinates: [[w, n], [e, n], [e, s], [w, s]]});
+  map.addLayer({id: 'c-' + name, type: 'raster', source: 'c-' + name,
+    layout: {visibility: CHART_ON[name] ? 'visible' : 'none'},
+    paint: {'raster-opacity': 0.55, 'raster-fade-duration': 0}}, ABOVE_BASEMAP());
+}
+
+function waterLegend(water){
+  const rows = (water.layers || []).map(w => {
+    const st = CHART_STYLE[w.name] || {};
+    return `<div class="wrow"><span class="sw ramp" style="background:${st.swatch||''}"></span>` +
+      `<span>${tesc(w.label.split(' — ')[0])} · ${w.scale[0]}–${w.scale[1]} ${tesc(w.units)}</span>` +
+      `<div class="hint">${tesc(w.note)}</div></div>`;
+  }).join('');
+  return rows ? `<div id="waterkey">${rows}</div>` : '';
 }
 
 function depthLegend(){

@@ -853,6 +853,34 @@ class Handler(BaseHTTPRequestHandler):
                 return self._static(url.path[len("/static/"):])
             if url.path.startswith("/photos/"):
                 return self._photo(url.path[len("/photos/"):])
+            if url.path == "/api/water":
+                # The two satellite pictures the map can draw, and their
+                # scales, so the legend says what a colour means.
+                from . import water
+                return self._send_json({"layers": [
+                    {"name": k, **{kk: vv for kk, vv in v.items()}}
+                    for k, v in water.LAYERS.items()], "bbox": water.DEFAULT_BBOX})
+            if url.path.startswith("/water/"):
+                # /water/sst.png?bbox=s,w,n,e -- fetched through this server so
+                # the phone talks to nothing but the tailnet, cached per day
+                # so the boat has yesterday's picture without signal.
+                from . import water
+                layer = url.path[len("/water/"):].removesuffix(".png")
+                try:
+                    bbox = [float(v) for v in q.get("bbox", [",".join(map(str, water.DEFAULT_BBOX))])[0].split(",")]
+                    if len(bbox) != 4:
+                        raise ValueError("bbox=south,west,north,east")
+                    img = water.fetch(layer, bbox)
+                except (ValueError, RuntimeError) as exc:
+                    return self._send_json({"error": str(exc)}, 502 if isinstance(exc, RuntimeError) else 400)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(img["bytes"])))
+                self.send_header("X-Water-Date", img["date"])
+                self.send_header("Cache-Control", "private, max-age=3600")
+                self.end_headers()
+                self.wfile.write(img["bytes"])
+                return
             if url.path == "/api/place":
                 # A place said in prose, resolved to a public coordinate.
                 from . import gazetteer as gaz

@@ -2689,6 +2689,91 @@ class Gazetteer(unittest.TestCase):
         self.assertIn('url.path == "/api/place"', srv)
 
 
+class WaterPictures(unittest.TestCase):
+    """SST and chlorophyll drawn on the map, fetched through the server and
+    cached by day. Tested with a fake fetcher: the request built, the box
+    refused, the cache hit, the walk back over empty days, and that a
+    non-image answer is never cached as a picture."""
+
+    PNG = b"\x89PNG\r\n\x1a\n" + bytes(32)
+
+    def test_the_requests_name_the_dataset_the_day_the_box_and_a_fixed_scale(self):
+        from datetime import date
+        from tiderace import water
+        u = water.url_for("sst", (41.0, -72.2, 41.9, -70.4), date(2026, 9, 3))
+        self.assertIn("jplMURSST41.transparentPng", u)
+        self.assertIn("(2026-09-03T09:00:00Z)", u)
+        self.assertIn("(41.0):(41.9)", u)
+        self.assertIn("colorBar=Rainbow2", u)
+        self.assertIn("12.8%7C26.7", u, "55-80 F in Celsius, fixed, so a colour means one thing")
+        c = water.url_for("chl", (41.0, -72.2, 41.9, -70.4), date(2026, 9, 3))
+        self.assertIn("coastwatch.noaa.gov", c, "the dataset moved; the old host redirects")
+        self.assertIn("(41.9):(41.0)", c, "this grid's latitude runs north to south")
+        self.assertIn("Log%7C0.1%7C10", c)
+        with self.assertRaises(ValueError):
+            water.url_for("sss", (41.0, -72.2, 41.9, -70.4), date(2026, 9, 3))
+
+    def test_a_box_that_is_not_one_piece_of_water_is_refused(self):
+        from tiderace import water
+        for bad in ((41.9, -72.2, 41.0, -70.4), (0, 0, 10, 10), (41, -80, 41.5, -70)):
+            with self.assertRaises(ValueError):
+                water.check_bbox(bad)
+        self.assertEqual(water.check_bbox((41.0, -72.2, 41.9, -70.4)), (41.0, -72.2, 41.9, -70.4))
+
+    def test_yesterday_is_fetched_once_and_then_read_from_disk(self):
+        import tempfile
+        from datetime import date
+        from tiderace import water
+        calls = []
+        get = lambda u: (calls.append(u), self.PNG)[1]
+        with tempfile.TemporaryDirectory() as d:
+            a = water.fetch("sst", (41.0, -72.2, 41.9, -70.4), date(2026, 9, 5), root=d, _get=get)
+            b = water.fetch("sst", (41.0, -72.2, 41.9, -70.4), date(2026, 9, 5), root=d, _get=get)
+        self.assertEqual(a["date"], "2026-09-04", "MUR lags a day")
+        self.assertFalse(a["cached"]); self.assertTrue(b["cached"])
+        self.assertEqual(a["bytes"], b["bytes"], )
+        self.assertEqual(len(calls), 1, "the second read must not hit ERDDAP")
+
+    def test_an_empty_day_is_walked_past_and_a_non_image_is_never_cached(self):
+        import os
+        import tempfile
+        from datetime import date
+        from tiderace import water
+        def get(u):
+            if "2026-09-04" in u:
+                raise RuntimeError("no data")
+            if "2026-09-03" in u:
+                return b"<html>error</html>"
+            return self.PNG
+        with tempfile.TemporaryDirectory() as d:
+            r = water.fetch("chl", (41.0, -72.2, 41.9, -70.4), date(2026, 9, 5), root=d, _get=get)
+            self.assertEqual(r["date"], "2026-09-02")
+            self.assertEqual(sorted(os.listdir(d)), [os.path.basename(water.cache_path(
+                "chl", water.check_bbox((41.0, -72.2, 41.9, -70.4)), date(2026, 9, 2)))],
+                "only the real picture is on disk")
+            with self.assertRaises(RuntimeError):
+                water.fetch("sst", (41.0, -72.2, 41.9, -70.4), date(2026, 9, 5), root=d,
+                            _get=lambda u: b"not a png")
+
+    def test_the_server_and_the_page_draw_them_through_the_proxy(self):
+        import pathlib
+        root = pathlib.Path(__file__).parent
+        srv = strip_py_comments((root / "tiderace" / "server.py").read_text())
+        self.assertIn('url.path.startswith("/water/")', srv)
+        self.assertIn('url.path == "/api/water"', srv)
+        self.assertIn('"X-Water-Date"', srv, "the page shows which day the picture is")
+        page = strip_comments((root / "tiderace" / "web" / "index.html").read_text())
+        fn = page.split("async function addWaterLayer(name){")[1].split("\nfunction ")[0]
+        self.assertIn("type: 'image'", fn)
+        self.assertIn("/water/${name}.png?bbox=", fn, "through the server, never ERDDAP from the phone")
+        self.assertIn("'no picture'", fn, "a cloudy day is a message, not a blank")
+        style = page.split("const CHART_STYLE = {")[1].split("\n};")[0]
+        for k in ("sst", "chl"):
+            self.assertIn("  %s: {" % k, style)
+        on = page.split("const CHART_ON = {")[1].split("};")[0]
+        self.assertIn("sst:false, chl:false", on, "off by default: a picture over the chart is a choice")
+
+
 class DepthLayer(unittest.TestCase):
     def setUp(self):
         from tiderace import charts
