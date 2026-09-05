@@ -131,25 +131,39 @@ This is a decision, not an oversight. Do not "fix" it.
 claimed:
 
 - **loggable** — all 35 species. Costs nothing, claims nothing.
-- **scored** — the 14 in `score.PROFILES`, temperature bands grounded in cited
-  literature, plus 4 offshore in `pelagic.PROFILES` (bluefin, yellowfin,
-  bigeye, mahi) under their own scorer. Adding one means doing that research,
-  not guessing. Six until 2 September 2026, when the inshore and nearshore
-  species got the same treatment; the other 17 sit in `score.NOT_PROFILED`
-  with a reason each, and for 11 of them the reason is that somebody read the
-  literature and the answer was no. An absence and a refusal are different
-  facts.
+- **scored** — 34 of the 35, on two scorers, each profile declaring which
+  tier of claim its bands are. **this water**: the fourteen inshore fish whose
+  bands came from this bay's own surveys and the GSO trawl. **regional**:
+  bluefin and mako (tagged off Cape Cod and the northeastern US), monkfish
+  (a Narragansett Bay figure of its own). **general biology**: the species'
+  published biology from wherever it was studied -- cod, pollock, haddock,
+  cobia, Spanish mackerel and northern kingfish on the bay scorer, weighting
+  only temperature and season because nothing published says what current
+  they want here; eleven offshore fish on the pelagic scorer. Matt set the
+  rule on 5 September 2026: "don't invent any number from nothing, but we
+  are inventing forecasts based on fact." So a band from another ocean's
+  literature is allowed, cited to the document and page, and labelled on the
+  card; a band from nowhere is not. Adding a species means finding the
+  document, not guessing. The card says the tier; the slider strip says
+  "unvalidated here" for anything not this water. Only grey triggerfish is
+  refused: the one figure reachable is an AquaMaps model envelope, and a
+  model's output is not a measurement.
 
-  The offshore scorer (3 September 2026) keeps two tiers of claim apart on
-  purpose: the bands in `pelagic.py` each name the document and page they
-  came from (NOAA's 2017 HMS EFH Amendment 10; SAFMC's 2003 Dolphin Wahoo
-  FMP) and the season months are OBIS records; the weights are priors no
-  document can give and every score carries `unvalidated`. Bigeye has no SST
-  band and gets none -- reported, not scored, like depth inshore. Mahi's weed
-  lines are unmeasurable and the score says so. Positions are the sharpest
-  temperature breaks in the MUR grid and the steepest bottom in the DEM grid,
-  one candidate per feature; the wall's steepness carries the structure term
-  because a candidate found on the wall is 0 nm from it by construction.
+  The offshore scorer (3 September 2026) keeps the same two tiers apart:
+  the bands in `pelagic.py` each name the document and page they came from
+  (NOAA's 2017 HMS EFH Amendment 10; SAFMC's 2003 Dolphin Wahoo FMP; Vaudo
+  et al. 2016 for mako) and the season months are OBIS records; the weights
+  are priors no document can give and every score carries `unvalidated`.
+  Bigeye and thresher have no SST band and get none -- reported, not scored,
+  like depth inshore. Blue marlin and porbeagle have too few records here
+  for a season and carry none. Mahi's and wahoo's weed lines are
+  unmeasurable and the score says so. Positions are the sharpest
+  temperature breaks in the MUR grid and the steepest bottom in the DEM
+  grid, one candidate per feature; a fish tied to neither gets both as
+  sample points, labelled as such. The wall's steepness carries the
+  structure term because a candidate found on the wall is 0 nm from it by
+  construction.
+
 - **regulated** — only where the rule was actually read out of a RIDEM or DMF
   notice. **Scored no longer implies regulated**, and that is deliberate: 8 of
   the 14 have no transcribed rule, because the only way to keep the old

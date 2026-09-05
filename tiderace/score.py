@@ -69,6 +69,38 @@ Second cohort, consulted 2026-09-02, for the inshore and nearshore species:
            dem.ri.gov/.../surveys/Albie_Bonito
   [ASGA-LT] Calabrese (Univ. of Massachusetts Dartmouth / American Saltwater
            Guides Association) 2023, Little Tunny literature review.
+  [NE-124] Lough 1999, EFH Source Document: Atlantic Cod, NOAA Tech Memo
+           NMFS-NE-124. Adults "generally < 10C" (habitat table); juveniles
+           "mostly found in temperatures of 4-7C" in spring, "7 and 12C" in fall;
+           "Only one adult cod was collected in a survey of Narragansett Bay by
+           the Rhode Island Division of Fish and Wildlife, 1990-1996."
+  [NE-131] Cargnelli et al. 1999, EFH Source Document: Pollock, NMFS-NE-131.
+           Adults "found at temperatures of 1-12C ... in spring most adult pollock
+           were found at 6-7C"; "A total of only 336 pollock, all juveniles, were
+           caught in Narragansett Bay from 1990-1996 ... 97% were caught in spring".
+  [NE-128] Cargnelli et al. 1999, EFH Source Document: Haddock, NMFS-NE-128.
+           Adults "found at temperatures of 0-13C (Hardy 1978), but are most common
+           at 2-9C (Bigelow and Schroeder 1953; Colton 1972; Waiwood and Buzeta
+           1989)"; in Narragansett Bay "listed as 'rare' (Jury et al. 1994)".
+  [NE-127] Steimle et al. 1999, EFH Source Document: Goosefish, NMFS-NE-127.
+           Adults "collected at bottom water temperatures between 0-24C and were most
+           abundant between 4-14C"; "In Narragansett Bay, adult goosefish were only
+           collected in the spring and summer at temperatures between 7-14C".
+  [CREAR2020] Crear et al. 2020, Frontiers in Marine Science 7:579135, cobia in
+           Chesapeake Bay: "Over the entirety of the summer cobia preferred
+           22.5-28C"; arrival months 21.5-27C, departure 24.5-31C; tolerate 32C.
+  [SAFMC-SM] SAFMC 2018, Spanish Mackerel Informational Document, April 2018,
+           General Biology: range "from southern New England to the Florida Keys";
+           eggs and larvae "at temperatures between 20C (68F) and 32C (89.6F)";
+           juveniles "at temperatures greater than 25C (77F)"; adults "moving from
+           wintering areas of south Florida and Mexico to more northern latitudes
+           in spring and summer". The council's species page: "preferring water
+           temperatures above 68F".
+  [OBIS-IN] OBIS occurrence records within 40 nm of 41.45N 71.40W, fetched
+           5 September 2026: cod 402 (Mar 140, Apr 96, Feb 45, Jan 30); monkfish
+           371 (Mar 67, Oct 61, Feb 59, Sep 47); pollock 83 (Sep 21, Apr 12, Oct
+           12); haddock 76 (Sep 20, Aug 14, Oct 12); northern kingfish 41 (Jun-Nov,
+           Oct 12, Sep 8); Spanish mackerel 1 (Aug); cobia 4, no months.
   [COLLIE] Collie, Wood & Jeffries 2008, Can. J. Fish. Aquat. Sci.
            65:1352-1365 -- the GSO trawl series. Its 25 species are 96% of
            every animal caught in the series, out of 130 recorded.
@@ -396,6 +428,18 @@ class Profile:
     # scores 0.15 (charted, and not what this fish uses).
     bottom: dict[str, float] | None = None
     bottom_claim: str = ""
+    # Which tier of claim the bands are. Matt, 5 September 2026: "we should be
+    # able to make guesstimates based on general species knowledge and bio,
+    # even if there's no info on them in the bay area ... don't invent any
+    # number from nothing, but we are inventing forecasts based on fact."
+    # "this water" is the GSO trawl and this bay's surveys; "regional" is
+    # southern New England and the Gulf of Maine; "general biology" is the
+    # species' published biology from wherever it was studied. A general
+    # profile weights only the terms its sources speak to -- temperature and
+    # season -- because nothing published says what current these fish want
+    # here, and the card says which tier it is reading.
+    basis: str = "this water"
+    basis_claim: str = ""
 
 
 PROFILES: dict[str, Profile] = {
@@ -979,6 +1023,122 @@ PROFILES: dict[str, Profile] = {
               "rising — at Whale Rock the 2020-2024 mean is 4.82 against a "
               "1.92 long-term mean, the 87th percentile of 65 years.",
     ),
+    # ---- general-biology tier, 5 September 2026 -----------------------------
+    # Bands from the species' federal habitat documents, months from the
+    # records within 40 nm, weights on temperature and season only, and each
+    # one saying how far from this water its evidence was gathered.
+    "cod": Profile(
+        key="cod", name="Atlantic Cod",
+        months=(11, 12, 1, 2, 3, 4), peak_months=(2, 3, 4),
+        # [NE-124] adults "generally < 10C"; juveniles 4-7C spring, 7-12C fall.
+        temp=(32, 36, 50, 55),
+        current=(0.6, 0.4, 0.6, 3.0), light={},
+        weights={"temp": 0.6, "season": 0.4},
+        temp_claim=("adults 'generally < 10C' and juveniles 4-7C in spring, 7-12C in fall "
+                    "[NE-124]: full credit 36-50F; zero at freezing and at 55F, one degree "
+                    "above the fall juvenile top, both edges derived and said so"),
+        notes=("Effectively absent from the bay itself: one adult in seven years of the "
+               "RIDFW trawl [NE-124]. This scores the cold months off the south shore and "
+               "the mouth, where the records are: 402 within 40 nm, March highest [OBIS-IN]."),
+        basis="general biology",
+        basis_claim="Gulf of Maine and Georges Bank surveys [NE-124]; this bay has one record",
+    ),
+    "pollock": Profile(
+        key="pollock", name="Pollock",
+        months=(3, 4, 5, 9, 10, 11), peak_months=(4, 9, 10),
+        # [NE-131] adults 1-12C, most 6-7C in spring; avoid > 11C and < 3C.
+        temp=(34, 37, 52, 57),
+        current=(0.6, 0.4, 0.6, 3.0), light={},
+        weights={"temp": 0.6, "season": 0.4},
+        temp_claim=("adults 1-12C, most at 6-7C in spring, and 'they tend to avoid "
+                    "temperatures > 11C and < 3C' [NE-131]: full credit 37-52F, zero at "
+                    "34 and 57F"),
+        notes=("Only juveniles have been taken in the bay, 97% of them in spring [NE-131]; "
+               "83 records within 40 nm, September and April highest [OBIS-IN]. A fish of "
+               "the rocks outside the bay in spring and autumn."),
+        basis="general biology",
+        basis_claim="Gulf of Maine and Scotian Shelf literature [NE-131]",
+    ),
+    "haddock": Profile(
+        key="haddock", name="Haddock",
+        months=(3, 4, 8, 9, 10), peak_months=(9,),
+        # [NE-128] adults 0-13C (Hardy 1978), most common 2-9C.
+        temp=(32, 36, 48, 55),
+        current=(0.6, 0.4, 0.6, 3.0), light={},
+        weights={"temp": 0.6, "season": 0.4},
+        temp_claim=("adults 0-13C, 'most common at 2-9C' [NE-128]: full credit 36-48F, "
+                    "zero at freezing and 55F"),
+        notes=("'Rare' in Narragansett Bay [NE-128]; 76 records within 40 nm, September "
+               "highest [OBIS-IN]. Adults 'far more abundant offshore than inshore'."),
+        basis="general biology",
+        basis_claim="Georges Bank and Gulf of Maine literature [NE-128]; rare in this bay",
+    ),
+    "monkfish": Profile(
+        key="monkfish", name="Monkfish",
+        months=(2, 3, 4, 5, 6, 7, 8, 9, 10), peak_months=(3, 4, 9, 10),
+        # [NE-127] adults 0-24C, most abundant 4-14C; in this bay 7-14C.
+        temp=(32, 39, 57, 75),
+        current=(0.6, 0.4, 0.6, 3.0), light={},
+        weights={"temp": 0.6, "season": 0.4},
+        temp_claim=("adults 0-24C, 'most abundant between 4-14C' [NE-127]: full credit "
+                    "39-57F, zero at freezing and 75F"),
+        notes=("The one groundfish this bay's own survey speaks to: 'adult goosefish were "
+               "only collected in the spring and summer at temperatures between 7-14C' "
+               "[NE-127]. 371 records within 40 nm, March and October highest [OBIS-IN]."),
+        basis="regional",
+        basis_claim="NEFSC surveys with a Narragansett Bay figure of its own [NE-127]",
+    ),
+    "cobia": Profile(
+        key="cobia", name="Cobia",
+        months=(7, 8, 9), peak_months=(8,),
+        # [CREAR2020] summer preference 22.5-28C; arrival 21.5C; tolerate 32C.
+        temp=(68, 72, 82, 90),
+        current=(0.6, 0.4, 0.6, 3.0), light={},
+        weights={"temp": 0.6, "season": 0.4},
+        temp_claim=("summer preference 22.5-28C in Chesapeake Bay [CREAR2020]: full credit "
+                    "72-82F; zero at 68F, two degrees under the 21.5C arrival preference, "
+                    "and at 90F, the 32C tolerance limit [CREAR2020] -- the cold edge is "
+                    "derived and said so"),
+        notes=("Four records within 40 nm and no months [OBIS-IN]; the months are where "
+               "this bay's water reaches the band (GSO climatology: above 72F from July). "
+               "A Chesapeake fish drifting north; the council puts the range at Virginia "
+               "to Florida."),
+        basis="general biology",
+        basis_claim="Chesapeake Bay tagging and physiology [CREAR2020]; four records here",
+    ),
+    "spanish_mackerel": Profile(
+        key="spanish_mackerel", name="Spanish Mackerel",
+        months=(7, 8, 9), peak_months=(8, 9),
+        # [SAFMC-SM] above 68F; eggs and larvae 20-32C, the top taken as the top.
+        temp=(68, 68, 90, 90),
+        current=(0.6, 0.4, 0.6, 3.0), light={},
+        weights={"temp": 0.6, "season": 0.4},
+        temp_claim=("a step: 'preferring water temperatures above 68F' [SAFMC-SM species "
+                    "page], and the warm edge is the 32C top of the egg and larval range "
+                    "[SAFMC-SM]; no adult preference inside it is published"),
+        notes=("Range 'from southern New England to the Florida Keys', adults 'moving ... to "
+               "more northern latitudes in spring and summer' [SAFMC-SM]. One record within "
+               "40 nm, in August [OBIS-IN]; months are where the bay is above 68F."),
+        basis="general biology",
+        basis_claim="South Atlantic council biology; one record here [SAFMC-SM, OBIS-IN]",
+    ),
+    "northern_kingfish": Profile(
+        key="northern_kingfish", name="Northern Kingfish",
+        months=(6, 7, 8, 9, 10, 11), peak_months=(9, 10),
+        # [ASMFC-SCI ch.8] 7.8-35.8C tolerance envelope, avoidance above 31C.
+        temp=(46, 46, 88, 96),
+        current=(0.6, 0.4, 0.6, 3.0), light={},
+        weights={"temp": 0.3, "season": 0.7},
+        temp_claim=("an envelope, not a band, and weighted accordingly: adults tolerate "
+                    "7.8-35.8C with avoidance above 31C [ASMFC-SCI ch.8], so full credit "
+                    "46-88F, ramping off above; this bay never leaves the envelope in "
+                    "season, which is why season carries the weight"),
+        notes=("41 records within 40 nm, June to November, October and September highest "
+               "[OBIS-IN]. A fish of the surf and the sand; the envelope says when the "
+               "water is fine for it, the records say when it is here."),
+        basis="general biology",
+        basis_claim="ASMFC sciaenid habitat document, envelope only [ASMFC-SCI ch.8]",
+    ),
 }
 
 
@@ -995,13 +1155,10 @@ PROFILES: dict[str, Profile] = {
 # have an opinion, and why.
 
 NOT_PROFILED: dict[str, str] = {
-    "northern_kingfish": (
-        "Envelope, no band. [ASMFC-SCI ch.8] gives adults a 7.8-35.8C "
-        "tolerance and an avoidance limit above 31C, which this bay has never "
-        "reached -- a trapezoid built from those would read 1.0 every day of "
-        "the season and inform nothing. The one narrow figure in the chapter, "
-        "rarely seen below 20C, is explicitly about water south of Cape "
-        "Hatteras. Nothing in it is about Rhode Island."),
+    # The one refusal left, 5 September 2026, and it is the rule Matt set that
+    # day: "don't invent any number from nothing". Every other refused fish
+    # had a published band somewhere; this one has an AquaMaps envelope on
+    # FishBase, which is a model's output and not a measurement.
     "summer_triggerfish": (
         "No source about this water. Grey triggerfish reach here as warm-water "
         "strays; the management literature is South Atlantic and Gulf of "
@@ -1009,50 +1166,6 @@ NOT_PROFILED: dict[str, str] = {
         "everything the GSO trawl has caught in this bay since 1959 [COLLIE]. "
         "A band would be a Mid-Atlantic number wearing a Narragansett Bay "
         "label."),
-    "spanish_mackerel": (
-        "No source about this water, same shape as grey triggerfish. Caught "
-        "here most years and described nowhere here; the available habitat "
-        "documents are South Atlantic Fishery Management Council material "
-        "about the core of the range, not its northern edge."),
-    "cobia": (
-        "No source about this water. Rare here and getting less so, which is "
-        "a trend rather than a habitat description -- and a trend is not "
-        "something a temperature band can be built out of. The literature is "
-        "about Virginia southward."),
-    "cod": (
-        "Effectively gone from this water. [COLLIE] analysed the 25 species "
-        "that are 96% of every animal the GSO trawl has caught here since "
-        "1959, out of 130 recorded, and cod is not one of them; the shift the "
-        "paper documents -- benthic to pelagic, cool-water to warm-water, "
-        "sharply after 1980 -- is a shift away from exactly this group. "
-        "Scoring cod would send a boat looking for a fishery the longest "
-        "continuous record of this bay does not contain. Not the same as "
-        "'absent': the 25 leave 4% unaccounted and one still turns up. Log it "
-        "if it does."),
-    "pollock": (
-        "Effectively gone from this water, on the same [COLLIE] evidence as "
-        "cod. A late-autumn fish of the rocks outside the bay if anywhere."),
-    "monkfish": (
-        "Effectively gone from this water, on the same [COLLIE] evidence. "
-        "Goosefish appear in the EFH literature as a Gulf of Maine and "
-        "Georges Bank animal; nothing describes a Narragansett Bay fishery."),
-    # The offshore fourteen, refused together and for one structural reason
-    # rather than for want of literature. Spelled out at the end of the module
-    # docstring: every prospected position is inside the bay and every term
-    # here that carries signal is built on bay tidal current.
-    **{k: ("Wrong scorer, not missing research. Every position the forecast "
-           "scores is prospected inside prospect.CANDIDATE_BBOX -- the bay and "
-           "the south shore, north of 41.30 N -- and this model's load-"
-           "bearing terms are bay tidal current -- a CO-OPS current-station "
-           "prediction, plus tide-stage and spring-tide modifiers. A profile "
-           "here would score this fish on an inshore ebb rip forty "
-           "miles from the nearest one. Offshore needs its own scorer keyed "
-           "on SST break gradient and canyon structure. Four fish have that "
-           "scorer now -- bluefin, yellowfin, bigeye and mahi, in pelagic.py, "
-           "each band cited -- and this one waits on the same reading.")
-       for k in ("albacore",
-                 "wahoo", "swordfish", "blue_marlin", "white_marlin",
-                 "mako", "thresher", "porbeagle", "blue_shark", "haddock")},
 }
 
 

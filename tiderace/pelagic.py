@@ -85,6 +85,65 @@ SOURCES = {
              "Jul-Oct, 111 in August and 106 in September. Bigeye: 1,298 records, "
              "Jul-Oct, 120 in September and 97 in October. Records are where people "
              "were and reported, not where fish were; they say when, not how many."),
+    "A10ALB": ("NOAA Fisheries, 2017. Final Amendment 10 (as A10), Section 6.2.1 North "
+               "Atlantic albacore tuna, life history, p. 99: 'generally found in surface "
+               "waters with temperatures between 15.6 and 19.4 C, although larger "
+               "individuals have a wider depth and temperature range (13.5 to 25.2 C). "
+               "Albacore may dive into cold water (9.5 C) for short periods'; EFH for "
+               "juveniles and adults 'offshore, pelagic habitats ... from the outer edge of "
+               "the U.S. EEZ through Georges Bank to pelagic habitats south of Cape Cod'."),
+    "A10SWO": ("NOAA Fisheries, 2017. Final Amendment 10 (as A10), Section 6.4 swordfish, "
+               "pp. 128-129: 'epipelagic to meso-pelagic, and are usually found in waters "
+               "warmer than 13 C. Their optimum temperature range is believed to be 18 to "
+               "22 C, but they will dive into 5 to 10 C waters at depths of up to 650 m "
+               "(Nakamura 1985)'; 'Concentrations of adult swordfish seem to occur at ocean "
+               "fronts between water masses associated with boundary currents, including the "
+               "Gulf Stream (Arocha 1997; Govoni et al. 2003)'; 'another group moves from deep "
+               "water westward toward the continental shelf in summer (Palko et al. 1981)'."),
+    "A10BUM": ("NOAA Fisheries, 2017. Final Amendment 10 (as A10), Section 6.3 blue marlin, "
+               "pp. 134-138: 'epipelagic and oceanic, generally found in blue water with a "
+               "temperature range of 22 to 31 C'; 'Adults are found primarily in the tropics "
+               "within the 24 C isotherm, and make seasonal movements related to changes in "
+               "sea surface temperatures'."),
+    "A10WHM": ("NOAA Fisheries, 2017. Final Amendment 10 (as A10), Section 6.3 white marlin, "
+               "p. 142: 'It is believed that white marlin prefer slightly cooler temperatures "
+               "than blue marlin. Spawning occurs in early summer, in subtropical, deep "
+               "oceanic waters with high surface temperatures and salinities (20 to 29 C and "
+               "over 35 ppt)'; 'Concentrations of white marlin ... from Cape Hatteras to Cape "
+               "Cod are probably related to feeding rather than spawning (Mather et al. 1975)'."),
+    "VAUDO2016": ("Vaudo, J.J. et al., 2016. Vertical movements of shortfin mako sharks "
+                  "Isurus oxyrinchus in the western North Atlantic Ocean are strongly "
+                  "influenced by temperature. Marine Ecology Progress Series 547: 163-175. "
+                  "Eight sharks tagged off the northeastern United States and the Yucatan, "
+                  "587 days: temperatures below 15 C 'creating a lower depth limit to most "
+                  "diving'; 'sharks spent considerable time in waters ranging from 22 to "
+                  "27 C'; overall 5.2 to 31.1 C. Abstract as published by Inter-Research."),
+    "A10THR": ("NOAA Fisheries, 2017. Final Amendment 10 (as A10), Section 6.7 common "
+               "thresher, p. 224: 'coastal and oceanic waters, but according to Strasburg "
+               "(1958) it is more abundant near land'; the only temperature figure is a "
+               "nursery: 'nearshore waters of North Carolina consisted of temperatures from "
+               "18.2 to 20.9 C and at depths from 4.6 to 13.7 m (McCandless et al. 2002)'."),
+    "A10POR": ("NOAA Fisheries, 2017. Final Amendment 10 (as A10), Section 6.7 porbeagle, "
+               "p. 221: satellite-tagged sharks 'moved through temperatures ranging from 2 to "
+               "26 C, they spent 76 percent of the time in water ranging from 8 to 16 C. In "
+               "the spring and summer months, the sharks were epipelagic, swimming in the "
+               "upper 200 m'."),
+    "A10BSH": ("NOAA Fisheries, 2017. Final Amendment 10 (as A10), Section 6.7 blue shark, "
+               "p. 216: 'a pelagic species that inhabits clear, deep, blue waters, usually in "
+               "temperatures of 10 to 20 C, at depths greater than 180 m (Castro 1983)'."),
+    "SAFMC2003W": ("South Atlantic Fishery Management Council, 2003. Dolphin Wahoo FMP, "
+                   "Section 3.3.1, p. 97, wahoo: juveniles 'assumed' to inhabit 22-30 C water "
+                   "with Sargassum, 'no data exist'; adults 'pelagic in nature and generally "
+                   "associated with Sargassum (Manooch and Hogarth, 1983). Rathjen and Squire "
+                   "(1960) recorded wahoo in similar temperature ranges of 22 to 28 C and from "
+                   "May to October off the coast of North Carolina'."),
+    "OBIS2": ("OBIS occurrence records within 60 nm of 40.9 N, 71.3 W, fetched 5 September "
+              "2026. Albacore 1,481 records Jun-Dec, 148 in October and 129 in September. "
+              "Swordfish 1,826, May-Dec, 117 in September and 108 in August. Blue shark 750, "
+              "Apr-Nov, 82 in October and 81 in August. Mako 51, Jun-Oct, 19 in July. Thresher "
+              "26, Jun-Nov, 4 each in July and August. Wahoo 26, Jul-Oct, 13 in September. "
+              "White marlin 15, Jul-Sep, 9 in July. Blue marlin 2 and porbeagle 3: too few to "
+              "place a season, so those two carry none."),
     "A10YFT": ("NOAA Fisheries, 2017. Final Amendment 10 (as A10), Section 6.2.5 Atlantic "
                "yellowfin tuna, pp. 114-116: 'an epipelagic, oceanic species, found in "
                "water temperatures between 18 and 31 C'; 'generally confined to the "
@@ -120,6 +179,16 @@ class PelagicProfile:
     features_claim: str
     fish_depth_note: str                # where in the column the fish sit
     sources: tuple[str, ...]            # keys into SOURCES
+    # Which tier of claim the bands are. Matt, 5 September 2026: "we should
+    # be able to make guesstimates based on general species knowledge and
+    # bio, even if there's no info on them in the bay area ... don't invent
+    # any number from nothing, but we are inventing forecasts based on fact."
+    # So a band from another ocean's literature is allowed, and it is
+    # labelled: "regional" means measured in this part of the Atlantic,
+    # "general biology" means the species' published biology from wherever
+    # it was studied. The card says which. Nothing is "this water" offshore.
+    basis: str = "general biology"
+    basis_claim: str = ""
 
 
 PROFILES: dict[str, PelagicProfile] = {
@@ -159,6 +228,8 @@ PROFILES: dict[str, PelagicProfile] = {
             "[GALUARDI2012]; dives to 500-1,000 m. Bottom depth is where the "
             "shelf break is, not a band on the fish."),
         sources=("A10", "LAWSON2010", "GALUARDI2012", "BLOCK2001", "OBIS"),
+        basis="regional",
+        basis_claim="tagged off Cape Cod and on the Gulf of Maine grounds [GALUARDI2012, LAWSON2010]",
     ),
     "mahi": PelagicProfile(
         key="mahi", name="Mahi-mahi (Dolphinfish)",
@@ -195,6 +266,8 @@ PROFILES: dict[str, PelagicProfile] = {
             "is irrelevant except that spawning is 'over or beyond the continental "
             "shelf' [SAFMC2003 p. 96]."),
         sources=("SAFMC2003", "GIBBS1959", "BEARDSLEY1967", "HASSLER1977", "OBIS"),
+        basis="general biology",
+        basis_claim="Straits of Florida adults and Atlantic-wide range statements [SAFMC2003]",
     ),
     "yellowfin": PelagicProfile(
         key="yellowfin", name="Yellowfin Tuna",
@@ -223,6 +296,8 @@ PROFILES: dict[str, PelagicProfile] = {
             "'Generally confined to the upper 100 m' [A10YFT]; most time shallower "
             "than 50 m. Bottom depth matters only as the shelf break."),
         sources=("A10YFT", "OBIS"),
+        basis="general biology",
+        basis_claim="a species-wide range with no regional preference [A10YFT]",
     ),
     "bigeye": PelagicProfile(
         key="bigeye", name="Bigeye Tuna",
@@ -252,6 +327,149 @@ PROFILES: dict[str, PelagicProfile] = {
             "surface layer' [A10BET]. The canyon walls at the shelf break are the "
             "bottom this describes."),
         sources=("A10BET", "OBIS"),
+        basis="general biology",
+        basis_claim="'scientific knowledge of Atlantic bigeye tuna is limited' [A10BET]",
+    ),
+    "albacore": PelagicProfile(
+        key="albacore", name="Albacore Tuna",
+        sst=(f(13.5), f(15.6), f(19.4), f(25.2)),   # 56, 60, 67, 77
+        sst_claim=("Full credit 60-67 F: 'generally found in surface waters with "
+                   "temperatures between 15.6 and 19.4 C' [A10ALB]. Zero at 56 and 77 F, "
+                   "the wider range of larger individuals, 13.5 to 25.2 C [A10ALB]. The "
+                   "9.5 C dives are excursions, not habitat."),
+        months=(6, 7, 8, 9, 10, 11, 12), peak_months=(9, 10),
+        season_claim="1,481 records off Rhode Island, June to December, peak September-October [OBIS2].",
+        features=("shelf_break",),
+        features_claim=("EFH is 'offshore, pelagic habitats ... through Georges Bank to "
+                        "pelagic habitats south of Cape Cod' [A10ALB]: seaward of the shelf."),
+        fish_depth_note="Surface waters by the band's own wording [A10ALB]; deeper for larger fish.",
+        sources=("A10ALB", "OBIS2"), basis="general biology",
+        basis_claim="species-wide temperature statements, region unstated [A10ALB]",
+    ),
+    "wahoo": PelagicProfile(
+        key="wahoo", name="Wahoo",
+        sst=(f(22), f(22), f(28), f(30)),           # 72, 72, 82, 86
+        sst_claim=("Full credit 72-82 F: adults recorded 'in similar temperature ranges of 22 "
+                   "to 28 C and from May to October off the coast of North Carolina' "
+                   "[SAFMC2003W]. Nothing cited below 22 C, so the cold side is a step. Zero "
+                   "above 86 F, the 30 C top of the juvenile range the plan itself calls an "
+                   "assumption [SAFMC2003W]."),
+        months=(7, 8, 9, 10), peak_months=(9,),
+        season_claim="26 records off Rhode Island, July to October, half of them in September [OBIS2].",
+        features=("front", "floating_structure"),
+        features_claim=("Adults 'generally associated with Sargassum' [SAFMC2003W], which "
+                        "nothing here can see; the gear is set on weed lines and temperature "
+                        "breaks [SAFMC2003 Section 3.4], and the break is measurable."),
+        fish_depth_note="Pelagic; 'do not feed readily at the surface' [SAFMC2003W].",
+        sources=("SAFMC2003W", "SAFMC2003", "OBIS2"), basis="general biology",
+        basis_claim="North Carolina and Atlantic-wide statements [SAFMC2003W]",
+    ),
+    "swordfish": PelagicProfile(
+        key="swordfish", name="Swordfish",
+        sst=(f(13), f(18), f(22), f(30)),           # 55, 64, 72, 86
+        sst_claim=("Full credit 64-72 F: 'optimum temperature range is believed to be 18 to "
+                   "22 C' [A10SWO]. Zero at 55 F: 'usually found in waters warmer than 13 C' "
+                   "[A10SWO]. The warm edge is DERIVED: the source gives no upper limit, only "
+                   "spawning in surface water above 20-22 C in the tropics, so 30 C is taken "
+                   "as the warmest surface water the species is described in, and said so."),
+        months=(5, 6, 7, 8, 9, 10, 11, 12), peak_months=(8, 9, 10),
+        season_claim="1,826 records off Rhode Island, May to December, peak August-October [OBIS2].",
+        features=("front", "shelf_break"),
+        features_claim=("'Concentrations of adult swordfish seem to occur at ocean fronts between "
+                        "water masses' and a group 'moves from deep water westward toward the "
+                        "continental shelf in summer' [A10SWO]."),
+        fish_depth_note="Deep by day, 'coming to the surface at night (Palko et al. 1981)' [A10SWO].",
+        sources=("A10SWO", "OBIS2"), basis="general biology",
+        basis_claim="Atlantic-wide statements; the summer shelf movement is the western Atlantic [A10SWO]",
+    ),
+    "blue_marlin": PelagicProfile(
+        key="blue_marlin", name="Blue Marlin",
+        sst=(f(22), f(22), f(31), f(31)),           # 72, 72, 88, 88: a step
+        sst_claim=("A step: 'generally found in blue water with a temperature range of 22 to "
+                   "31 C' [A10BUM], a range with no preference inside it. 'Primarily in the "
+                   "tropics within the 24 C isotherm' [A10BUM], which off Rhode Island is a "
+                   "few weeks of late summer, if that."),
+        months=(), peak_months=(),
+        season_claim="Two records within 60 nm [OBIS2]: too few to place a season, so there is none.",
+        features=(),
+        features_claim="Nothing in the source ties adults to a front or the shelf; surface temperature is the whole claim [A10BUM].",
+        fish_depth_note="Epipelagic [A10BUM].",
+        sources=("A10BUM", "OBIS2"), basis="general biology",
+        basis_claim="a tropical fish described Atlantic-wide [A10BUM]",
+    ),
+    "white_marlin": PelagicProfile(
+        key="white_marlin", name="White Marlin",
+        sst=(f(20), f(20), f(29), f(29)),           # 68, 68, 84, 84: a step
+        sst_claim=("A step on the only figures given, 20 to 29 C, which are spawning water "
+                   "[A10WHM]; 'white marlin prefer slightly cooler temperatures than blue "
+                   "marlin' [A10WHM], and the band sits two degrees below blue marlin's."),
+        months=(7, 8, 9), peak_months=(7,),
+        season_claim="15 records off Rhode Island, July to September, nine of them in July [OBIS2].",
+        features=(),
+        features_claim=("Concentrations 'from Cape Hatteras to Cape Cod are probably related to "
+                        "feeding' [A10WHM]; the source names no front or bottom for that."),
+        fish_depth_note="Epipelagic, like the other billfish [A10WHM].",
+        sources=("A10WHM", "OBIS2"), basis="general biology",
+        basis_claim="spawning-water temperatures standing in for a preference [A10WHM]",
+    ),
+    "mako": PelagicProfile(
+        key="mako", name="Shortfin Mako",
+        sst=(f(15), f(22), f(27), f(31.1)),         # 59, 72, 81, 88
+        sst_claim=("Full credit 72-81 F: tagged makos 'spent considerable time in waters "
+                   "ranging from 22 to 27 C' [VAUDO2016]. Zero at 59 F: below 15 C was 'a "
+                   "lower depth limit to most diving' [VAUDO2016]. Zero at 88 F, the warmest "
+                   "water any tagged shark experienced, 31.1 C [VAUDO2016]."),
+        months=(6, 7, 8, 9, 10), peak_months=(7,),
+        season_claim="51 records off Rhode Island, June to October, 19 of them in July [OBIS2].",
+        features=("shelf_break",),
+        features_claim="EFH 'includes pelagic habitats seaward of the continental shelf break' [A10 s.6.7.4].",
+        fish_depth_note="Diel divers to 866 m; most time in the warm surface layer [VAUDO2016].",
+        sources=("VAUDO2016", "A10", "OBIS2"), basis="regional",
+        basis_claim="tagged off the northeastern United States [VAUDO2016]",
+    ),
+    "thresher": PelagicProfile(
+        key="thresher", name="Common Thresher",
+        sst=None,
+        sst_claim=("No band. The only temperature in the source is a North Carolina NURSERY, "
+                   "18.2 to 20.9 C for young of the year [A10THR]; an adult band built from a "
+                   "nursery would be a number from nothing. Surface temperature is reported "
+                   "and not scored, like bigeye."),
+        months=(6, 7, 8, 9, 10, 11), peak_months=(7, 8),
+        season_claim="26 records off Rhode Island, June to November, July and August highest [OBIS2].",
+        features=(),
+        features_claim=("'More abundant near land' [A10THR] is not a front or a wall. This "
+                        "profile scores on season and sea state alone, and the card says so."),
+        fish_depth_note="Coastal and oceanic [A10THR].",
+        sources=("A10THR", "OBIS2"), basis="general biology",
+        basis_claim="a distribution statement and a nursery figure, nothing more [A10THR]",
+    ),
+    "porbeagle": PelagicProfile(
+        key="porbeagle", name="Porbeagle",
+        sst=(f(2), f(8), f(16), f(26)),             # 36, 46, 61, 79
+        sst_claim=("Full credit 46-61 F: tagged porbeagles 'spent 76 percent of the time in "
+                   "water ranging from 8 to 16 C' [A10POR]. Zero at 36 and 79 F, the 2 to "
+                   "26 C they moved through [A10POR]. A cold-water shark; the band is above "
+                   "this bay's summer water only in spring."),
+        months=(), peak_months=(),
+        season_claim="Three records within 60 nm [OBIS2]: too few to place a season, so there is none.",
+        features=("shelf_break",),
+        features_claim="Epipelagic in spring and summer 'in the upper 200 m' [A10POR], over the shelf edge.",
+        fish_depth_note="Upper 200 m in spring and summer; 200-1,000 m in late autumn and winter [A10POR].",
+        sources=("A10POR", "OBIS2"), basis="general biology",
+        basis_claim="North Atlantic tagging, region unstated in the source [A10POR]",
+    ),
+    "blue_shark": PelagicProfile(
+        key="blue_shark", name="Blue Shark",
+        sst=(f(10), f(10), f(20), f(20)),           # 50, 50, 68, 68: a step
+        sst_claim=("A step: 'usually in temperatures of 10 to 20 C' [A10BSH], a range with no "
+                   "preference inside it and nothing cited outside it."),
+        months=(4, 5, 6, 7, 8, 9, 10, 11), peak_months=(8, 10),
+        season_claim="750 records off Rhode Island, April to November, August and October highest [OBIS2].",
+        features=("shelf_break",),
+        features_claim="'clear, deep, blue waters ... at depths greater than 180 m' [A10BSH]: the shelf edge and beyond.",
+        fish_depth_note="Pelagic, deep water [A10BSH].",
+        sources=("A10BSH", "OBIS2"), basis="general biology",
+        basis_claim="a cosmopolitan species described Atlantic-wide [A10BSH]",
     ),
 }
 
@@ -300,6 +518,15 @@ WEIGHTS: dict[str, dict[str, float]] = {
     "mahi":      {"sst": 0.40, "front": 0.35, "season": 0.25},
     "yellowfin": {"sst": 0.30, "structure": 0.35, "season": 0.35},
     "bigeye":    {"structure": 0.55, "season": 0.45},
+    "albacore":  {"sst": 0.45, "structure": 0.25, "season": 0.30},
+    "wahoo":     {"sst": 0.40, "front": 0.35, "season": 0.25},
+    "swordfish": {"sst": 0.35, "front": 0.25, "structure": 0.15, "season": 0.25},
+    "blue_marlin": {"sst": 0.7, "season": 0.3},      # season is absent: no records
+    "white_marlin": {"sst": 0.65, "season": 0.35},
+    "mako":      {"sst": 0.45, "structure": 0.25, "season": 0.30},
+    "thresher":  {"season": 1.0},
+    "porbeagle": {"sst": 0.50, "structure": 0.25, "season": 0.25},   # season absent
+    "blue_shark": {"sst": 0.45, "structure": 0.25, "season": 0.30},
 }
 
 UNMEASURABLE = {
@@ -351,7 +578,9 @@ def score(species: str, feat: dict) -> dict:
             terms["structure"] = min(1.0, sl / STRUCTURE_FULL_M_PER_KM) * math.exp(-d / STRUCTURE_REACH_NM)
     if "season" in weights:
         m = feat.get("month")
-        if m is None:
+        if not prof.months:
+            absent["season"] = "too few records here to place a season"
+        elif m is None:
             absent["season"] = "no date to place in the season"
         else:
             terms["season"] = (1.0 if m in prof.peak_months
@@ -407,7 +636,9 @@ def explain(res: dict, feat: dict) -> str:
         bits.append(a)
     for u in res.get("unmeasurable", []):
         bits.append(u)
-    return "; ".join(bits) + ". Unvalidated: no offshore trips in the log yet."
+    tier = ("general biology, not this water" if prof.basis == "general biology"
+            else "regional literature")
+    return "; ".join(bits) + ". Unvalidated: no offshore trips in the log yet; bands from %s." % tier
 
 
 # ---- the positions -----------------------------------------------------------
@@ -546,19 +777,32 @@ def candidates(species: str, sst_grid: dict | None = None, bathy_grid=None,
         ctx["buoy"] = None
 
     out: list[dict] = []
-    if "front" in prof.features:
+    # A fish whose literature ties it to neither a front nor the shelf break
+    # (blue marlin, white marlin, thresher) still needs somewhere for its
+    # water to be read. It gets both kinds of position as sample points, and
+    # the kind says so: the fronts and walls are where the water was sampled,
+    # not a claim that this fish uses them. Its scorer carries no front or
+    # structure term, so the position's own feature never enters its score.
+    sampled = not ({"front", "shelf_break"} & set(prof.features))
+    if "front" in prof.features or sampled:
         for b in fr:
-            out.append({"lat": b["lat"], "lon": b["lon"], "kind": "front",
-                        "notes": "temperature break: %.2f °F/nm at %.1f °F on %s"
-                                 % (b["grad_c_per_nm"] * 1.8, b["sst_c"] * 9 / 5 + 32,
-                                    ctx["sst_date"]),
+            out.append({"lat": b["lat"], "lon": b["lon"],
+                        "kind": "water sample" if sampled else "front",
+                        "notes": ("temperature break: %.2f °F/nm at %.1f °F on %s"
+                                  % (b["grad_c_per_nm"] * 1.8, b["sst_c"] * 9 / 5 + 32,
+                                     ctx["sst_date"]))
+                                 + (" — a place the water was read, not a feature this "
+                                    "fish is tied to" if sampled else ""),
                         "depth_ft": None, "private": False})
-    if "shelf_break" in prof.features:
+    if "shelf_break" in prof.features or sampled:
         for c in st:
-            out.append({"lat": c["lat"], "lon": c["lon"], "kind": "shelf break",
-                        "notes": "bottom falls %.0f m per km here, %.0f m deep — modelled "
-                                 "bathymetry, the shelf break or a canyon wall"
-                                 % (c["slope_m_per_km"], c["depth_m"]),
+            out.append({"lat": c["lat"], "lon": c["lon"],
+                        "kind": "water sample" if sampled else "shelf break",
+                        "notes": ("bottom falls %.0f m per km here, %.0f m deep — modelled "
+                                  "bathymetry, the shelf break or a canyon wall"
+                                  % (c["slope_m_per_km"], c["depth_m"]))
+                                 + (" — a place the water was read, not a feature this "
+                                    "fish is tied to" if sampled else ""),
                         "depth_ft": round(c["depth_m"] * 3.28084), "private": False})
     if marks:
         for m in spots.SPOTS:
@@ -629,9 +873,12 @@ def grid(species: str, start, hours: int = 48, step_minutes: int = 30,
             "scores": [res["score"]] * n,
             "detail": [detail] * n,
         })
+    prof = PROFILES[species]
     return {
         "offshore": True,
         "unvalidated": True,
+        "basis": prof.basis,
+        "basis_claim": prof.basis_claim,
         "sst_date": ctx.get("sst_date"),
         "buoy": buoy or None,
         "fronts": ctx.get("fronts"),

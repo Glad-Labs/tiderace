@@ -190,6 +190,10 @@ def build_grid(species: str, start: datetime, hours: int = 48,
         # forecast actually has an opinion about, so the interface can show
         # conditions without pretending to a score it does not have.
         "modelled": modelled,
+        # Which tier of claim the bands are: this water, regional, or general
+        # biology from wherever the species was studied. The card prints it.
+        "basis": (score.PROFILES[species].basis if modelled else None),
+        "basis_claim": (score.PROFILES[species].basis_claim if modelled else None),
         **_rules(species, start),
         "notes": (score.PROFILES[species].notes if modelled
                   else (speciesmod.get(species).notes or "")),

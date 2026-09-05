@@ -2220,8 +2220,8 @@ class PelagicBands(unittest.TestCase):
         self.assertEqual(pelagic.PROFILES["mahi"].sst, (68, 79, 82, 85))
         for key, p in pelagic.PROFILES.items():
             if p.sst is None:
-                self.assertEqual(key, "bigeye", "only bigeye has no band, and says why")
-                self.assertIn("REPORTED", p.sst_claim)
+                self.assertIn(key, ("bigeye", "thresher"), "no band means reported, not scored, and a reason")
+                self.assertRegex(p.sst_claim, r"[Rr]eported|REPORTED")
                 continue
             a, b, c, d = p.sst
             self.assertTrue(a <= b <= c <= d and a < d, f"{key} band is not a trapezoid")
@@ -2491,13 +2491,38 @@ class PelagicPositions(unittest.TestCase):
                          sst_grid=self._sst(), bathy_grid=self._bathy())
         self.assertEqual({sp["kind"] for sp in b["spots"]}, {"shelf break"})
 
+    def test_a_fish_tied_to_no_feature_still_gets_the_water_sampled(self):
+        """Blue marlin, white marlin and thresher list neither a front nor the
+        shelf break. The first live sweep gave them zero positions: nowhere to
+        read the water. They get both kinds now, labelled as sample points,
+        and their scorers carry no front or structure term, so the position's
+        own feature never enters the score."""
+        from datetime import datetime
+        from tiderace import pelagic, spots
+        saved = list(spots.SPOTS); spots.SPOTS[:] = []
+        try:
+            g = pelagic.grid("blue_marlin", datetime(2026, 8, 15), 2, 60,
+                             sst_grid=self._sst(), bathy_grid=self._bathy())
+        finally:
+            spots.SPOTS[:] = saved
+        self.assertTrue(g["spots"], "a fish with a band needs somewhere to read the water")
+        self.assertEqual({sp["kind"] for sp in g["spots"]}, {"water sample"})
+        for sp in g["spots"]:
+            self.assertIn("not a feature this fish is tied to", sp["notes"])
+            self.assertNotIn("front", sp["detail"][0]["terms"])
+            self.assertNotIn("structure", sp["detail"][0]["terms"])
+        # A fish that IS tied to a feature keeps the feature's name.
+        m = pelagic.grid("mahi", datetime(2026, 8, 15), 2, 60, sst_grid=self._sst(), bathy_grid=self._bathy())
+        self.assertEqual({sp["kind"] for sp in m["spots"]}, {"front"})
+
     def test_the_server_the_registry_the_cli_and_the_page_carry_it(self):
         import pathlib
         from tiderace import species as spmod
         root = pathlib.Path(__file__).parent
         self.assertTrue(spmod.get("bluefin").scored)
         self.assertTrue(spmod.get("mahi").scored)
-        self.assertFalse(spmod.get("wahoo").scored)
+        self.assertTrue(spmod.get("wahoo").scored)
+        self.assertFalse(spmod.get("summer_triggerfish").scored)
         srv = strip_py_comments((root / "tiderace" / "server.py").read_text())
         fn = srv.split("def build_grid(")[1].split("\ndef ")[0]
         self.assertIn("if species in pelagic.PROFILES:", fn)
@@ -2772,6 +2797,86 @@ class WaterPictures(unittest.TestCase):
             self.assertIn("  %s: {" % k, style)
         on = page.split("const CHART_ON = {")[1].split("};")[0]
         self.assertIn("sst:false, chl:false", on, "off by default: a picture over the chart is a choice")
+
+
+class EvidenceTier(unittest.TestCase):
+    """Matt, 5 September 2026: guesstimates from general biology are wanted,
+    and no number from nothing. So every profile on both scorers says which
+    tier its bands are -- this water, regional, or general biology -- and a
+    profile that is not this water says where its evidence came from, with a
+    citation. The card prints the tier. The one refusal left is the one fish
+    with no published band anywhere reachable."""
+
+    TIERS = {"this water", "regional", "general biology"}
+
+    def test_every_profile_declares_a_tier_and_cites_it(self):
+        from tiderace import pelagic, score
+        for key, p in score.PROFILES.items():
+            self.assertIn(p.basis, self.TIERS, key)
+            if p.basis != "this water":
+                self.assertRegex(p.basis_claim, r"\[[A-Z]", key + " must cite where its bands came from")
+        for key, p in pelagic.PROFILES.items():
+            self.assertIn(p.basis, self.TIERS, key)
+            self.assertNotEqual(p.basis, "this water", key + ": nothing offshore is this water")
+            self.assertRegex(p.basis_claim, r"\[[A-Z]", key)
+
+    def test_a_general_profile_weights_only_what_its_sources_speak_to(self):
+        """Nothing published says what current a cod wants off this shore, so
+        a general-biology profile carries no current, light, wind or pressure
+        weight. The scorer drops the terms and renormalises."""
+        from tiderace import score
+        general = [k for k, p in score.PROFILES.items() if p.basis == "general biology"]
+        self.assertEqual(sorted(general), ["cobia", "cod", "haddock", "northern_kingfish",
+                                           "pollock", "spanish_mackerel"])
+        for k in general:
+            w = score.PROFILES[k].weights
+            self.assertEqual(set(w) - {"temp", "season"}, set(), k)
+            self.assertAlmostEqual(sum(w.values()), 1.0, places=6)
+        self.assertEqual(score.PROFILES["monkfish"].basis, "regional",
+                         "the one groundfish with a Narragansett Bay figure of its own")
+        # A cold-water fish scores its cold months and not August.
+        feat = {"week": 10, "water_temp_f": 42, "light_phase": "day", "current_speed": 0.5,
+                "wind_kt": 5, "pressure_trend_3h": 0}
+        march = score.score("cod", dict(feat, month=3), prior=0.6)["score"]
+        august = score.score("cod", dict(feat, month=8, water_temp_f=72), prior=0.6)["score"]
+        self.assertGreater(march, 60)
+        self.assertLess(august, 25)
+
+    def test_the_last_refusal_is_the_rule_itself(self):
+        from tiderace import score
+        self.assertEqual(sorted(score.NOT_PROFILED), ["summer_triggerfish"])
+        self.assertIn("No source about this water", score.NOT_PROFILED["summer_triggerfish"])
+
+    def test_the_grid_and_the_card_carry_the_tier(self):
+        import pathlib
+        root = pathlib.Path(__file__).parent
+        srv = strip_py_comments((root / "tiderace" / "server.py").read_text())
+        fn = srv.split("def build_grid(")[1].split("\ndef ")[0]
+        self.assertIn('"basis": (score.PROFILES[species].basis if modelled else None)', fn)
+        pel = strip_py_comments((root / "tiderace" / "pelagic.py").read_text())
+        g = pel.split("def grid(")[1]
+        self.assertIn('"basis": prof.basis', g)
+        page = strip_comments((root / "tiderace" / "web" / "index.html").read_text())
+        card = page.split("function renderDetail(){")[1].split("\nfunction ")[0]
+        self.assertIn("' · ' + tesc(GRID.basis)", card, "the tier sits on the card's sub-line")
+        self.assertIn("Bands from ${tesc(GRID.basis)}", card, "and the note says where the bands came from")
+        self.assertIn("Not measured in this bay", card)
+        strip = page.split("function paint(){")[1].split("\nfunction ")[0]
+        self.assertIn("GRID.basis", strip)
+
+    def test_offshore_profiles_without_records_carry_no_season(self):
+        """Blue marlin has two records within 60 nm and porbeagle three. A
+        season built from that would be a number from nothing; the term is
+        absent and the explanation says why."""
+        from tiderace import pelagic
+        for k in ("blue_marlin", "porbeagle"):
+            self.assertEqual(pelagic.PROFILES[k].months, ())
+            r = pelagic.score(k, {"sst_f": 75, "structure_nm": 2, "structure_slope": 150, "month": 8})
+            self.assertNotIn("season", r["terms"], k)
+            self.assertIn("season", r["absent"], k)
+        r = pelagic.score("thresher", {"sst_f": 70, "month": 7})
+        self.assertEqual(set(r["terms"]), {"season"}, "thresher scores on season alone, and says so")
+        self.assertIn("general biology", pelagic.explain(r, {"sst_f": 70, "month": 7}))
 
 
 class DepthLayer(unittest.TestCase):
@@ -4855,9 +4960,12 @@ class SpeciesRegistry(unittest.TestCase):
         # researched. Pinned as a literal on purpose: this number may only go
         # up by doing the reading, so moving it is a diff someone has to
         # justify with a citation in score.py.
-        # 18 since 2026-09-03: the fourteen, plus bluefin, yellowfin, bigeye
-        # and mahi under the offshore scorer in pelagic.py, each band cited.
-        self.assertEqual(len(speciesmod.scored()), 18)
+        # 34 since 2026-09-05: fourteen inshore with bands from this water or
+        # the region, seven more inshore under the general-biology tier, and
+        # thirteen offshore in pelagic.py. Grey triggerfish is the one fish
+        # left with no published band anywhere reachable, and it stays
+        # refused, because the rule is "no number from nothing".
+        self.assertEqual(len(speciesmod.scored()), 34)
         # The gap between the two tiers is the whole design, and it must not
         # close by accident.
         self.assertGreater(len(speciesmod.loggable()), len(speciesmod.scored()))
@@ -7383,11 +7491,9 @@ class RefusalsAreRecorded(unittest.TestCase):
         import re
         from tiderace import score
         looked_at = {
-            "northern_kingfish": "ASMFC-SCI",
+            # 5 September 2026: kingfish, cod, pollock and monkfish have
+            # general-biology profiles now; only the triggerfish is refused.
             "summer_triggerfish": "COLLIE",
-            "cod": "COLLIE",
-            "pollock": "COLLIE",
-            "monkfish": "COLLIE",
         }
         declared = set(PublishedTemperatureBands._declared())
         for key, tag in looked_at.items():
@@ -7400,7 +7506,7 @@ class RefusalsAreRecorded(unittest.TestCase):
         # spanish_mackerel and cobia are refused for having no source about
         # this water at all, so they cannot cite one -- and must say that
         # rather than quietly citing a neighbour's.
-        for key in ("spanish_mackerel", "cobia"):
+        for key in ():        # spanish_mackerel and cobia are profiled now
             self.assertNotRegex(
                 score.NOT_PROFILED[key], r"\[[A-Z0-9-]+(?:[,\s][^\]]*)?\]",
                 "%s is refused for having no applicable source; citing one "
@@ -7408,37 +7514,29 @@ class RefusalsAreRecorded(unittest.TestCase):
             self.assertIn("No source about this water",
                           score.NOT_PROFILED[key], key)
 
-    def test_the_offshore_species_are_refused_structurally_not_for_effort(self):
-        """The reason has to be the scorer, not a reading list, because a
-        reading list is a backlog and somebody will work through it. Every one
-        of the fourteen gets the identical sentence for the identical reason.
-        """
-        from tiderace import pelagic, score, species as speciesmod, spots
-        offshore = {s.key for s in speciesmod.SPECIES
-                    if s.group == speciesmod.OFFSHORE} - set(pelagic.PROFILES)
-        self.assertEqual(len(offshore), 10,
-                         "bluefin, yellowfin, bigeye and mahi have the offshore "
-                         "scorer; the other ten are still refused")
-        for k in ("bluefin", "yellowfin", "bigeye", "mahi"):
-            self.assertNotIn(k, score.NOT_PROFILED)
-        reasons = {score.NOT_PROFILED[k] for k in offshore}
-        self.assertEqual(len(reasons), 1,
-                         "the offshore refusal is one structural fact, so it "
-                         "should read as one sentence, not fourteen")
-        reason = reasons.pop()
-        self.assertIn("prospect.CANDIDATE_BBOX", reason)
-        self.assertIn("pelagic.py", reason,
-                      "the refusal has to say where the work does belong")
-        # And the premise has to still be true: every prospected position is
-        # inside the box the refusal names, and the box is the bay.
+    def test_every_offshore_species_has_the_offshore_scorer(self):
+        """Fourteen were refused together for one structural reason -- no
+        current station offshore -- until the offshore scorer existed. It does,
+        and since 5 September 2026 every one of them has a profile in it with
+        a band from its federal habitat document, or no band and a reason.
+        Nothing offshore is refused any more, and none of them may be scored
+        by the bay scorer either."""
+        from tiderace import pelagic, score, species as speciesmod
+        offshore = {s.key for s in speciesmod.SPECIES if s.group == speciesmod.OFFSHORE}
+        # Haddock is filed offshore in the registry but its habitat document
+        # is a groundfish one -- bottom temperature, Georges Bank -- so it is
+        # scored by the bay scorer's general tier, not by fronts and walls.
+        pelagic_ones = offshore - {"haddock"}
+        self.assertEqual(pelagic_ones - set(pelagic.PROFILES), set())
+        self.assertEqual(pelagic_ones & set(score.PROFILES), set())
+        self.assertIn("haddock", score.PROFILES)
+        self.assertNotIn("haddock", pelagic.PROFILES)
+        self.assertEqual(offshore & set(score.NOT_PROFILED), set())
+        # The box premise the old refusal rested on is still the box.
         from tiderace import prospect
         south, west, north, east = prospect.CANDIDATE_BBOX
         self.assertGreaterEqual(south, 41.3)
-        self.assertLessEqual(north, 41.9,
-                               "the candidate box has left Narragansett Bay, which "
-                               "is the premise the offshore refusal rests on")
-        for k in offshore:
-            self.assertNotIn(k, score.PROFILES)
+        self.assertLessEqual(north, 41.9)
 
     def test_a_refused_species_is_still_fully_loggable(self):
         """The refusal is about the forecast and nothing else. If it leaked

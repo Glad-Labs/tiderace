@@ -200,6 +200,19 @@ is ripping past Whale Rock. Current does. There are 38 current-prediction
 stations inside the bay and the generic national fishing apps use none of
 them — they key everything off a single tide-height curve.
 
+## Three tiers of claim, and one refusal
+
+Every scored fish says where its bands came from. **This water** is the
+bay's own surveys and the GSO trawl. **Regional** is tagging or surveys in
+this part of the Atlantic. **General biology** is the species' published
+biology from wherever it was studied, cited to the document and page, and
+the card says so and adds "not measured in this bay". The rule is Matt's:
+no number from nothing, but forecasts from fact are wanted. Grey triggerfish
+is the one fish with no published band anywhere reachable, and it stays
+"conditions only". Landmarks in a voice note resolve from public names, the
+charts' own rocks and buoys and the USGS gazetteer, and the map can draw
+sea-surface temperature and chlorophyll as pictures from the chart menu.
+
 ## Offshore has its own scorer
 
 Seventeen miles out there is no current station, so the bay scorer refuses

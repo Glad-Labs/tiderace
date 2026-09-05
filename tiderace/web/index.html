@@ -1242,7 +1242,9 @@ function paint(){
   $('#tlabel').textContent = d.toLocaleString([], {weekday:'short', hour:'2-digit', minute:'2-digit'});
   const det = GRID.spots.find(s=>s.detail.length)?.detail[TI];
   $('#tsub').textContent = GRID.offshore
-    ? `offshore · SST ${GRID.sst_date || '?'} · unvalidated`
+    ? `offshore · SST ${GRID.sst_date || '?'} · unvalidated · ${GRID.basis || ''}`
+    : GRID.basis && GRID.basis !== 'this water' && det
+    ? `${det.light_phase} · ${GRID.basis} · unvalidated here`
     : det
     ? `${det.light_phase} · moon ${det.moon_phase.toLowerCase()}` +
       (det.season_note ? ` · ${det.season_note}` : '')
@@ -1326,7 +1328,8 @@ function renderDetail(){
     <p class="ph">Spot</p>
     <div class="card">
       <h3>${sp.label}</h3>
-      <div class="sub">${sp.private ? 'your mark' + (sp.key && !sp.key.startsWith('at:') ? ' ' + tesc(sp.key) : '') : (GRID.offshore ? 'found ' : 'prospected ') + sp.kind}${sp.depth_ft != null ? (GRID.offshore ? ' · modelled ' : ' · charted ') + Math.round(sp.depth_ft) + ' ft' : ''}${sp.best_stage?' · best on '+sp.best_stage:''}${GRID.offshore ? ' · unvalidated' : ''}</div>
+      <div class="sub">${sp.private ? 'your mark' + (sp.key && !sp.key.startsWith('at:') ? ' ' + tesc(sp.key) : '') : (GRID.offshore ? 'found ' : 'prospected ') + sp.kind}${sp.depth_ft != null ? (GRID.offshore ? ' · modelled ' : ' · charted ') + Math.round(sp.depth_ft) + ' ft' : ''}${sp.best_stage?' · best on '+sp.best_stage:''}${GRID.offshore ? ' · unvalidated' : ''}${GRID.basis && GRID.basis !== 'this water' ? ' · ' + tesc(GRID.basis) : ''}</div>
+      ${GRID.basis && GRID.basis !== 'this water' ? `<div class="note" style="margin:6px 0 0">Bands from ${tesc(GRID.basis)}: ${tesc(GRID.basis_claim || '')}. Not measured in this bay.</div>` : ''}
       <div class="big" style="color:${colour(s)};margin-top:10px">${s!=null?s.toFixed(1):'—'}</div>
       ${sp.scores.length ? sparkline(sp.scores) : ''}
       <dl class="kv">
