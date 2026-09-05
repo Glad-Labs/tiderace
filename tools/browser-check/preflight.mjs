@@ -454,11 +454,18 @@ async function run(url) {
     // fourteen profiles are in that position since 2 Sep 2026, and the field
     // that used to carry it keyed off "is there a forecast" -- which stopped
     // meaning "is there a rule" the moment scored stopped implying regulated.
-    const unruled = await p.evaluate(async () => {
+    // Wait for the weakfish grid itself, not a fixed 9 s: on a freshly
+    // restarted service every grid rebuilds cold and this read the striped
+    // bass strip as weakfish's, failing the live run and passing on scratch.
+    await p.evaluate(() => {
       const sel = document.getElementById('species');
       sel.value = 'weakfish';
       sel.dispatchEvent(new Event('change'));
-      await new Promise(r => setTimeout(r, 9000));
+    });
+    await p.waitForFunction(() => typeof GRID !== 'undefined' && GRID && GRID.species === 'weakfish',
+                            null, { timeout: 120000 }).catch(() => {});
+    const unruled = await p.evaluate(async () => {
+      await new Promise(r => setTimeout(r, 1200));
       const el = document.getElementById('slegal');
       return { text: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60),
                known: !!(GRID.regulations || {}).known };
