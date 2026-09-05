@@ -159,6 +159,15 @@ SPECIES: tuple[Species, ...] = (
     Species("pollock", "Pollock", NEARSHORE, ("pollack",),
             notes="Not forecast: effectively gone from this water."),
     Species("haddock", "Haddock", OFFSHORE, ()),
+    # Matt, 5 September 2026: "add lingcod to the app, we caught some south of
+    # Block Island". Lingcod (Ophiodon elongatus) is a Pacific fish and does
+    # not occur in the Atlantic; what Rhode Island calls "ling" is red hake,
+    # and that is what a boat south of Block Island catches in 25 m or more.
+    # Registered as the fish it is, answering to the name it is called by.
+    Species("red_hake", "Red Hake (ling)", NEARSHORE,
+            ("ling", "lingcod", "red hake", "squirrel hake"),
+            notes="'Ling' here is red hake, Urophycis chuss; lingcod is a Pacific "
+                  "fish and does not occur in this ocean."),
     Species("monkfish", "Monkfish", NEARSHORE,
             ("goosefish", "monk"),
             notes="Not forecast: effectively gone from this water; the "

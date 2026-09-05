@@ -2892,8 +2892,9 @@ class EvidenceTier(unittest.TestCase):
             w = score.PROFILES[k].weights
             self.assertEqual(set(w) - {"temp", "season"}, set(), k)
             self.assertAlmostEqual(sum(w.values()), 1.0, places=6)
-        self.assertEqual(score.PROFILES["monkfish"].basis, "regional",
-                         "the one groundfish with a Narragansett Bay figure of its own")
+        for k in ("monkfish", "red_hake"):
+            self.assertEqual(score.PROFILES[k].basis, "regional",
+                             k + ": a groundfish with a Rhode Island survey figure of its own")
         # A cold-water fish scores its cold months and not August.
         feat = {"week": 10, "water_temp_f": 42, "light_phase": "day", "current_speed": 0.5,
                 "wind_kt": 5, "pressure_trend_3h": 0}
@@ -2937,6 +2938,31 @@ class EvidenceTier(unittest.TestCase):
         r = pelagic.score("thresher", {"sst_f": 70, "month": 7})
         self.assertEqual(set(r["terms"]), {"season"}, "thresher scores on season alone, and says so")
         self.assertIn("general biology", pelagic.explain(r, {"sst_f": 70, "month": 7}))
+
+
+class LingIsRedHake(unittest.TestCase):
+    """Matt: add lingcod to the app, we caught some south of Block Island.
+    Lingcod is a Pacific fish; the Rhode Island 'ling' is red hake. The app
+    registers the fish it is and answers to the name it is called by, so a
+    voice note saying 'two ling' logs red hake."""
+
+    def test_the_name_you_say_resolves_to_the_fish_it_is(self):
+        from tiderace import species as speciesmod
+        for said in ("lingcod", "ling", "two ling", "red hake", "a lingcod south of the island"):
+            self.assertEqual(speciesmod.resolve(said), "red_hake", said)
+        sp = speciesmod.get("red_hake")
+        self.assertIn("Pacific", sp.notes)
+        self.assertTrue(sp.scored)
+
+    def test_the_band_is_the_source_document(self):
+        from tiderace import score
+        p = score.PROFILES["red_hake"]
+        c2f = lambda c: round(c * 9 / 5 + 32)
+        self.assertEqual(p.temp, (c2f(2), c2f(8), c2f(10), c2f(22)))
+        self.assertIn("[NE-133]", p.temp_claim)
+        self.assertEqual(set(p.weights), {"temp", "season"})
+        self.assertIn(3, p.peak_months); self.assertIn(10, p.peak_months)
+        self.assertNotIn(7, p.months, "offshore in summer to avoid the warm water [NE-133]")
 
 
 class DepthLayer(unittest.TestCase):
@@ -5025,7 +5051,7 @@ class SpeciesRegistry(unittest.TestCase):
         # thirteen offshore in pelagic.py. Grey triggerfish is the one fish
         # left with no published band anywhere reachable, and it stays
         # refused, because the rule is "no number from nothing".
-        self.assertEqual(len(speciesmod.scored()), 34)
+        self.assertEqual(len(speciesmod.scored()), 35)
         # The gap between the two tiers is the whole design, and it must not
         # close by accident.
         self.assertGreater(len(speciesmod.loggable()), len(speciesmod.scored()))
@@ -5546,7 +5572,7 @@ class DaylightAndEveryFish(unittest.TestCase):
         """Six of thirty-five were on offer, so the other twenty-nine could not
         be looked at or logged from the map at all."""
         from tiderace import species as speciesmod, score
-        self.assertEqual(len(speciesmod.loggable()), 35)
+        self.assertEqual(len(speciesmod.loggable()), 36)
         self.assertGreater(len(speciesmod.loggable()), len(score.PROFILES))
         import pathlib
         srv = (pathlib.Path(__file__).parent / "tiderace" / "server.py").read_text()
@@ -7509,7 +7535,7 @@ class RefusalsAreRecorded(unittest.TestCase):
         and passing on the rest by not looking."""
         from tiderace import pelagic, score, species as speciesmod
         keys = {s.key for s in speciesmod.SPECIES}
-        self.assertEqual(len(keys), 35)
+        self.assertEqual(len(keys), 36)
         # Two scorers now: score.PROFILES inshore, pelagic.PROFILES offshore.
         # A fish in both would be scored twice; a fish in neither and not
         # refused would be the silence this test exists to catch.

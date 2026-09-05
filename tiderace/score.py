@@ -101,6 +101,16 @@ Second cohort, consulted 2026-09-02, for the inshore and nearshore species:
            371 (Mar 67, Oct 61, Feb 59, Sep 47); pollock 83 (Sep 21, Apr 12, Oct
            12); haddock 76 (Sep 20, Aug 14, Oct 12); northern kingfish 41 (Jun-Nov,
            Oct 12, Sep 8); Spanish mackerel 1 (Aug); cobia 4, no months.
+  [NE-133] Steimle et al. 1999, EFH Source Document: Red Hake, NMFS-NE-133.
+           Adults "found at temperatures of 2-22C and at depths of about 5 m to
+           > 300 m"; habitat table: "most abundant at 8-10C; avoid < 5C"; "In the
+           Massachusetts, Rhode Island, and Long Island Sound surveys, adults were
+           generally found in waters > 25 m deep, especially during the summer and
+           fall"; "In the Middle Atlantic Bight, red hake occur most frequently in
+           coastal waters in the spring and fall; they move offshore to avoid the
+           warm summer temperatures". OBIS within 40 nm of Block Island, fetched
+           5 September 2026: 929 records, March 95, October 74, February and
+           September 49 each.
   [COLLIE] Collie, Wood & Jeffries 2008, Can. J. Fish. Aquat. Sci.
            65:1352-1365 -- the GSO trawl series. Its 25 species are 96% of
            every animal caught in the series, out of 130 recorded.
@@ -1138,6 +1148,23 @@ PROFILES: dict[str, Profile] = {
                "water is fine for it, the records say when it is here."),
         basis="general biology",
         basis_claim="ASMFC sciaenid habitat document, envelope only [ASMFC-SCI ch.8]",
+    ),
+    "red_hake": Profile(
+        key="red_hake", name="Red Hake (ling)",
+        months=(1, 2, 3, 4, 5, 9, 10, 11, 12), peak_months=(3, 4, 9, 10),
+        # [NE-133] adults 2-22C, most abundant 8-10C, avoid < 5C.
+        temp=(36, 46, 50, 72),
+        current=(0.6, 0.4, 0.6, 3.0), light={},
+        weights={"temp": 0.6, "season": 0.4},
+        temp_claim=("adults 2-22C, 'most abundant at 8-10C', 'avoid < 5C' [NE-133]: full "
+                    "credit 46-50F, zero at 36F and at 72F, the 22C top of the adult range"),
+        notes=("The fish called ling south of Block Island. Adults in the Rhode Island "
+               "surveys 'were generally found in waters > 25 m deep, especially during "
+               "the summer and fall'; coastal in spring and fall, offshore 'to avoid the "
+               "warm summer temperatures' [NE-133]. 929 records within 40 nm of Block "
+               "Island, March and October highest [NE-133]."),
+        basis="regional",
+        basis_claim="NEFSC and Rhode Island surveys with a Narragansett Bay figure of its own [NE-133]",
     ),
 }
 
