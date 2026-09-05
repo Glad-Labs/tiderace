@@ -157,10 +157,15 @@ claimed:
   Bigeye and thresher have no SST band and get none -- reported, not scored,
   like depth inshore. Blue marlin and porbeagle have too few records here
   for a season and carry none. Mahi's and wahoo's weed lines are
-  unmeasurable and the score says so. Positions are the sharpest
-  temperature breaks in the MUR grid and the steepest bottom in the DEM
-  grid, one candidate per feature; a fish tied to neither gets both as
-  sample points, labelled as such. The wall's steepness carries the
+  unmeasurable and the score says so -- but surface convergence from the HF
+  radar field stands in for where floating things collect, for the fish
+  whose literature names floating structure, and only where the radar
+  covers (18% of the box, nothing south of 40.67 N, measured 5 September
+  2026); outside coverage the term is absent, never zero. Positions are the
+  sharpest temperature breaks in the MUR grid, the steepest bottom in the
+  DEM grid, and the strongest convergence zones for those fish, one
+  candidate per feature; a fish tied to none of them gets fronts and walls
+  as sample points, labelled as such. The wall's steepness carries the
   structure term because a candidate found on the wall is 0 nm from it by
   construction.
 

@@ -324,6 +324,40 @@ def surface_current(lat: float, lon: float, box: float = 0.08) -> dict | None:
     }
 
 
+def surface_current_grid(bbox) -> dict | None:
+    """The HF radar field over a box: measured surface current per 2 km cell.
+
+    Same source as surface_current, whole box at once, for the convergence
+    map in pelagic.py. Coverage is the honest limit and is reported: measured
+    3 September 2026, the network covered 18% of the offshore box and nothing
+    south of 40.67 N -- the fronts off Block Island are inside it, the canyon
+    walls are not. A cell that is not measured is absent, never zero.
+    """
+    south, west, north, east = (float(v) for v in bbox)
+    try:
+        info = json.loads(_get(f"{ERDDAP.replace('griddap','info')}/{HFRADAR}/index.json",
+                               ttl=3600))
+    except OffshoreError:
+        return None
+    latest = next((r[4] for r in info["table"]["rows"] if r[2] == "time_coverage_end"), None)
+    if not latest:
+        return None
+    q = (f"water_u%5B({latest})%5D%5B({south}):({north})%5D%5B({west}):({east})%5D,"
+         f"water_v%5B({latest})%5D%5B({south}):({north})%5D%5B({west}):({east})%5D")
+    try:
+        rows = json.loads(_get(f"{ERDDAP}/{HFRADAR}.json?{q}", ttl=1800))["table"]["rows"]
+    except Exception:                                             # noqa: BLE001
+        return None
+    cells = {(round(r[1], 4), round(r[2], 4)): (r[3], r[4]) for r in rows
+             if r[3] is not None and r[4] is not None}
+    lats = sorted({round(r[1], 4) for r in rows}); lons = sorted({round(r[2], 4) for r in rows})
+    return {"when": latest, "cells": cells, "of": len(rows),
+            "dlat": (lats[1] - lats[0]) if len(lats) > 1 else None,
+            "dlon": (lons[1] - lons[0]) if len(lons) > 1 else None,
+            "coverage": (round(len(cells) / len(rows), 3) if rows else 0.0),
+            "south_edge": (min(k[0] for k in cells) if cells else None)}
+
+
 def nearest_turbine(lat: float, lon: float) -> tuple[str, float]:
     n, la, lo = min(TURBINES, key=lambda t: nm(lat, lon, t[1], t[2]))
     return n, round(nm(lat, lon, la, lo), 1)

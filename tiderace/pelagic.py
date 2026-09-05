@@ -493,6 +493,16 @@ PROFILES: dict[str, PelagicProfile] = {
 #              lists "shelf_break".
 #   season     1 in a peak month, SEASON_SHOULDER in another listed month, 0
 #              otherwise. The months are OBIS records, not a preference.
+#   convergence  where the measured surface current comes together, from the
+#              HF radar field: min(1, conv / CONV_FULL) * exp(-nm / CONV_REACH_NM).
+#              Matt: is there a way to map weed lines? Not directly -- nothing
+#              public sees Sargassum here -- but what collects weed is
+#              convergence, and the radar measures that where it covers. So it
+#              stands in for floating structure, for the fish whose literature
+#              names floating structure, and ONLY where the radar reaches:
+#              outside coverage the term is absent, never zero. Measured 5 Sep
+#              2026: coverage 18% of the box, nothing south of 40.67 N, peak
+#              convergence 7.4e-5 /s.
 #
 # Then one multiplier that is about the boat, not the fish: sea state from the
 # Block Island buoy. It never raises a score and the explanation calls it
@@ -508,6 +518,9 @@ FRONT_REACH_NM = 5.0
 STRUCTURE_REACH_NM = 10.0
 STRUCTURE_FULL_M_PER_KM = 150.0   # measured: the canyon walls at 39.8 N run 130-170 m/km
 SEASON_SHOULDER = 0.6
+CONV_FULL = 5.0e-5            # 1/s; measured: the strongest zones this hour ran 4-7e-5
+CONV_MIN = 2.0e-5             # below this a cell is not a zone
+CONV_REACH_NM = 5.0
 SEA_FULL_M = 1.5              # up to this wave height the multiplier is 1
 SEA_ZERO_M = 4.0              # at this it is SEA_FLOOR; a fishability judgement, not fish
 
@@ -515,11 +528,11 @@ SEA_FLOOR = 0.3
 
 WEIGHTS: dict[str, dict[str, float]] = {
     "bluefin":   {"sst": 0.35, "front": 0.25, "structure": 0.20, "season": 0.20},
-    "mahi":      {"sst": 0.40, "front": 0.35, "season": 0.25},
-    "yellowfin": {"sst": 0.30, "structure": 0.35, "season": 0.35},
+    "mahi":      {"sst": 0.35, "front": 0.30, "convergence": 0.15, "season": 0.20},
+    "yellowfin": {"sst": 0.30, "structure": 0.30, "convergence": 0.10, "season": 0.30},
     "bigeye":    {"structure": 0.55, "season": 0.45},
     "albacore":  {"sst": 0.45, "structure": 0.25, "season": 0.30},
-    "wahoo":     {"sst": 0.40, "front": 0.35, "season": 0.25},
+    "wahoo":     {"sst": 0.35, "front": 0.30, "convergence": 0.15, "season": 0.20},
     "swordfish": {"sst": 0.35, "front": 0.25, "structure": 0.15, "season": 0.25},
     "blue_marlin": {"sst": 0.7, "season": 0.3},      # season is absent: no records
     "white_marlin": {"sst": 0.65, "season": 0.35},
@@ -530,8 +543,9 @@ WEIGHTS: dict[str, dict[str, float]] = {
 }
 
 UNMEASURABLE = {
-    "floating_structure": "floating structure (weed lines, debris): nothing this "
-                          "project fetches can see one",
+    "floating_structure": "floating structure (weed lines, debris): nothing sees a weed "
+                          "line; surface convergence from the HF radar stands in for "
+                          "where floating things collect, only where the radar covers",
 }
 
 
@@ -576,6 +590,13 @@ def score(species: str, feat: dict) -> dict:
         else:
             import math
             terms["structure"] = min(1.0, sl / STRUCTURE_FULL_M_PER_KM) * math.exp(-d / STRUCTURE_REACH_NM)
+    if "convergence" in weights:
+        d, c = feat.get("conv_nm"), feat.get("conv_strength")
+        if d is None or c is None:
+            absent["convergence"] = "no radar coverage here, so convergence is unmeasured"
+        else:
+            import math
+            terms["convergence"] = min(1.0, c / CONV_FULL) * math.exp(-d / CONV_REACH_NM)
     if "season" in weights:
         m = feat.get("month")
         if not prof.months:
@@ -627,6 +648,9 @@ def explain(res: dict, feat: dict) -> str:
     if "structure" in t:
         bits.append("shelf break %.0f nm away, %.0f m/km" % (feat.get("structure_nm"),
                                                              feat.get("structure_slope") or 0))
+    if "convergence" in t:
+        bits.append("surface convergence %.1f nm away, %.1fe-5/s" % (
+            feat.get("conv_nm"), (feat.get("conv_strength") or 0) * 1e5))
     if "season" in t:
         bits.append("peak month on the records" if t["season"] >= 1 else
                     "in season on the records" if t["season"] > 0 else "no records this month")
@@ -716,6 +740,30 @@ def structure(bathy_grid, limit: int = STRUCTURE_CANDIDATES,
     return _cluster(steep, "slope_m_per_km", limit)
 
 
+def convergence(radar: dict | None, limit: int = 12) -> list[dict]:
+    """Where the measured surface current comes together: -div(u, v) per cell,
+    kept where it beats CONV_MIN, one zone per CLUSTER_NM."""
+    import math
+    if not radar or not radar.get("cells") or not radar.get("dlat") or not radar.get("dlon"):
+        return []
+    cells, dlat, dlon = radar["cells"], radar["dlat"], radar["dlon"]
+    dy = dlat * 110_540.0
+    out = []
+    for (la, lo), (u, v) in cells.items():
+        dx = dlon * 110_540.0 * math.cos(math.radians(la))
+        e_ = cells.get((la, round(lo + dlon, 4))); w_ = cells.get((la, round(lo - dlon, 4)))
+        n_ = cells.get((round(la + dlat, 4), lo)); s_ = cells.get((round(la - dlat, 4), lo))
+        if None in (e_, w_, n_, s_):
+            continue
+        div = (e_[0] - w_[0]) / (2 * dx) + (n_[1] - s_[1]) / (2 * dy)
+        conv = -div
+        if conv < CONV_MIN:
+            continue
+        out.append({"lat": la, "lon": lo, "conv_per_s": conv,
+                    "speed_kt": round(math.hypot(u, v) * 1.94384, 2)})
+    return _cluster(out, "conv_per_s", limit)
+
+
 _bathy_cache: dict = {}
 # cache.write_json takes a PATH. The first cut handed it a bare key and the
 # bathymetry landed as a file in the checkout root, beside the code.
@@ -750,7 +798,7 @@ def _sst_at(grid: dict, lat: float, lon: float):
 
 
 def candidates(species: str, sst_grid: dict | None = None, bathy_grid=None,
-               marks: bool = True) -> tuple[list[dict], dict]:
+               marks: bool = True, radar_grid: dict | None = None) -> tuple[list[dict], dict]:
     """The positions to score for this fish, and the shared water they sit in.
 
     Returns (positions, context). Each position is a dict with lat, lon,
@@ -775,6 +823,16 @@ def candidates(species: str, sst_grid: dict | None = None, bathy_grid=None,
         ctx["buoy"] = offshore.buoy("44097")
     except Exception:                                             # noqa: BLE001
         ctx["buoy"] = None
+    radar = None
+    if "floating_structure" in prof.features:
+        try:
+            radar = radar_grid if radar_grid is not None else offshore.surface_current_grid(OFFSHORE_BBOX)
+        except Exception:                                         # noqa: BLE001
+            radar = None
+    zones = convergence(radar) if radar else []
+    ctx["convergence"] = zones
+    ctx["radar"] = ({"when": radar.get("when"), "coverage": radar.get("coverage"),
+                     "south_edge": radar.get("south_edge")} if radar else None)
 
     out: list[dict] = []
     # A fish whose literature ties it to neither a front nor the shelf break
@@ -804,6 +862,13 @@ def candidates(species: str, sst_grid: dict | None = None, bathy_grid=None,
                                  + (" — a place the water was read, not a feature this "
                                     "fish is tied to" if sampled else ""),
                         "depth_ft": round(c["depth_m"] * 3.28084), "private": False})
+    if "floating_structure" in prof.features:
+        for z in zones:
+            out.append({"lat": z["lat"], "lon": z["lon"], "kind": "convergence",
+                        "notes": "surface current converging at %.1fe-5/s (HF radar, %s), "
+                                 "where floating weed and bait collect"
+                                 % (z["conv_per_s"] * 1e5, ctx["radar"]["when"] if ctx.get("radar") else ""),
+                        "depth_ft": None, "private": False})
     if marks:
         for m in spots.SPOTS:
             if south <= m.lat <= north and west <= m.lon <= east:
@@ -826,11 +891,24 @@ def candidates(species: str, sst_grid: dict | None = None, bathy_grid=None,
             c["structure_slope"] = nearest["slope_m_per_km"]
         else:
             c["structure_nm"] = c["structure_slope"] = None
+        # Convergence is measured only where the radar covers: a candidate
+        # outside coverage gets None, and the scorer leaves the term absent.
+        # Covered means a measured cell within one cell spacing: the reach of
+        # a measurement is the cell it was made in, not its neighbours'.
+        covered = bool(radar and radar.get("cells") and any(
+            abs(k[0] - c["lat"]) <= (radar.get("dlat") or 0.02) + 1e-9
+            and abs(k[1] - c["lon"]) <= (radar.get("dlon") or 0.02) + 1e-9 for k in radar["cells"]))
+        if zones and covered:
+            nz = min(zones, key=lambda z: _nm(c["lat"], c["lon"], z["lat"], z["lon"]))
+            c["conv_nm"] = round(_nm(c["lat"], c["lon"], nz["lat"], nz["lon"]), 1)
+            c["conv_strength"] = nz["conv_per_s"]
+        else:
+            c["conv_nm"] = c["conv_strength"] = None
     return out, ctx
 
 
 def grid(species: str, start, hours: int = 48, step_minutes: int = 30,
-         sst_grid: dict | None = None, bathy_grid=None) -> dict:
+         sst_grid: dict | None = None, bathy_grid=None, radar_grid: dict | None = None) -> dict:
     """The forecast grid for an offshore species, in the shape server.build_grid
     produces, so the page, the ranked list and the slider work unchanged.
 
@@ -840,7 +918,8 @@ def grid(species: str, start, hours: int = 48, step_minutes: int = 30,
     is kept so the interface has one, not because anything moves on it.
     """
     from datetime import timedelta
-    positions, ctx = candidates(species, sst_grid=sst_grid, bathy_grid=bathy_grid)
+    positions, ctx = candidates(species, sst_grid=sst_grid, bathy_grid=bathy_grid,
+                                radar_grid=radar_grid)
     buoy = ctx.get("buoy") or {}
     wave = buoy.get("wave_m")
     n = int(hours * 60 / step_minutes)
@@ -850,6 +929,7 @@ def grid(species: str, start, hours: int = 48, step_minutes: int = 30,
         feat = {"sst_f": c["sst_f"], "front_nm": c["front_nm"],
                 "front_grad_c_nm": c["front_grad_c_nm"],
                 "structure_nm": c["structure_nm"], "structure_slope": c["structure_slope"],
+                "conv_nm": c.get("conv_nm"), "conv_strength": c.get("conv_strength"),
                 "month": start.month, "wave_m": wave}
         res = score(species, feat)
         why = explain(res, feat)
@@ -858,6 +938,7 @@ def grid(species: str, start, hours: int = 48, step_minutes: int = 30,
             "front_grad_f_nm": (None if c["front_grad_c_nm"] is None
                                 else round(c["front_grad_c_nm"] * 1.8, 2)),
             "structure_nm": c["structure_nm"], "structure_slope": c["structure_slope"],
+            "conv_nm": c.get("conv_nm"), "conv_strength": c.get("conv_strength"),
             "wave_m": wave,
             "wind_kt": buoy.get("wind_kt"), "wind_dir": buoy.get("wind_dir"),
             "terms": res.get("terms"), "unvalidated": True, "why": why,
@@ -883,6 +964,8 @@ def grid(species: str, start, hours: int = 48, step_minutes: int = 30,
         "buoy": buoy or None,
         "fronts": ctx.get("fronts"),
         "structure": ctx.get("structure"),
+        "convergence": ctx.get("convergence"),
+        "radar": ctx.get("radar"),
         "times": [t.isoformat() for t in times],
         "spots": out_spots,
         "note": ("Offshore: surface temperature, temperature breaks, the shelf break and "

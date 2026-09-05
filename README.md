@@ -222,8 +222,10 @@ Pick one in the picker and the map goes south with it. The positions are the
 sharpest temperature breaks in the 1 km MUR grid and the steepest bottom in
 the modelled bathymetry -- the shelf break and the canyon walls -- one
 candidate per feature, ranked by surface temperature inside a cited band,
-distance to a break, the wall's steepness, and the month on the occurrence
-records, with sea state from buoy 44097 as a fishability multiplier. Every
+distance to a break, the wall's steepness, the month on the occurrence
+records, and -- for the weed-line fish, where the HF radar covers -- how
+hard the measured surface current converges, with sea state from buoy 44097
+as a fishability multiplier. Every
 band names its document and page. The weights are priors, and every score
 says `unvalidated` until there are offshore trips in the log to check it
 against.

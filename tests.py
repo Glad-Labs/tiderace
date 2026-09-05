@@ -2465,7 +2465,7 @@ class PelagicPositions(unittest.TestCase):
         spots.SPOTS[:] = []
         try:
             g = pelagic.grid("bluefin", datetime(2026, 8, 15, 6, 0), 6, 60,
-                             sst_grid=self._sst(), bathy_grid=self._bathy())
+                             sst_grid=self._sst(), bathy_grid=self._bathy(), radar_grid={})
         finally:
             spots.SPOTS[:] = saved
         self.assertTrue(g["offshore"] and g["unvalidated"])
@@ -2485,10 +2485,10 @@ class PelagicPositions(unittest.TestCase):
             self.assertIsNone(d["current_speed"], "there is no current out here")
         # mahi gets the fronts only; bigeye the wall only
         m = pelagic.grid("mahi", datetime(2026, 8, 15), 2, 60,
-                         sst_grid=self._sst(), bathy_grid=self._bathy())
+                         sst_grid=self._sst(), bathy_grid=self._bathy(), radar_grid={})
         self.assertEqual({sp["kind"] for sp in m["spots"]}, {"front"})
         b = pelagic.grid("bigeye", datetime(2026, 8, 15), 2, 60,
-                         sst_grid=self._sst(), bathy_grid=self._bathy())
+                         sst_grid=self._sst(), bathy_grid=self._bathy(), radar_grid={})
         self.assertEqual({sp["kind"] for sp in b["spots"]}, {"shelf break"})
 
     def test_a_fish_tied_to_no_feature_still_gets_the_water_sampled(self):
@@ -2512,8 +2512,68 @@ class PelagicPositions(unittest.TestCase):
             self.assertNotIn("front", sp["detail"][0]["terms"])
             self.assertNotIn("structure", sp["detail"][0]["terms"])
         # A fish that IS tied to a feature keeps the feature's name.
-        m = pelagic.grid("mahi", datetime(2026, 8, 15), 2, 60, sst_grid=self._sst(), bathy_grid=self._bathy())
+        m = pelagic.grid("mahi", datetime(2026, 8, 15), 2, 60, sst_grid=self._sst(),
+                         bathy_grid=self._bathy(), radar_grid={})
         self.assertEqual({sp["kind"] for sp in m["spots"]}, {"front"})
+
+    def _radar(self):
+        # 2 km cells over the northern third of the box, like the real
+        # coverage; east-flowing water west of -71.3 meeting west-flowing
+        # water east of it: a convergence line at -71.3.
+        cells = {}
+        la = 40.70
+        while la <= 41.30:
+            lo = -72.2
+            while lo <= -70.4:
+                cells[(round(la, 4), round(lo, 4))] = (0.3 if lo < -71.3 else -0.3, 0.0)
+                lo += 0.02
+            la += 0.02
+        return {"when": "2026-09-05T15:00:00Z", "cells": cells, "of": len(cells) * 3,
+                "dlat": 0.02, "dlon": 0.02, "coverage": 0.33, "south_edge": 40.70}
+
+    def test_convergence_is_where_the_measured_water_comes_together(self):
+        """Matt: is there a way to map weed lines? Nothing sees Sargassum
+        here, but what collects weed is convergence, and the radar measures
+        that where it covers. Zones are one per cluster, on the line."""
+        from tiderace import pelagic
+        zones = pelagic.convergence(self._radar())
+        self.assertTrue(zones)
+        for z in zones:
+            self.assertAlmostEqual(z["lon"], -71.3, delta=0.03)
+            self.assertGreaterEqual(z["conv_per_s"], pelagic.CONV_MIN)
+        self.assertEqual(pelagic.convergence(None), [])
+        flat = self._radar(); flat["cells"] = {k: (0.3, 0.0) for k in flat["cells"]}
+        self.assertEqual(pelagic.convergence(flat), [], "uniform flow converges nowhere")
+
+    def test_the_term_is_absent_outside_coverage_never_zero(self):
+        """The radar reaches 40.67 N and no further; a mahi candidate on the
+        canyon wall at 39.8 N is unmeasured, and the scorer says so instead of
+        scoring it as calm water."""
+        from datetime import datetime
+        from tiderace import pelagic, spots
+        saved = list(spots.SPOTS); spots.SPOTS[:] = []
+        try:
+            g = pelagic.grid("mahi", datetime(2026, 8, 15), 2, 60, sst_grid=self._sst(),
+                             bathy_grid=self._bathy(), radar_grid=self._radar())
+        finally:
+            spots.SPOTS[:] = saved
+        kinds = {sp["kind"] for sp in g["spots"]}
+        self.assertIn("convergence", kinds, "the zones are candidates for a weed-line fish")
+        covered = [sp for sp in g["spots"] if sp["lat"] >= 40.72]
+        south = [sp for sp in g["spots"] if sp["lat"] < 40.68]
+        self.assertTrue(covered)
+        for sp in covered:
+            self.assertIn("convergence", sp["detail"][0]["terms"], sp["label"])
+        for sp in south:
+            self.assertNotIn("convergence", sp["detail"][0]["terms"], sp["label"])
+            self.assertIn("unmeasured", sp["detail"][0]["why"])
+        self.assertEqual(g["radar"]["south_edge"], 40.70)
+        # A fish whose literature names no floating structure never gets the term.
+        b = pelagic.grid("bluefin", datetime(2026, 8, 15), 2, 60, sst_grid=self._sst(),
+                         bathy_grid=self._bathy(), radar_grid=self._radar())
+        self.assertNotIn("convergence", {sp["kind"] for sp in b["spots"]})
+        for sp in b["spots"]:
+            self.assertNotIn("convergence", sp["detail"][0]["terms"])
 
     def test_the_server_the_registry_the_cli_and_the_page_carry_it(self):
         import pathlib
