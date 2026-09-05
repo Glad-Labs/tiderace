@@ -808,13 +808,6 @@ class Handler(BaseHTTPRequestHandler):
                                "bbox": charts.cell_bbox(iy, ix)}
                               for iy, ix in cells],
                 })
-            if url.path == "/api/tracks":
-                from . import track as trackmod
-                # Sessions carry their own paths, so the map can draw where you
-                # drifted; the raw breadcrumb stays on disk. Catches are matched
-                # by time rather than wired in at write time, which makes the
-                # link work backwards over trips already logged.
-                return self._send_json({"tracks": trackmod.with_catches()[:40]})
             if url.path == "/api/structure":
                 # Fixed offshore structure we know about that the ENC harbour
                 # band does not carry. Its Offshore_Platform layer has eight
@@ -868,27 +861,6 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------- POST
     def do_POST(self):
         url = urlparse(self.path)
-
-        if url.path == "/api/track":
-            # A finished track. Stays on this machine: it is gitignored, there
-            # is no export, and it is the most sensitive file here -- a saved
-            # mark is one place you chose to write down, a track is every place
-            # you actually fished, in order, with how long you sat on each.
-            try:
-                n = int(self.headers.get("Content-Length", 0))
-                data = json.loads(self.rfile.read(n) or b"{}")
-            except Exception as exc:                              # noqa: BLE001
-                return self._send_json({"error": str(exc)}, 400)
-            pts = data.get("points")
-            if not isinstance(pts, list) or not pts:
-                return self._send_json({"error": "no points"}, 400)
-            from . import track as trackmod
-            try:
-                return self._send_json({"ok": True,
-                                        "summary": trackmod.record(pts)})
-            except Exception as exc:                              # noqa: BLE001
-                traceback.print_exc()
-                return self._send_json({"error": str(exc)}, 500)
 
         if url.path == "/api/log/amend":
             # One row, corrected in place, old values kept on the row. The

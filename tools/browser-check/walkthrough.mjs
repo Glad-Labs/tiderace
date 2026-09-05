@@ -59,7 +59,7 @@ async function walk(url) {
     // as long as that tab has existed: 23 characters cleared >20. The tab has
     // to show what it is for, not merely be non-empty.
     const wants = {now: /current|water|tide/i, log: /fish|trip|save/i,
-                   spots: /kt|—|not scored/, trips: /trip|REC|ramp/i}[view];
+                   spots: /kt|—|not scored/, trips: /catch|logged|trips/i}[view];
     step(`sheet tab: ${view}`, body.length > 20 && wants.test(body)
          && !/No forecast loaded yet/i.test(body), `${body.length} chars`);
   }

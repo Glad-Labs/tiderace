@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
                       provenance,
-                      bathy, cache as cachemod, species as speciesmod, track, voicelog, llm, reconcile, reports, protected, survey, whales,
+                      bathy, cache as cachemod, species as speciesmod, voicelog, llm, reconcile, reports, protected, survey, whales,
                       exif as exifmod, madmf, photolog,
                       regs, ridem, score, solunar, spots)
 
@@ -2024,10 +2024,9 @@ class FishPhotos(unittest.TestCase):
         self.assertLess(fn.index("store_photos"), fn.index("catchlog.record("))
         self.assertIn("discard_photos(entry.photos)", fn)
         self.assertIn('url.path.startswith("/photos/")', srv, "the page has to be able to fetch one back")
-        trk = strip_py_comments(
-            (pathlib.Path(__file__).parent / "tiderace" / "track.py").read_text())
-        self.assertIn('"photos"', trk.split("def with_catches(")[1].split("\ndef ")[0],
-                      "the trips tab reads catches off the track join")
+        page = strip_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text())
+        self.assertIn("/photos/", page, "the catches list shows what was attached")
 
     def test_the_page_offers_the_gallery_and_sends_what_it_attached(self):
         import pathlib
@@ -2149,8 +2148,8 @@ class AmendingTheLog(unittest.TestCase):
         self.assertIn("logged_at: r.logged_at, species: r.species", fn,
                       "the key must be exact, not a guess")
         trips = page.split("async function showTrips(){")[1].split("\n}\n")[0]
-        self.assertEqual(trips.count("await renderCatches(body)"), 2,
-                         "catches are listed with and without tracks")
+        self.assertEqual(trips.count("await renderCatches(body)"), 1,
+                         "the catches are the Catches tab")
         cli = strip_py_comments((root / "tiderace" / "cli.py").read_text())
         self.assertIn('sub.add_parser("amend"', cli)
         self.assertIn("catchlog.amend(args.logged_at", cli)
@@ -4303,125 +4302,25 @@ class VoiceLog(unittest.TestCase):
             self.assertNotIn(banned, fn, f"no audio should be captured ({banned})")
 
 
-class TripTracks(unittest.TestCase):
-    """A trip recorded whether or not anybody remembered to log it.
+class TheTrackFileStaysPrivate(unittest.TestCase):
+    """The REC recorder went on 5 September 2026 (a page cannot read GPS with
+    the phone locked; it recorded the ramp, the dock and little between).
+    The file it wrote is still the most sensitive thing on the disk and
+    stays ignored; nothing in the code reads or writes it any more."""
 
-    Nobody forgets to log four keepers. Everybody forgets the blank -- and
-    blanks are half of what the evaluation harness has to work with, because a
-    model trained only on good days learns every day is good.
-    """
-
-    def _trip(self):
-        """Charlestown 40 min, run east 35, Whale Rock 55, run home."""
-        from datetime import datetime, timedelta
-        t = datetime(2026, 8, 31, 5, 0)
-        pts = []
-        def add(lat, lon, mins):
-            nonlocal t
-            for _ in range(mins):
-                pts.append({"lat": lat, "lon": lon, "t": t.isoformat()})
-                t += timedelta(minutes=1)
-        def run(a, b, mins):
-            nonlocal t
-            for k in range(mins):
-                f = k / mins
-                pts.append({"lat": a[0] + (b[0]-a[0])*f,
-                            "lon": a[1] + (b[1]-a[1])*f, "t": t.isoformat()})
-                t += timedelta(minutes=1)
-        A, B = (41.3745, -71.6390), (41.4408, -71.4228)
-        add(*A, 40); run(A, B, 35); add(*B, 55); run(B, A, 35)
-        return pts, A, B
-
-    def test_dwells_are_where_you_stopped_not_where_you_drove(self):
-        pts, A, B = self._trip()
-        d = track.dwells(pts)
-        self.assertEqual(len(d), 2, "two spots worked, two dwells")
-        found = sorted((round(x["lat"], 3), round(x["lon"], 3)) for x in d)
-        self.assertEqual(found, sorted([(round(A[0],3), round(A[1],3)),
-                                        (round(B[0],3), round(B[1],3))]))
-
-    def test_the_best_dwell_is_not_the_midpoint_of_the_track(self):
-        """The midpoint of a Charlestown-to-Whale-Rock trip is somewhere in
-        open water halfway along, which is where you drove."""
-        pts, A, B = self._trip()
-        s = track.summarise(pts)
-        self.assertAlmostEqual(s["best"]["lat"], B[0], places=2)
-        self.assertGreater(s["best"]["minutes"], 50)
-        mid_lat = (A[0] + B[0]) / 2
-        self.assertNotAlmostEqual(s["best"]["lat"], mid_lat, places=2)
-
-    def test_transit_never_becomes_a_dwell(self):
-        from datetime import datetime, timedelta
-        t = datetime(2026, 8, 31, 5, 0)
-        pts = [{"lat": 41.30 + k*0.004, "lon": -71.50,
-                "t": (t + timedelta(minutes=k)).isoformat()} for k in range(60)]
-        self.assertEqual(track.dwells(pts), [], "a straight run is not a spot")
-
-    def test_a_wild_gps_fix_is_discarded_not_averaged(self):
-        """Phone GPS throws the occasional fix a mile inland. Left in, one of
-        those splits a session in two and hides the spot; averaged in, it drags
-        the position off the piece."""
-        from datetime import datetime, timedelta
-        t = datetime(2026, 8, 31, 5, 0)
-        pts = [{"lat": 41.4408, "lon": -71.4228,
-                "t": (t + timedelta(minutes=k)).isoformat()} for k in range(20)]
-        pts.insert(10, {"lat": 41.55, "lon": -71.55,
-                        "t": (t + timedelta(minutes=10, seconds=30)).isoformat()})
-        self.assertEqual(len(track.clean(pts)), 20)
-        self.assertEqual(len(track.dwells(pts)), 1)
-
-    def test_two_pieces_with_a_run_between_stay_two(self):
-        """Rewritten: the old version teleported between two stationary spots
-        in one minute, which under a speed model reads as a boat repositioning
-        over the same structure -- and it is not obvious it should read as
-        anything else. Two pieces are separated by an actual run."""
-        import math
-        from datetime import datetime, timedelta
-        def leg(lat, lon, kt, mins, brg=0.0, t0=None):
-            t = t0 or datetime(2026, 8, 31, 6, 0)
-            pts = []
-            for _ in range(mins):
-                pts.append({"lat": lat, "lon": lon, "t": t.isoformat()})
-                lat += (kt / 60) * math.cos(math.radians(brg)) / 60
-                lon += ((kt / 60) * math.sin(math.radians(brg)) / 60
-                        / math.cos(math.radians(lat)))
-                t += timedelta(minutes=1)
-            return pts, lat, lon, t
-        a, lat, lon, t = leg(41.40, -71.45, 1.0, 20)
-        b, lat, lon, t = leg(lat, lon, 12.0, 6, brg=90, t0=t)
-        c, *_ = leg(lat, lon, 1.0, 20, t0=t)
-        self.assertEqual(len(track.sessions(a + b + c)), 2)
-
-    def test_the_rejoin_test_looks_at_ground_already_worked(self):
-        # Not at where the session started: a drift is half a mile long, so
-        # "near the start" is too strict at the far end of one and too loose
-        # for a second wreck sitting near the first one's beginning.
-        import inspect
-        src = inspect.getsource(track.sessions)
-        self.assertIn("for q in cur", src)
-
-    def test_a_glance_is_not_a_session(self):
-        from datetime import datetime, timedelta
-        t = datetime(2026, 8, 31, 5, 0)
-        pts = [{"lat": 41.44, "lon": -71.42,
-                "t": (t + timedelta(minutes=k)).isoformat()} for k in range(3)]
-        self.assertEqual(track.dwells(pts), [])
-
-    def test_the_track_is_written_to_the_phone_before_the_network(self):
-        """A track that only lives in a variable is lost to a backgrounded tab
-        or a dead battery, and a day on the water is not recoverable the way a
-        failed upload is."""
-        import pathlib as _p
-        page = (_p.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text()
-        fn = page.split("function tripStart()")[1].split("\n}")[0]
-        self.assertIn("tripSave", fn)
-        stop = page.split("async function tripStop()")[1].split("\n}")[0]
-        self.assertIn("tripSave(st)", stop, "a failed upload must not lose the day")
-
-    def test_tracks_are_gitignored(self):
-        import pathlib as _p
-        ig = (_p.Path(__file__).parent / ".gitignore").read_text()
+    def test_tracks_are_still_gitignored_and_nothing_touches_them(self):
+        import pathlib
+        root = pathlib.Path(__file__).parent
+        ig = (root / ".gitignore").read_text()
         self.assertIn("data/tracks.jsonl", ig)
+        self.assertFalse((root / "tiderace" / "track.py").exists())
+        for f in ("server.py", "cli.py", "log.py", "photolog.py"):
+            src = strip_py_comments((root / "tiderace" / f).read_text())
+            self.assertNotIn("tracks.jsonl", src, f)
+            self.assertNotIn("trackmod", src, f)
+        page = strip_comments((root / "tiderace" / "web" / "index.html").read_text())
+        for word in ("/api/track", "watchPosition(", "tiderace:trip", 'id="trip"'):
+            self.assertNotIn(word, page, word + " is the recorder coming back")
 
 
 class HowFishingActuallyWorks(unittest.TestCase):
@@ -4447,58 +4346,6 @@ class HowFishingActuallyWorks(unittest.TestCase):
                     / math.cos(math.radians(lat)))
             t += timedelta(minutes=1)
         return pts, lat, lon, t
-
-    def test_a_drift_is_one_session_not_a_gap(self):
-        """A 25-minute fluke drift covers half a mile. The displacement-based
-        version fragmented it into two dwells and lost the fishing entirely."""
-        pts, *_ = self._leg(41.40, -71.45, 1.2, 25)
-        ses = track.sessions(pts)
-        self.assertEqual(len(ses), 1)
-        self.assertEqual(ses[0]["kind"], "drift")
-        self.assertGreater(ses[0]["distance_nm"], 0.3, "it really does move")
-
-    def test_trolling_is_fishing(self):
-        pts, *_ = self._leg(41.20, -71.50, 3.0, 40)
-        ses = track.sessions(pts)
-        self.assertEqual(len(ses), 1)
-        self.assertEqual(ses[0]["kind"], "troll")
-
-    def test_a_run_is_not_fishing(self):
-        pts, *_ = self._leg(41.20, -71.50, 18.0, 30)
-        self.assertEqual(track.sessions(pts), [])
-
-    def test_drift_motor_back_drift_is_one_piece_of_structure(self):
-        """The bottom-fishing sawtooth. Three segments, one spot."""
-        a, lat, lon, t = self._leg(41.40, -71.45, 1.2, 25)
-        b, lat, lon, t = self._leg(lat, lon, 6.0, 4, brg=180, t0=t)
-        c, *_ = self._leg(lat, lon, 1.2, 25, t0=t)
-        ses = track.sessions(a + b + c)
-        self.assertEqual(len(ses), 1, "one piece worked twice is one session")
-        self.assertGreater(ses[0]["minutes"], 45)
-
-    def test_leaving_ends_the_session(self):
-        a, lat, lon, t = self._leg(41.40, -71.45, 1.2, 25)
-        b, lat, lon, t = self._leg(lat, lon, 18.0, 27, brg=90, t0=t)
-        c, *_ = self._leg(lat, lon, 3.0, 40, brg=45, t0=t)
-        ses = track.sessions(a + b + c)
-        self.assertEqual([x["kind"] for x in ses], ["drift", "troll"])
-
-    def test_speed_bands_are_ordered(self):
-        self.assertLess(track.DRIFT_MAX_KT, track.TROLL_MAX_KT)
-        self.assertEqual(track.kind_of(1.0), "drift")
-        self.assertEqual(track.kind_of(3.0), "troll")
-        self.assertEqual(track.kind_of(12.0), "run")
-
-    def test_a_session_keeps_its_path_not_just_a_centre(self):
-        """A half-mile drift reduced to its midpoint loses which end of the
-        piece produced the fish."""
-        pts, *_ = self._leg(41.40, -71.45, 1.2, 25)
-        s = track.sessions(pts)[0]
-        self.assertIn("path", s)
-        self.assertGreater(len(s["path"]), 10)
-        self.assertNotEqual(s["start"], s["end"])
-
-    # ---- several species, one trip ----
 
     def test_a_bottom_trip_writes_a_row_per_species(self):
         import tempfile, os
@@ -4964,7 +4811,7 @@ class SheetStructure(unittest.TestCase):
         peek = re.search(r"#sheet\.peek\{transform:translateY\(calc\(100% - (\d+)px\)\)\}", touch)
         self.assertIsNotNone(peek, "no peek rule in the touch block")
         band = peek.group(1)
-        for btn, stack in (("#here", ""), ("#trip", "72px + ")):
+        for btn, stack in (("#here", ""),):
             # Band first and undivided, then the button's own clearance
             # divided by --ui: the sheet is zoomed, so its band is 210 x --ui
             # on the glass, and so is a bare 210px on these zoomed buttons.
@@ -4977,28 +4824,7 @@ class SheetStructure(unittest.TestCase):
             self.assertIsNotNone(m, btn + " is not lifted in the touch block")
             self.assertEqual(m.group(1), band, btn + " lifts by a different band than the sheet keeps")
         zoomed = re.search(r"\n([^\n]*)\{ zoom: var\(--ui, 1\); \}", touch).group(1)
-        self.assertIn("#trip", zoomed,
-                      "#trip is positioned with calc(x / --ui) and must be zoomed like #here")
-
-    def test_the_rec_button_is_wired_after_it_exists(self):
-        """REC has never recorded a trip. initTrip ran inline, in a script
-        that sits ABOVE the <button id="trip"> in the markup, so
-        getElementById returned null, the guard returned, and no handler was
-        attached -- on every platform, since it was written. Measured on a
-        Pixel 7 emulation: every click event reached the button and
-        btn.onclick was null. The button stays where it is; the init waits
-        for the DOM. If someone moves the markup above the script this test
-        still passes, and that is fine -- it is the deferral that is asserted,
-        because it is correct in both orders."""
-        page = self._script()
-        self.assertIn("function initTrip(){", page)
-        self.assertIn("document.addEventListener('DOMContentLoaded', initTrip)", page,
-                      "initTrip must be deferred until the button exists")
-        self.assertNotIn("(function initTrip(){", page,
-                         "an inline IIFE runs before the markup below it is parsed")
-        # And the premise, so the comment explaining it stays true.
-        self.assertLess(page.index("function initTrip(){"),
-                        page.index('<button id="trip"'))
+        self.assertIn("#here", zoomed)
 
     def test_a_tap_on_the_handle_closes_the_sheet(self):
         """It was drag-only, with a 40px threshold, which is the wrong ask
@@ -6247,11 +6073,11 @@ class EverythingOnTheWaterIsReachable(unittest.TestCase):
         """It is most worth reading when there are no trips yet, which is
         exactly the branch an early-return would skip."""
         js = strip_comments(self.page)
-        fn = js.split("async function showTrips()")[1].split("\nasync function ")[0]
-        self.assertGreaterEqual(fn.count("body.innerHTML = scorecard"), 1)
-        self.assertGreaterEqual(
-            len(re.findall(r"body\.innerHTML = scorecard", fn)), 2,
-            "the empty-log branch and the populated branch both need it")
+        fn = js.split("async function showTrips()")[1].split("\nwindow.showTrips")[0]
+        self.assertIn("body.innerHTML = scorecard", fn)
+        self.assertIn("await renderCatches(body)", fn, "the log follows the scorecard")
+        self.assertIn("No catches logged yet", fn, "and an empty log says so")
+        self.assertNotIn("REC", fn)
 
     def test_the_scorecard_reports_how_many_trips_the_app_chose(self):
         """A model validated on water it recommended is grading its own

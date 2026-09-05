@@ -222,11 +222,16 @@ Every generated contour carries `model: true`.
 His father's words: **"don't give away my good spots."** There is no sharing
 feature and there should not be one.
 
-`data/tracks.jsonl` is the most sensitive file here by a distance — not "spots
-you saved" but every spot you actually fished, in order, with how long you sat
-on each. It, the catch log, the bait log, `my_spots.json` and `config.json` are
-all gitignored, and nothing transmits them anywhere but his own machine over
-the tailnet.
+`data/tracks.jsonl` was the most sensitive file here by a distance — not
+"spots you saved" but every spot you actually fished, in order, with how long
+you sat on each. The recorder that wrote it (REC) was removed on 5 September
+2026 — Matt: "honestly probably don't need the trip tracking in the app at
+all, just logged catches" — because a web page cannot keep reading GPS with
+the phone locked, so it recorded the ramp and the dock and little between.
+The file stays where it is, gitignored, and nothing reads it now. It, the
+catch log, the bait log, `my_spots.json`, `data/photos/` and `config.json`
+are all gitignored, and nothing transmits them anywhere but his own machine
+over the tailnet.
 
 Before any `git add -A`: check. 142 iNaturalist cache files (16 MB) went in
 that way once, and 3.8 MB of blobs are still in pushed history.

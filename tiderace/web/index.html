@@ -595,7 +595,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
    went full-width across the bottom of the desktop window, squeezed the map
    into a strip, and left every spot label sitting on top of the panel. */
 @media (max-width:900px), (pointer:coarse){
-#sheet, #bar, #here, #trip, #timebar{ zoom: var(--ui, 1); }
+#sheet, #bar, #here, #timebar{ zoom: var(--ui, 1); }
 /* A zoomed fixed element still resolves left/right against the UNZOOMED
    viewport, then multiplies the result -- so `left:0;right:0` came out 2.4x
    wider than the screen. Width has to be stated in the zoomed coordinate
@@ -664,11 +664,10 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
    button's own clearance is a screen distance and takes the division like
    every other length in this block. Measured with --ui at 1.66: dividing
    both put HERE 110px inside the sheet. */
-#here, #trip{ transition:bottom .22s cubic-bezier(.2,.8,.3,1); }
+#here{ transition:bottom .22s cubic-bezier(.2,.8,.3,1); }
 body.sheet-peek #here{
   bottom:calc(210px + (20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
-body.sheet-peek #trip{
-  bottom:calc(210px + 72px + (20px + env(safe-area-inset-bottom)) / var(--ui, 1)); }
+
 /* Ends short of the right edge, where HERE and REC live; with the sheet
    shut the bar sat under the slider's right end. The buttons are 60px in
    zoomed units and 14px of screen from the edge, so the clearance is written
@@ -715,9 +714,9 @@ body.sheet-peek #trip{
        border-top:1px dashed var(--hair)}
 .cedit .cmsg{margin-top:6px}
 .catch .fixed{color:var(--muted); font-size:11px}
-.trip .shots{display:flex; gap:4px; margin-top:6px}
-.trip .shots img{width:44px; height:44px; object-fit:cover; border-radius:6px;
-                 border:1px solid var(--hair)}
+.catch .shots{display:flex; gap:4px; margin-top:6px; grid-column:1 / -1}
+.catch .shots img{width:44px; height:44px; object-fit:cover; border-radius:6px;
+                  border:1px solid var(--hair)}
 /* The scorecard. Deliberately plain and deliberately first: it is the only
    thing in the app allowed to say the rest of it does not work yet. */
 .ev{padding:14px 16px; border-bottom:1px solid var(--hair)}
@@ -748,51 +747,20 @@ body.sheet-peek #trip{
 #slogheard b{color:var(--ink); font-weight:600}
 #slogheard .conf{color:var(--warn)}
 
-/* ---- trip recording -------------------------------------------------
-   Nobody forgets to log four keepers; everybody forgets to log the blank,
-   and blanks are half the signal. So this is one tap at the ramp and then
-   it is passive. It sits beside HERE rather than in the sheet, because it
-   has to be reachable without opening anything. */
-#trip{
-  position:fixed; right:calc(14px / var(--ui, 1)); z-index:35;
-  /* HERE's clearance, plus 72px of zoomed space: the buttons are 60px in
-     that space, so the 12px between them scales with them instead of
-     staying a screen distance while they grow -- at --ui 1.66 they were
-     drawn on top of each other. */
-  bottom:calc(72px + (20px + env(safe-area-inset-bottom)) / var(--ui, 1));
-  width:60px; height:60px; border-radius:50%;
-  background:var(--panel-2); color:var(--ink-2);
-  border:1px solid var(--hair);
-  font:600 10px/1.15 var(--mono); letter-spacing:.04em;
-  box-shadow:0 6px 18px rgba(0,0,0,.45); cursor:pointer;
-  display:flex; flex-direction:column; align-items:center; justify-content:center;
-}
-#trip:active{transform:scale(.94)}
-#trip.rec{
-  background:var(--crit); color:#fff; border-color:transparent;
-  animation:trippulse 2s ease-in-out infinite;
-}
-@keyframes trippulse{50%{opacity:.7}}
-@media (prefers-reduced-motion:reduce){#trip.rec{animation:none}}
-#trip b{font-size:14px; font-weight:700; display:block}
-@media (min-width:901px) and (pointer:fine){ #trip{display:none} }
-
-/* ---- trips ------------------------------------------------------------
-   A trip is a line and a list of fish, so the row shows both: the numbers
-   you scan for, and a tap to put the drift itself on the map. */
+/* ---- catches ----------------------------------------------------------
+   The catch log, row by row. */
 #tripsbtn{
   width:100%; min-height:52px; margin-top:10px; border-radius:12px;
   border:1px solid var(--hair); background:var(--panel-2); color:var(--ink);
   font:600 15px/1 var(--display); cursor:pointer;
 }
 #tripsbtn:active{transform:scale(.99)}
-.trip, .catch{
+.catch{
   display:grid; grid-template-columns:1fr auto; gap:4px 12px;
   padding:14px 16px; border-bottom:1px solid var(--hair-a);
   cursor:pointer; align-items:baseline;
 }
-.trip:active, .catch:active{background:var(--panel-2)}
-.trip.on{background:var(--panel-2); box-shadow:inset 3px 0 0 var(--accent)}
+.catch:active{background:var(--panel-2)}
 .trip .when{font:600 15px/1.2 var(--display); color:var(--ink)}
 .trip .fish{
   font:600 17px/1 var(--display); color:var(--accent);
@@ -2149,143 +2117,6 @@ function mergeCell(name, gj){
 map.on('moveend', loadCellsForView);
 
 
-/* ---- trip recording ---------------------------------------------------
- * One tap at the ramp, one at the dock. In between the phone keeps a
- * breadcrumb, so a trip exists whether or not anybody remembered to log it --
- * which is the whole point, because the trips people forget are the blanks,
- * and blanks are half of what the evaluation harness has to work with.
- *
- * Everything is written to the phone first. A track that only lives in a
- * variable is lost to a backgrounded tab, a dead battery, or a browser
- * deciding to reclaim memory, and losing a day on the water is not
- * recoverable the way a failed upload is.
- */
-const TRIP_KEY = 'tiderace:trip';
-let tripWatch = null;
-
-function tripState(){
-  try { return JSON.parse(localStorage.getItem(TRIP_KEY) || 'null'); }
-  catch (_) { return null; }
-}
-function tripSave(st){
-  try { localStorage.setItem(TRIP_KEY, JSON.stringify(st)); } catch (_) {}
-}
-
-function paintTrip(){
-  const btn = document.getElementById('trip');
-  if (!btn) return;
-  const st = tripState();
-  if (st){
-    const mins = Math.round((Date.now() - st.startedAt) / 60000);
-    btn.classList.add('rec');
-    btn.innerHTML = `<b>${mins}m</b>${st.points.length} fix`;
-    btn.setAttribute('aria-label', 'Stop recording this trip');
-  } else {
-    btn.classList.remove('rec');
-    btn.innerHTML = '<b>REC</b>trip';
-    btn.setAttribute('aria-label', 'Record this trip');
-  }
-}
-
-function tripStart(){
-  if (!navigator.geolocation) return;
-  tripSave({startedAt: Date.now(), points: []});
-  // High accuracy because the question is which side of a breachway you were
-  // on, not which town. maximumAge lets the OS reuse a recent fix instead of
-  // waking the GPS for every sample, which is most of the battery cost.
-  tripWatch = navigator.geolocation.watchPosition(pos => {
-    const st = tripState();
-    if (!st) return;
-    const p = {lat: +pos.coords.latitude.toFixed(6),
-               lon: +pos.coords.longitude.toFixed(6),
-               t: new Date().toISOString().slice(0, 19)};
-    const last = st.points[st.points.length - 1];
-    // One fix a minute is plenty to find a dwell and keeps the file small; a
-    // boat holding station does not need six a minute to prove it.
-    if (last && (Date.now() - Date.parse(last.t + 'Z')) < 55000) return;
-    st.points.push(p);
-    tripSave(st);
-    paintTrip();
-  }, () => {}, {enableHighAccuracy: true, maximumAge: 30000, timeout: 60000});
-  paintTrip();
-}
-
-async function tripStop(){
-  const st = tripState();
-  if (tripWatch !== null){ navigator.geolocation.clearWatch(tripWatch); tripWatch = null; }
-  localStorage.removeItem(TRIP_KEY);
-  paintTrip();
-  if (!st || st.points.length < 2){
-    if (typeof toast === 'function') toast('Too short to keep');
-    return;
-  }
-  try {
-    const r = await fetch('/api/track', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({points: st.points})
-    });
-    const d = await r.json();
-    if (d.summary) showTripSummary(d.summary);
-  } catch (_) {
-    // Out of signal at the dock. Put it back and it goes up next time the
-    // button is used; a day on the water is not worth losing to a dead bar.
-    tripSave(st);
-    paintTrip();
-  }
-}
-
-/* The end of a trip is the one moment you will actually log it: you are
-   stopped, the rod is down, and you still remember. So the summary opens the
-   sheet at the spot you spent longest on, with the log form already open. */
-function showTripSummary(s){
-  const d = s.best;
-  if (!d){ return; }
-  if (window.showConditions) showConditions(d.lat, d.lon, 'Where you fished longest');
-  setTimeout(() => {
-    const t = document.getElementById('slogtoggle');
-    const form = document.getElementById('slogform');
-    if (t && form && !form.classList.contains('open')) t.click();
-    const heard = document.getElementById('slogheard');
-    if (heard){
-      heard.className = 'show';
-      heard.innerHTML =
-        `<b>${s.minutes.toFixed(0)} min on the water</b> · ${s.distance_nm} nm · ` +
-        `${s.dwells.length} spot${s.dwells.length === 1 ? '' : 's'} worked<br>` +
-        `Longest stop was ${d.minutes.toFixed(0)} min here. ` +
-        `Log it — a blank counts.`;
-    }
-  }, 900);
-}
-
-function initTrip(){
-  const btn = document.getElementById('trip');
-  if (!btn) return;
-  btn.onclick = () => { tripState() ? tripStop() : tripStart(); };
-  // Survive a reload mid-trip: the points are on the phone, so pick the watch
-  // back up rather than silently recording nothing for the rest of the day.
-  if (tripState()) tripStart();
-  paintTrip();
-  setInterval(paintTrip, 30000);
-}
-// The button is in the markup AFTER this script, so when this ran inline
-// getElementById('trip') was null, the guard above returned, and no handler
-// was ever attached: REC has done nothing since it was written. Desktop hides
-// the button, so only a phone could show it -- and on the phone it was also
-// under the peek sheet (see setSheet), which is why the tap that found it
-// went unexplained for so long. Wire it once the DOM exists.
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initTrip);
-else initTrip();
-
-
-/* ---- trips ------------------------------------------------------------
- * What the tracking is for. A trip is a line and a list of fish; the row
- * shows the numbers and a tap puts the drift itself on the map.
- *
- * Only the fishing sessions are drawn, not the raw breadcrumb. The run out and
- * the run home are not information -- they are the same channel every time --
- * and drawing them buries the part that matters under a line to the ramp.
- */
-let TRIPS = [], TRIP_SHOWN = null;
 let LAST_OFFSHORE = false;
 
 // The sheet's own esc() lives inside its IIFE and is not reachable from here.
@@ -2295,95 +2126,12 @@ let LAST_OFFSHORE = false;
 const tesc = t => String(t == null ? '' : t)
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
-async function loadTrips(){
-  try { TRIPS = (await (await fetch('/api/tracks')).json()).tracks || []; }
-  catch (_) { TRIPS = []; }
-  return TRIPS;
-}
-
-function tripRow(t, i){
-  const d = new Date(t.started_at);
-  const when = d.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'})
-             + ' · ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-  const fish = t.fish > 0
-    ? `<div class="fish">${t.fish}</div>`
-    : `<div class="fish blank">blank</div>`;
-  const sp = (t.species || []).map(x => x.replace(/_/g,' ')).join(', ');
-  const bits = [
-    `${Math.round(t.minutes)} min`,
-    `${t.distance_nm} nm`,
-    `${(t.sessions || []).length} spot${(t.sessions||[]).length === 1 ? '' : 's'}`,
-    t.fishing_minutes ? `${Math.round(t.fishing_minutes)} min fishing` : '',
-  ].filter(Boolean).join(' · ');
-  const shots = (t.catches || []).flatMap(c => c.photos || []).slice(0, 4)
-    .map(p => `<img src="/photos/${encodeURIComponent(p).replace(/%2F/g, '/')}" alt="" loading="lazy">`)
-    .join('');
-  return `<div class="trip" data-trip="${i}">
-      <div class="when">${tesc(when)}</div>${fish}
-      <div class="meta">${tesc(bits)}${sp ? ' · <span class="sp">' + tesc(sp) + '</span>' : ''}</div>
-      ${shots ? `<div class="shots">${shots}</div>` : ''}
-    </div>`;
-}
-
-/* Draw one trip's fishing sessions. Redrawn rather than toggled per trip:
-   MapLibre sources are cheap to replace and this keeps exactly one trip on the
-   map, which is what you want when comparing two days. */
-function drawTrip(t){
-  if (!MAP_READY) return;
-  const feats = [];
-  for (const s of (t.sessions || [])){
-    if ((s.path || []).length > 1)
-      feats.push({type:'Feature',
-        geometry:{type:'LineString', coordinates: s.path.map(([la,lo]) => [lo,la])},
-        properties:{kind:s.kind, minutes:s.minutes}});
-  }
-  for (const c of (t.catches || []))
-    if (c.lat != null && c.lon != null)
-      feats.push({type:'Feature', geometry:{type:'Point', coordinates:[c.lon,c.lat]},
-                  properties:{fish:true, label:`${c.count} ${(c.species||'').replace(/_/g,' ')}`}});
-
-  const gj = {type:'FeatureCollection', features:feats};
-  if (map.getSource('trip')) { map.getSource('trip').setData(gj); }
-  else {
-    map.addSource('trip', {type:'geojson', data:gj});
-    map.addLayer({id:'trip-line', type:'line', source:'trip',
-      filter:['==',['geometry-type'],'LineString'],
-      layout:{'line-join':'round','line-cap':'round'},
-      paint:{'line-color':['match',['get','kind'],'troll','#D9A521','#F04FA0'],
-             'line-width':3.5, 'line-opacity':.9}});
-    map.addLayer({id:'trip-fish', type:'circle', source:'trip',
-      filter:['==',['get','fish'],true],
-      paint:{'circle-color':'#4FBF89','circle-radius':6,
-             'circle-stroke-width':2,'circle-stroke-color':'#0B1518'}});
-    map.addLayer({id:'trip-fish-lbl', type:'symbol', source:'trip',
-      filter:['==',['get','fish'],true], minzoom:10,
-      layout:{'text-field':['get','label'],'text-font':['Noto Sans Regular'],
-              'text-size':11,'text-offset':[0,1.2],'text-anchor':'top'},
-      paint:{'text-color': themeColour('--mk-ink', '#E4ECEE'),'text-halo-color': themeColour('--halo', 'rgba(11,21,24,.9)'),
-             'text-halo-width':1.2}});
-  }
-
-  // Frame the fishing, not the whole day.
-  const pts = feats.flatMap(f => f.geometry.type === 'LineString'
-    ? f.geometry.coordinates : [f.geometry.coordinates]);
-  if (pts.length){
-    const lons = pts.map(p=>p[0]), lats = pts.map(p=>p[1]);
-    map.fitBounds([[Math.min(...lons),Math.min(...lats)],
-                   [Math.max(...lons),Math.max(...lats)]],
-                  {padding:70, maxZoom:14, duration:700});
-  }
-}
-
-function clearTrip(){
-  for (const id of ['trip-fish-lbl','trip-fish','trip-line'])
-    if (map.getLayer(id)) map.removeLayer(id);
-  if (map.getSource('trip')) map.removeSource('trip');
-  TRIP_SHOWN = null;
-}
-
 /* ---- the catch log, row by row ---------------------------------------
- * Trips above are tracks; this is what was written down, and it carries the
- * one thing a form on a boat needs and never had: a way to fix a slip
+ * The catch log is the record now -- the REC track recorder went on
+ * 5 September 2026, because a web page cannot keep reading GPS with the
+ * phone locked and it recorded the ramp, the dock and little between. What
+ * was written down carries the one thing a form on a boat needs and never
+ * had: a way to fix a slip
  * afterwards. "11 fluke" for an 11-inch fluke. Tap a row, change the
  * numbers, save. The old values stay on the row (`amended`), the server
  * keeps a backup, and it will not guess which row: logged_at plus species
@@ -2404,10 +2152,16 @@ function catchRow(r, i){
   const fixed = (r.amended || []).length
     ? ` · <span class="fixed">corrected ${(r.amended || []).length}×</span>` : '';
   const n = +r.count || 0;
+  // The photos saved with the entry, if any: a count is not proof the right
+  // picture went in, and the row is where you would look for it.
+  const shots = (r.photos || []).slice(0, 4)
+    .map(p => `<img src="/photos/${encodeURIComponent(p).replace(/%2F/g, '/')}" alt="" loading="lazy">`)
+    .join('');
   return `<div class="catch" data-i="${i}">
       <div class="when">${when} · ${tesc(sp)}</div>
       ${n > 0 ? `<div class="fish">${n}</div>` : '<div class="fish blank">blank</div>'}
       <div class="meta">${tesc(where)}${big}${r.method ? ' · ' + tesc(r.method) : ''}${fixed}</div>
+      ${shots ? `<div class="shots">${shots}</div>` : ''}
     </div>`;
 }
 
@@ -2474,17 +2228,13 @@ async function renderCatches(body){
 async function showTrips(){
   const body = document.getElementById('sheetbody');
   const head = document.getElementById('sheettitle');
-  const sheet = document.getElementById('sheet');
   if (!body) return;
-  head.textContent = 'Trips';
+  head.textContent = 'Catches';
   document.getElementById('sheetwhen').textContent = '';
   document.getElementById('sheetzone').textContent = '';
-  body.innerHTML = '<div class="sdim">reading trips…</div>';
+  body.innerHTML = '<div class="sdim">reading the log…</div>';
   window.setSheet('full');
 
-  // How the model is doing, above the trips it is judged on. This lived only
-  // in the CLI, so the one number that can say the other sixteen data sources
-  // are worthless was the one number never looked at.
   let scorecard = '';
   try{
     const ev = await (await fetch('/api/evaluate')).json();
@@ -2495,8 +2245,6 @@ async function showTrips(){
         <div class="evrow"><span>moving water + low light</span><b>${pct(ev.baseline_rho)}</b></div>
         <div class="evrow"><span>solunar</span><b>${pct(ev.solunar_rho)}</b></div>
         <div class="evrow"><span>random</span><b>${pct(ev.random_rho)}</b></div>` : '';
-      // The share of trips the app picked. A model validated on water it chose
-      // is grading its own homework, and this is the number that shows it.
       const chosen = ev.app_chosen_share
         ? `<div class="evrow dim"><span>trips the app chose</span>` +
           `<b>${Math.round(ev.app_chosen_share * 100)}%</b></div>` : '';
@@ -2508,35 +2256,18 @@ async function showTrips(){
           rows + chosen +
         `</div>`;
     }
-  } catch(_){ /* offline: the trips below still work */ }
+  } catch(_){ /* offline: the log below still works */ }
 
-  const ts = await loadTrips();
-  if (!ts.length){
-    body.innerHTML = scorecard + '<div class="sdim">No trips recorded yet. Hit REC at the ' +
-      'ramp and stop at the dock — a trip is kept whether or not you log a fish, ' +
-      'and the blanks are the half everyone throws away.</div>';
-    await renderCatches(body);
-    return;
-  }
-  const fish = ts.reduce((n,t) => n + (t.fish||0), 0);
-  const blanks = ts.filter(t => !t.fish).length;
-  body.innerHTML = scorecard +
-    `<div class="sgroup">${ts.length} trip${ts.length===1?'':'s'} · ` +
-    `${fish} fish · ${blanks} blank${blanks===1?'':'s'}</div>` +
-    ts.map(tripRow).join('') +
-    `<div class="sdim">Tap a trip to put its drifts on the map. ` +
-    `Pink is drifting, amber is trolling; green dots are logged catches.</div>`;
-
+  // The scorecard first, because it is the only thing in the app allowed to
+  // say the rest of it does not work yet; then every logged catch, newest
+  // first, each one a tap from being corrected.
+  body.innerHTML = scorecard;
+  const before = body.children.length;
   await renderCatches(body);
-  body.querySelectorAll('.trip').forEach(el => el.onclick = () => {
-    const t = ts[+el.dataset.trip];
-    body.querySelectorAll('.trip').forEach(x => x.classList.remove('on'));
-    if (TRIP_SHOWN === t){ clearTrip(); return; }
-    el.classList.add('on');
-    TRIP_SHOWN = t;
-    drawTrip(t);
-    window.setSheet('peek');          // get out of the way of the map
-  });
+  if (body.children.length === before)
+    body.insertAdjacentHTML('beforeend',
+      '<div class="sdim">No catches logged yet. Pick where you are, open the Log tab, ' +
+      'and write it down — a blank counts as much as a fish.</div>');
 }
 window.showTrips = showTrips;
 
@@ -3251,7 +2982,6 @@ map.on('click', e => {
 </script>
 
 <button id="here" aria-label="Conditions at my location">HERE</button>
-<button id="trip" aria-label="Record this trip"><b>REC</b>trip</button>
 <div id="sheet" aria-live="polite">
   <div id="sheetgrip" role="button" tabindex="0" aria-label="Collapse panel"><div class="gbar"></div><span class="gcue"></span></div>
   <div id="sheethead">
@@ -3264,7 +2994,7 @@ map.on('click', e => {
     <button data-view="now" class="on">Now<span class="n"></span></button>
     <button data-view="log">Log<span class="n"></span></button>
     <button data-view="spots">Spots<span class="n"></span></button>
-    <button data-view="trips">Trips<span class="n"></span></button>
+    <button data-view="trips">Catches<span class="n"></span></button>
   </div>
   <div id="sheetbody"></div>
 </div>
