@@ -2602,6 +2602,86 @@ class PelagicPositions(unittest.TestCase):
         self.assertIn("unvalidated", page.split("function paint(){")[1].split("\nfunction ")[0])
 
 
+class RankedDotsOnTheMap(unittest.TestCase):
+    """Matt, 9 September 2026: "it would be great to have the recommended
+    spots color coded by quality, like make the best spot very noticeable and
+    have a gradient as the spots rate worse. also it's pretty difficult to tap
+    on a spot on mobile." Measured on a Pixel 7 emulation before the change:
+    thirty striped bass positions scoring 27.7 to 68.7 drew at 15 to 20 px in
+    colours from rgb(66,137,152) to rgb(186,132,176) -- the absolute 0-100
+    ramp, which on a slow day is all one muted teal -- and a tap selected a
+    dot out to 10 px from its centre and missed at 14, reporting the water
+    under the finger instead."""
+
+    def setUp(self):
+        import pathlib
+        self.page = strip_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text())
+
+    def _paint(self):
+        return self.page.split("function paint(){")[1].split("\nfunction ")[0]
+
+    def test_dots_are_coloured_by_where_they_sit_in_the_field(self):
+        fn = self._paint()
+        self.assertIn("const fld = fieldAt(TI);", fn, "the field at the slider time")
+        self.assertIn("dot.style.background = qualityColour(q)", fn)
+        self.assertNotIn("dot.style.background = colour(s)", fn,
+                         "the absolute ramp is what made every dot the same teal")
+        # And the scale really is relative: worst of the field is 0, best is 1.
+        q = self.page.split("function quality(s, fld){")[1].split("\n}")[0]
+        self.assertIn("(s - fld.lo) / (fld.hi - fld.lo)", q)
+
+    def test_the_best_position_is_the_biggest_dot_with_a_halo(self):
+        fn = self._paint()
+        self.assertRegex(fn, r"rk === 1 \? 30 : 14 \+ q\*12",
+                         "top 30 px, the rest 14-26 by quality")
+        self.assertIn("classList.toggle('best', rk === 1)", fn)
+        css = self.page.split("#map .dot.best{")[1].split("}")[0]
+        self.assertIn("var(--accent)", css, "the halo is in the accent")
+        # Inline beats a class, so the dot's shadow must not be inline any more
+        # or .best cannot win.
+        mk = self.page.split("function makeMarker(")[1].split("\n}")[0]
+        self.assertNotIn("box-shadow", mk)
+
+    def test_the_digit_on_the_dot_is_its_place_in_the_list(self):
+        fn = self._paint()
+        self.assertIn("digit.textContent = rk && rk <= RANKED_ROWS ? String(rk) : ''", fn)
+        rank = self.page.split("function renderRank(){")[1].split("\nfunction ")[0]
+        self.assertIn(".slice(0, RANKED_ROWS)", rank, "as many digits as rows")
+        self.assertIn('<span class="rk" style="background:${c}">${i + 1}</span>', rank)
+        # Both orderings are the same sort, so a tie lands the same digit.
+        field = self.page.split("function fieldAt(ti){")[1].split("\n}")[0]
+        self.assertIn(".sort((a,b) => b.s - a.s)", field)
+        self.assertIn(".sort((a,b) => b.s - a.s)", rank)
+        self.assertRegex(self.page, r"const RANKED_ROWS = 8;")
+
+    def test_the_ramp_runs_from_the_accent_to_something_far_from_it(self):
+        import json
+        m = re.search(r"const QUALITY_STOPS = (\[\[.*?\]\]);", self.page, re.S)
+        self.assertIsNotNone(m)
+        stops = json.loads(m.group(1))
+        self.assertEqual(stops[0][0], 0.0)
+        self.assertEqual(stops[-1][0], 1.0)
+        self.assertEqual(stops[-1][1], [240, 79, 160], "best is the accent, #F04FA0")
+        lo, hi = stops[0][1], stops[-1][1]
+        dist = sum((a - b) ** 2 for a, b in zip(lo, hi)) ** 0.5
+        self.assertGreater(dist, 150, "the ends must be telling apart at arm's length")
+
+    def test_a_tap_near_a_position_selects_it_before_the_water_is_reported(self):
+        fn = self.page.split("map.on('click', e => {")[1].split("\n});")[0]
+        self.assertLess(fn.index("nearestSpot("), fn.index("reportAt("),
+                        "the snap runs first, or a rock under the finger wins")
+        self.assertIn("if (hit){ select(hit.key); return; }", fn)
+        self.assertIn("SNAP_PX()", fn)
+        m = re.search(r"const SNAP_PX = \(\) => matchMedia\('\(pointer:coarse\)'\)\.matches \? (\d+) : (\d+);",
+                      self.page)
+        self.assertIsNotNone(m)
+        self.assertGreaterEqual(int(m.group(1)), 20, "half a fingertip on a touch screen")
+        self.assertLess(int(m.group(2)), int(m.group(1)))
+        near = self.page.split("function nearestSpot(point, spots, project, radius){")[1].split("\n}")[0]
+        self.assertIn("let best = null, bestD = radius;", near, "nothing beyond the radius")
+        self.assertIn("if (d <= bestD)", near)
+
 class ChartNumbersOnThePhone(unittest.TestCase):
     """Matt: I can't read the depths on the soundings or contours on the
     phone anymore. Measured on a Pixel 7 emulation, daylight theme, soundings

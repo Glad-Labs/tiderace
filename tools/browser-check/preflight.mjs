@@ -277,6 +277,51 @@ async function run(url) {
        fabs.here.hit === 'here' && fabs.here.bottom >= fabs.sheetTop,
        JSON.stringify(fabs));
 
+    // The best position has to be the thing you can find and hit. Before
+    // 9 Sep 2026 every dot was 15-20 px in the same muted teal (the absolute
+    // 0-100 ramp, on a slow day), and a tap selected one only within ~10 px
+    // of its centre -- past that it reported the water under the finger.
+    // Measured with the sheet in peek, which is how the phone boots, and the
+    // best position put at the centre of the screen.
+    const dots = await p.evaluate(async () => {
+      const was = window.sheetState();
+      window.setSheet('peek');
+      const f = fieldAt(TI);
+      if (!f.ranked.length) return null;
+      const top = f.ranked[0].sp, worst = f.ranked[f.ranked.length - 1].sp;
+      map.jumpTo({center: [top.lon, top.lat], zoom: Math.max(map.getZoom(), 11)});
+      await new Promise(r => setTimeout(r, 900));
+      const dot = k => MARKERS[k].el.querySelector('.dot');
+      const tb = dot(top.key).getBoundingClientRect();
+      const others = Object.values(MARKERS).filter(m => m.el.dataset.key !== top.key)
+        .map(m => m.el.querySelector('.dot').getBoundingClientRect().width);
+      SEL = null; paint();
+      return { key: top.key, x: tb.left + tb.width / 2, y: tb.top + tb.height / 2,
+               size: tb.width, maxOther: Math.max(...others),
+               colour: dot(top.key).style.background, worstColour: dot(worst.key).style.background,
+               digit: dot(top.key).querySelector('.rk').textContent,
+               halo: dot(top.key).classList.contains('best'),
+               spread: f.hi - f.lo, n: f.ranked.length, was };
+    });
+    ok(`phone/${scheme}: the best position is the biggest, brightest dot`,
+       dots && dots.n > 1 && dots.halo && dots.digit === '1' && dots.size > dots.maxOther
+         && (dots.spread < 1 || dots.colour !== dots.worstColour),
+       dots ? `${dots.size}px vs ${dots.maxOther}px, ${dots.colour} vs ${dots.worstColour}, ${dots.n} scored` : 'no field');
+    let snapped = null;
+    if (dots) {
+      await p.touchscreen.tap(dots.x + 18, dots.y);
+      await p.waitForTimeout(800);
+      snapped = await p.evaluate(async was => {
+        const sel = SEL;
+        SEL = null; paint();
+        window.setSheet(was);
+        await new Promise(r => setTimeout(r, 500));
+        return sel;
+      }, dots.was);
+    }
+    ok(`phone/${scheme}: a tap 18 px off the best dot selects it`,
+       dots && snapped === dots.key, dots ? `selected ${snapped}` : 'no field');
+
     // The chart's own numbers have to be readable on this theme. Sounding
     // ink was a fixed grey chosen for the dark chart and measured 1.37:1 on
     // the daylight water; the contour numbers had gone theme-aware and the

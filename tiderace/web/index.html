@@ -212,6 +212,24 @@ input[type=range]{width:100%; accent-color:var(--accent); cursor:pointer}
 .rank button.on{border-color:var(--accent)}
 .rank .s{font-family:var(--mono); font-weight:600; font-variant-numeric:tabular-nums; font-size:12px}
 .rank .m{font-family:var(--mono); font-size:10px; color:var(--muted)}
+/* The rank disc: the same digit, in the same colour, as the dot on the map,
+   so the list and the chart can be read against each other. */
+.rank .rk{display:inline-flex; align-items:center; justify-content:center;
+  width:26px; height:26px; border-radius:50%; font:700 12px/1 var(--mono);
+  color:#fff; text-shadow:0 0 2px rgba(0,0,0,.55); border:2px solid var(--mk-edge)}
+.rank .s{display:flex; flex-direction:column; align-items:flex-end; gap:2px}
+/* Position dots. The look lives here rather than inline so `.best` and `.sel`
+   can win: an inline box-shadow beats any class. The colour, size and digit
+   are painted per slider tick by paint(). */
+#map .dot{border:2px solid var(--mk-edge); box-shadow:0 0 0 1px rgba(228,236,238,.35)}
+#map .dot .rk{position:absolute; inset:0; display:flex; align-items:center;
+  justify-content:center; font:700 11px/1 var(--mono); color:#fff;
+  text-shadow:0 0 2px rgba(0,0,0,.6); pointer-events:none}
+/* The best position at the slider time. A halo in the accent, wide enough
+   to be found from arm's length on a phone in sunlight. */
+#map .dot.best{box-shadow:0 0 0 2px var(--mk-edge), 0 0 0 5px var(--accent),
+  0 0 16px 6px rgba(240,79,160,.55)}
+#map .dot.sel{outline:2px solid var(--mk-ink); outline-offset:3px}
 .empty{color:var(--muted); font-size:12.5px; line-height:1.55}
 .note{font-size:11.5px; color:var(--muted); line-height:1.5}
 /* The dropped mark reads as a crosshair rather than another spot dot: it is a
@@ -766,6 +784,10 @@ body.sheet-peek #here{
 }
 .catch:active{background:var(--panel-2)}
 .trip .when{font:600 15px/1.2 var(--display); color:var(--ink)}
+.trip .when .rk{display:inline-flex; align-items:center; justify-content:center;
+  width:24px; height:24px; margin-right:8px; border-radius:50%; vertical-align:middle;
+  font:700 12px/1 var(--mono); color:#fff; text-shadow:0 0 2px rgba(0,0,0,.55);
+  border:2px solid var(--mk-edge)}
 .trip .fish{
   font:600 17px/1 var(--display); color:var(--accent);
   font-variant-numeric:tabular-nums; text-align:right;
@@ -929,6 +951,55 @@ function colour(s){
   const c = a[1].map((v,i)=>Math.round(v+(b[1][i]-v)*f));
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
+
+/* How a position is coloured on the map and in the ranked list. RELATIVE to
+   the field at the slider time, not to the 0-100 scale: colour(s) above is
+   absolute, and on a slow day every dot it drew was the same muted teal --
+   measured on the phone, 30 striped bass positions from 27.7 to 68.7 spanned
+   rgb(66,137,152) to rgb(186,132,176), and the best one could not be told
+   from the fourth-best. What you want on the water is "which of these is
+   best, and by roughly how much", and that is a question about the field.
+   The number on the card stays absolute; the colour says where it sits.
+
+   The ramp runs from the accent (best) down through purple to a slate that
+   sits close to the chart's own water tones, so the worst positions recede
+   and the best one is the thing that pops. One family of hue, so the order
+   reads as an order rather than as categories. */
+const QUALITY_STOPS = [[0.00,[84,100,114]],[0.35,[118,92,150]],
+                       [0.70,[196,82,168]],[1.00,[240,79,160]]];
+function qualityColour(t){
+  if (t == null || isNaN(t)) return '#5D7075';
+  t = Math.max(0, Math.min(1, t));
+  const stops = QUALITY_STOPS;
+  let a = stops[0], b = stops[stops.length-1];
+  for (let i=0;i<stops.length-1;i++){ if (t>=stops[i][0] && t<=stops[i+1][0]){ a=stops[i]; b=stops[i+1]; break; } }
+  const f = (t-a[0])/((b[0]-a[0])||1);
+  const c = a[1].map((v,i)=>Math.round(v+(b[1][i]-v)*f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+/* The field at the slider time: its best and worst score, and every scored
+   position in rank order. Ties keep the grid's order, which is what the
+   ranked list does too, so the digit on a dot is the digit in the list. */
+function fieldAt(ti){
+  const ranked = (GRID ? GRID.spots : [])
+    .map(sp => ({sp, s: sp.scores[ti]}))
+    .filter(r => r.s != null)
+    .sort((a,b) => b.s - a.s);
+  const hi = ranked.length ? ranked[0].s : null;
+  const lo = ranked.length ? ranked[ranked.length-1].s : null;
+  const rank = {};
+  ranked.forEach((r, i) => rank[r.sp.key] = i + 1);
+  return {ranked, hi, lo, rank};
+}
+// Where a score sits in the field, 0 (worst) to 1 (best). A field of one, or
+// of equals, is all best: nothing there is worse than anything else.
+function quality(s, fld){
+  if (s == null || fld.hi == null) return null;
+  if (fld.hi - fld.lo < 1e-9) return 1;
+  return (s - fld.lo) / (fld.hi - fld.lo);
+}
+// Digits go on as many dots as the ranked list shows, so the two agree.
+const RANKED_ROWS = 8;
 
 /* The server substitutes this at request time. The style must exist when the
    Map is constructed, and every layer this app adds hangs off map.on('load')
@@ -1112,8 +1183,7 @@ function makeMarker(sp){
   el.style.cssText = 'position:relative;width:0;height:0;cursor:pointer';
   el.innerHTML =
     `<div class="dot" style="position:absolute;left:0;top:0;width:18px;height:18px;
-        margin:-9px 0 0 -9px;border-radius:50%;border:2px solid var(--mk-edge);
-        box-shadow:0 0 0 1px rgba(228,236,238,.35)"></div>
+        margin:-9px 0 0 -9px;border-radius:50%"><span class="rk"></span></div>
      <div class="lbl" style="position:absolute;left:15px;top:0;transform:translateY(-50%);
         font-family:var(--mono);font-size:10px;font-weight:600;
         color:var(--mk-ink);
@@ -1250,14 +1320,24 @@ function paint(){
       (det.season_note ? ` · ${det.season_note}` : '')
     : '';
 
+  const fld = fieldAt(TI);
   GRID.spots.forEach(sp => {
     const s = sp.scores[TI];
     const m = MARKERS[sp.key];
     if (!m) return;   // map not ready yet -- panel still renders below
     const dot = m.el.querySelector('.dot');
-    dot.style.background = colour(s);
-    const size = s == null ? 12 : 12 + (s/100)*12;
+    const q = quality(s, fld);
+    const rk = fld.rank[sp.key];
+    dot.style.background = qualityColour(q);
+    // Worst 14 px, best 26 px, and the top position 30 px with its halo:
+    // the sizes were measured at 15-20 px before, which is under a fingertip
+    // and not a gradient anyone could see.
+    const size = q == null ? 12 : rk === 1 ? 30 : 14 + q*12;
     dot.style.width = dot.style.height = size + 'px';
+    dot.classList.toggle('best', rk === 1);
+    dot.classList.toggle('sel', sp.key === SEL);
+    const digit = dot.querySelector('.rk');
+    if (digit) digit.textContent = rk && rk <= RANKED_ROWS ? String(rk) : '';
     // The dot centres itself on the origin. This used to set the ROOT's
     // transform, which is MapLibre's -- every tick of the time slider threw
     // all 21 markers back to the top-left corner until the map next moved.
@@ -1285,13 +1365,15 @@ function renderRank(){
   const rows = GRID.spots
     .map(sp => ({sp, s: sp.scores[TI]}))
     .filter(r => r.s != null)
-    .sort((a,b) => b.s - a.s).slice(0, 8);
-  $('#rank').innerHTML = rows.map(r => {
+    .sort((a,b) => b.s - a.s).slice(0, RANKED_ROWS);
+  const fld = fieldAt(TI);
+  $('#rank').innerHTML = rows.map((r, i) => {
     const d = r.sp.detail[TI] || {};
+    const c = qualityColour(quality(r.s, fld));
     return `<button data-k="${r.sp.key}" class="${SEL===r.sp.key?'on':''}">
-      <span class="s" style="color:${colour(r.s)}">${r.s.toFixed(0)}</span>
+      <span class="rk" style="background:${c}">${i + 1}</span>
       <span>${r.sp.label}<br><span class="m">${GRID.offshore ? offshoreLine(d, r.sp) : `${(d.current_speed??0).toFixed(2)} kt ${d.current_dir||''}`}</span></span>
-      <span class="m">${d.wind_kt!=null?d.wind_kt.toFixed(0)+' kt':''}</span>
+      <span class="s"><span style="color:${c}">${r.s.toFixed(0)}</span><span class="m">${d.wind_kt!=null?d.wind_kt.toFixed(0)+' kt':''}</span></span>
     </button>`;
   }).join('') || (GRID.modelled === false
     ? `<p class="empty">No forecast for ${tesc(GRID.species_name || 'this fish')}. ` +
@@ -1318,7 +1400,9 @@ function renderDetail(){
   if (!SEL){ $('#detail').innerHTML =
     `<p class="ph">Spot</p><p class="empty">The positions on the map are prospected from the
      charted soundings for this fish — structure, gated for its depth — and ranked by the
-     water at the slider time. Pick one to see its conditions, its 48-hour curve, and to
+     water at the slider time. The brightest, biggest dot is the best of them and the
+     numbers on the dots are the places in the list below; the colour fades as the
+     positions rate worse. Pick one to see its conditions, its 48-hour curve, and to
      log a trip there.<br><br>
      Tap anywhere on the water for a report at that exact coordinate.</p>`; $('#logbox').innerHTML=''; return; }
   const sp = GRID.spots.find(s => s.key === SEL);
@@ -1330,7 +1414,7 @@ function renderDetail(){
       <h3>${sp.label}</h3>
       <div class="sub">${sp.private ? 'your mark' + (sp.key && !sp.key.startsWith('at:') ? ' ' + tesc(sp.key) : '') : (GRID.offshore ? 'found ' : 'prospected ') + sp.kind}${sp.depth_ft != null ? (GRID.offshore ? ' · modelled ' : ' · charted ') + Math.round(sp.depth_ft) + ' ft' : ''}${sp.best_stage?' · best on '+sp.best_stage:''}${GRID.offshore ? ' · unvalidated' : ''}${GRID.basis && GRID.basis !== 'this water' ? ' · ' + tesc(GRID.basis) : ''}</div>
       ${GRID.basis && GRID.basis !== 'this water' ? `<div class="note" style="margin:6px 0 0">Bands from ${tesc(GRID.basis)}: ${tesc(GRID.basis_claim || '')}. Not measured in this bay.</div>` : ''}
-      <div class="big" style="color:${colour(s)};margin-top:10px">${s!=null?s.toFixed(1):'—'}</div>
+      <div class="big" style="color:${qualityColour(quality(s, fieldAt(TI)))};margin-top:10px">${s!=null?s.toFixed(1):'—'}</div>
       ${sp.scores.length ? sparkline(sp.scores) : ''}
       <dl class="kv">
         ${GRID.offshore ? `
@@ -2991,8 +3075,36 @@ function renderMark(){
 
 // Chart features and bait sightings have their own click handlers and their own
 // popups; a tap that landed on one of those was not a request for a report.
+/* The nearest scored position to a tap, within a radius, or null. Pure:
+   `project` turns a spot into {x, y} so the decision can be tested with
+   numbers. Positions hidden behind the sheet are skipped by the caller. */
+function nearestSpot(point, spots, project, radius){
+  let best = null, bestD = radius;
+  for (const sp of spots){
+    const pt = project(sp);
+    const d = Math.hypot(pt.x - point.x, pt.y - point.y);
+    if (d <= bestD){ bestD = d; best = sp; }
+  }
+  return best;
+}
+// A fingertip is about 34 CSS px across. The dot itself accepted taps out to
+// ~10 px from its centre (measured: 10 hit, 14 missed), and a miss reported
+// the water under the finger instead -- which is what "difficult to tap on a
+// spot" was. Half a fingertip on a touch screen; a few px for a mouse.
+const SNAP_PX = () => matchMedia('(pointer:coarse)').matches ? 22 : 8;
+
 map.on('click', e => {
   if (!MAP_READY) return;
+  // A tap near a scored position means that position, not the water beside
+  // it. Runs before the chart-feature query, because a rock three pixels
+  // wide under the same finger is not what you were reaching for.
+  if (GRID && GRID.spots){
+    const shown = GRID.spots.filter(sp => sp.scores[TI] != null
+      && !(MARKERS[sp.key] && MARKERS[sp.key].el.style.visibility === 'hidden'));
+    const hit = nearestSpot(e.point, shown,
+                            sp => map.project([sp.lon, sp.lat]), SNAP_PX());
+    if (hit){ select(hit.key); return; }
+  }
   // Fills are excluded on purpose. The depth layer covers every square metre of
   // water, so counting it as "you clicked a feature" would swallow every tap
   // and the map would silently stop answering.
@@ -3886,17 +3998,21 @@ window.surveyURL = (lat, lon) =>
     const rows = GRID.spots
       .map(sp => ({sp, s: (sp.scores || [])[TI] ?? null}))
       .sort((a, b) => (b.s ?? -1) - (a.s ?? -1));
+    const fld = fieldAt(TI);
     body.innerHTML =
       `<div class="sgroup">${GRID.species_name || ''}` +
       `${t ? ' · ' + new Date(t).toLocaleString([], {weekday:'short', hour:'2-digit', minute:'2-digit'}) : ''}</div>` +
-      rows.map(({sp, s}) => {
+      rows.map(({sp, s}, i) => {
         const d = (sp.detail || [])[TI] || {};
         const cur = GRID.offshore ? offshoreLine(d, sp)
           : d.current_speed != null
           ? `${d.current_speed.toFixed(2)} kt ${d.current_dir || ''}` : '';
+        // The same digit and colour as the dot on the map, so the list in
+        // your hand and the chart above it can be read against each other.
+        const c = qualityColour(quality(s, fld));
         return `<div class="trip" data-spot="${esc(sp.key)}">
-            <div class="when">${esc(sp.label)}</div>
-            <div class="fish">${s == null ? '—' : Math.round(s)}</div>
+            <div class="when">${s == null ? '' : `<span class="rk" style="background:${c}">${i + 1}</span>`}${esc(sp.label)}</div>
+            <div class="fish" style="color:${c}">${s == null ? '—' : Math.round(s)}</div>
             <div class="meta">${s == null
               ? esc((sp.error || 'not scored here').replace(/\.$/, ''))
               : esc(cur)}</div>

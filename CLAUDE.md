@@ -340,6 +340,16 @@ be bumped on every change or phones keep the old shell.
   arrow, from above its declaration hits the temporal dead zone and takes the
   *whole script* down — which is how `showConditions` once stopped existing and
   tapping the map did nothing. Two separate bugs of this shape so far.
+- **Dots are coloured relative to the field, not to the 0-100 scale.**
+  `colour(s)` is absolute and on a slow day painted thirty positions the same
+  muted teal (measured 9 September 2026: 27.7 to 68.7 spanned two nearly
+  identical colours at 15-20 px). `qualityColour(quality(s, fieldAt(TI)))`
+  runs the accent down to slate across the best-to-worst of the positions at
+  the slider time; the top one is 30 px with a halo and the top eight carry
+  the digit they have in the ranked list. The number on the card stays
+  absolute. A tap within 22 px of a position on a touch screen selects it
+  before the chart-feature query runs (`nearestSpot`); the dot itself only
+  took taps out to ~10 px, and a miss reported the water under the finger.
 - Verify on a real touch viewport, not by reading the CSS. Measure the thing
   Matt complains about before changing it; "clunky" turned out to be 2,590 px
   of content in an 812 px viewport, which is a structural fact, not a taste.
