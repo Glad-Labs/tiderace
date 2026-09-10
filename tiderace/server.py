@@ -656,7 +656,9 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     return self._send_json({"error": "lat and lon required"}, 400)
                 species = q.get("species", ["striped_bass"])[0]
-                if species not in score.PROFILES:
+                # Any fish the app can log; point.report says when it has
+                # no inshore score for one rather than the route refusing.
+                if speciesmod.get(species) is None:
                     return self._send_json({"error": f"unknown species {species}"}, 400)
                 hours = min(int(q.get("hours", ["48"])[0]), 96)
                 try:

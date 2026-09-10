@@ -2393,6 +2393,18 @@ class PelagicPositions(unittest.TestCase):
     """The candidate finder and the grid, on a synthetic ocean: a warm
     tongue with one sharp edge, and a bottom with one wall."""
 
+    # Your marks join every offshore field (candidates(..., marks)), so a
+    # mark saved on this machine would put a 'mark' in the sets below and
+    # turn the suite red for having gone fishing. Found 9 September 2026
+    # after `tiderace at --save` in the worktree. The tests are about the
+    # features, so they run against no marks and put yours back after.
+    def setUp(self):
+        self._saved_marks = list(spots.SPOTS)
+        spots.SPOTS[:] = []
+
+    def tearDown(self):
+        spots.SPOTS[:] = self._saved_marks
+
     def _sst(self):
         # 41 x 41 points over the box; 22 C water with a 26 C tongue whose
         # edge runs north-south at -71.3
@@ -2601,6 +2613,86 @@ class PelagicPositions(unittest.TestCase):
         self.assertIn("map.fitBounds", load, "the map has to follow the fish offshore")
         self.assertIn("unvalidated", page.split("function paint(){")[1].split("\nfunction ")[0])
 
+
+class RegsForAFederalFish(unittest.TestCase):
+    """`tiderace regs --species bluefin` raised KeyError: the picker accepts
+    every scored fish, and eleven of them are offshore species regs.py has
+    never heard of, so score.PROFILES[sp].name blew up before a word was
+    printed. Found on 9 September 2026 running every subcommand."""
+
+    def _run(self, species):
+        import contextlib, io
+        from types import SimpleNamespace
+        from tiderace import cli
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = cli._cmd_regs(SimpleNamespace(species=species))
+        return rc, out.getvalue()
+
+    def test_a_tuna_gets_its_federal_rule_not_a_traceback(self):
+        rc, out = self._run("bluefin")
+        self.assertEqual(rc, 0)
+        self.assertIn("Bluefin Tuna", out)
+        self.assertIn("federal (HMS)", out)
+        self.assertIn("tiderace hms bluefin", out)
+        self.assertNotIn("not modelled", out, "a federal fish has a rule; say it")
+
+    def test_an_offshore_fish_without_a_federal_rule_says_not_modelled(self):
+        rc, out = self._run("mahi")
+        self.assertEqual(rc, 0)
+        self.assertIn("Mahi", out)
+        self.assertIn("not modelled", out)
+
+class DesktopRulesBoxNeverGoesBlank(unittest.TestCase):
+    """Haddock on the desktop, 9 September 2026: the Rules box was empty.
+    The phone strip says RULES NOT MODELLED for the same fish. An empty box
+    reads as "no rules", which is the reading absence must never get."""
+
+    def test_the_unknown_branch_says_not_modelled(self):
+        import pathlib
+        page = strip_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text())
+        block = page.split("  if (r.known){")[1].split("  paintLegal();")[0]
+        tail = block.split("} else {")[1]
+        self.assertIn("NOT MODELLED", tail)
+        self.assertIn("GRID.rules_not_modelled", tail, "the server's sentence, not a blank")
+        self.assertNotIn("innerHTML = ''", tail)
+
+class PointReportForAnOffshoreFish(unittest.TestCase):
+    """Switching the picker to yellowfin with a mark dropped re-requested
+    /api/at for it and got 400 "unknown species", which the desktop mark
+    card printed in red. Found 9 September 2026. The water at a coordinate
+    is real whatever fish is selected; only the score is not."""
+
+    def test_the_route_accepts_any_loggable_fish(self):
+        import pathlib
+        src = (pathlib.Path(__file__).parent / "tiderace" / "server.py").read_text()
+        route = src.split('if url.path == "/api/at":')[1].split("if url.path ==")[0]
+        self.assertIn("speciesmod.get(species) is None", route)
+        self.assertNotIn("species not in score.PROFILES", route)
+
+    def test_the_report_says_it_has_no_score_rather_than_refusing(self):
+        from tiderace import point
+        import inspect
+        src = inspect.getsource(point.report)
+        self.assertIn("inshore = species in score.PROFILES", src)
+        self.assertIn('"scored": inshore', src)
+        self.assertIn("if not inshore and reg is None:", src,
+                      "a fish nobody registered is still refused")
+        # The pieces that would have raised on a missing profile are guarded.
+        for guarded in ('results[i_now]["score"] if inshore else None',
+                        "if inshore else reg.name",
+                        "if inshore else [])"):
+            self.assertIn(guarded, src)
+
+    def test_the_mark_card_survives_a_report_with_no_score(self):
+        import pathlib
+        page = strip_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "web" / "index.html").read_text())
+        fn = page.split("function renderMark(){")[1].split("\nfunction ")[0]
+        self.assertIn("now.score != null ? now.score.toFixed(1) : '—'", fn)
+        self.assertNotIn("${now.score.toFixed(1)}", fn, "null.toFixed takes the card down")
+        self.assertIn("d.prior_is_default && d.prior != null", fn)
 
 class RankedDotsOnTheMap(unittest.TestCase):
     """Matt, 9 September 2026: "it would be great to have the recommended

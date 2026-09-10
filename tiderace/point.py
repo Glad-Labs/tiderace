@@ -111,17 +111,30 @@ def report(lat: float, lon: float, species: str = "striped_bass",
     at an arbitrary point the binding is the part most likely to be wrong and
     the reader has no curated table to fall back on.
     """
-    if species not in score.PROFILES:
+    # The inshore scorer knows fourteen bay profiles plus the general-tier
+    # fish; the picker offers every scored fish, eleven of them offshore.
+    # Switching to bluefin with a mark dropped asked for this report and got
+    # a 400, which the desktop card printed as "unknown species". The water
+    # at a coordinate is real whatever fish is selected; only the score is
+    # not, and the report says so instead of refusing.
+    from . import species as speciesmod
+    inshore = species in score.PROFILES
+    reg = speciesmod.get(species)
+    if not inshore and reg is None:
         raise ValueError(f"unknown species {species!r}")
 
     res = stations.resolve(lat, lon)
     spot, res = spots.at_coord(lat, lon, resolution=res)
     start = start or datetime.now().replace(minute=0, second=0, microsecond=0)
 
-    rows = features.build(spot, start, hours, step_minutes, species=species)
+    rows = features.build(spot, start, hours, step_minutes,
+                          species=species if inshore else None)
     results = [score.score(species, r, exposed=r["exposed"],
                            prior=spot.prior(species),
-                           best_stage=spot.best_stage) for r in rows]
+                           best_stage=spot.best_stage) for r in rows] if inshore else []
+    unscored = (None if inshore else
+                f"no inshore profile for {reg.name}: the water here is real, "
+                f"the score is not -- the offshore forecast ranks its own positions")
 
     now = datetime.now()
     i_now = min(range(len(rows)),
@@ -131,7 +144,9 @@ def report(lat: float, lon: float, species: str = "striped_bass",
         "lat": lat, "lon": lon,
         "label": spot.label,
         "species": species,
-        "species_name": score.PROFILES[species].name,
+        "species_name": score.PROFILES[species].name if inshore else reg.name,
+        "scored": inshore,
+        "unscored": unscored,
         "start": start.isoformat(),
         "hours": hours,
         "stations": {
@@ -156,12 +171,12 @@ def report(lat: float, lon: float, species: str = "striped_bass",
         # No history at a bare coordinate, so the spot-quality modifier is a
         # default rather than knowledge. Said out loud so a caller cannot
         # mistake 0.6 for a measurement.
-        "prior": spot.prior(species),
-        "prior_is_default": species not in spot.quality,
+        "prior": spot.prior(species) if inshore else None,
+        "prior_is_default": inshore and species not in spot.quality,
         "now": {
             "time": rows[i_now]["time"].isoformat(),
-            "score": results[i_now]["score"],
-            "explain": score.explain(results[i_now]),
+            "score": results[i_now]["score"] if inshore else None,
+            "explain": score.explain(results[i_now]) if inshore else unscored,
             **{k: v for k, v in rows[i_now].items()
                if k != "time" and not isinstance(v, datetime)},
         },
@@ -181,10 +196,10 @@ def report(lat: float, lon: float, species: str = "striped_bass",
             "wind_kt": w["best_row"]["wind_kt"],
             "wind_dir": w["best_row"]["wind_dir"],
             "next_tide": w["best_row"]["next_tide"],
-        } for w in sorted(
+        } for w in (sorted(
             sorted(windows(rows, results, threshold),
                    key=lambda w: w["best"]["score"], reverse=True)[:top],
-            key=lambda w: w["start"])],
+            key=lambda w: w["start"]) if inshore else [])],
         "rows": rows,
         "results": results,
     }

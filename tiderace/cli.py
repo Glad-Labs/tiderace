@@ -1305,6 +1305,19 @@ def _cmd_regs(args) -> int:
     print(f"\n  Rhode Island · {today:%A %d %b %Y}")
     print("  " + "─" * 74)
     for sp in targets:
+        # The picker accepts every scored fish, and eleven of them are
+        # offshore species regs.py has never heard of: score.PROFILES[sp]
+        # raised KeyError on `regs --species bluefin`. The registry has the
+        # name for all of them, and the tuna, billfish and sharks are federal
+        # -- their rule is in hms.py, not in a RIDEM table.
+        from . import hms
+        reg = speciesmod.get(sp)
+        name = reg.name if reg else score.PROFILES[sp].name
+        if sp in hms.RULES:
+            print(f"\n  {name}")
+            print(f"    federal (HMS)  {hms.summary_line(sp)}")
+            print(f"    state rules do not apply; see `tiderace hms {sp}`")
+            continue
         rec = regs.status(sp, today)
         com = regs.status(sp, today, "commercial")
         if not rec.get("known"):
@@ -1314,10 +1327,10 @@ def _cmd_regs(args) -> int:
             # as the complete set -- the same failure the web view's
             # paintLegal() already guards against with "RULES NOT MODELLED".
             # Absence of a rule means nobody checked, not that there is none.
-            print(f"\n  {score.PROFILES[sp].name}")
+            print(f"\n  {name}")
             print(f"    {speciesmod.unregulated_warning(sp)}")
             continue
-        print(f"\n  {score.PROFILES[sp].name}")
+        print(f"\n  {name}")
         print(f"    recreational  {'OPEN  ' if rec['open'] else 'CLOSED'}  "
               f"{regs.summary_line(sp, today)}")
         print(f"    commercial    {'OPEN  ' if com['open'] else 'CLOSED'}  "

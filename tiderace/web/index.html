@@ -2825,7 +2825,16 @@ async function loadGrid(){
             ? `<span class="warn">Commercial limits change in-season —
                confirm on ${r.hotline} before landing fish.</span>` : ''}
        </div>`;
-  } else { $('#regsbox').innerHTML = ''; }
+  } else {
+    // A scored fish with no transcribed rule. The phone's strip has said
+    // so out loud since 2 Sep 2026; the desktop rail went blank for the
+    // same fish, which reads as "no rules" -- the one thing absence must
+    // never read as under a commercial licence.
+    $('#regsbox').innerHTML =
+      `<p class="ph">Rules</p>
+       <div id="regs" class="closed"><b>NOT MODELLED</b> — ${tesc(GRID.rules_not_modelled ||
+         'Size and season for this fish are not modelled in this app.')}</div>`;
+  }
   paintLegal();
 
   if (SEL && !GRID.spots.some(s => s.key === SEL)) SEL = null;
@@ -3005,7 +3014,7 @@ function renderMark(){
       <h3 style="font-family:var(--mono);font-size:12px">${fmtCoord(d.lat, d.lon)}</h3>
       <div class="sub">${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}</div>
       <div class="big" style="color:${colour(now.score)};margin-top:10px">
-        ${now.score.toFixed(1)}</div>
+        ${now.score != null ? now.score.toFixed(1) : '—'}</div>
       <div class="sub">right now · ${d.species_name}</div>
 
       <dl class="kv" style="margin-top:10px">
@@ -3051,7 +3060,7 @@ function renderMark(){
       }).join('')}
     </div>` : ''}
 
-    ${d.prior_is_default ? `<p class="note" style="margin-top:8px">
+    ${d.prior_is_default && d.prior != null ? `<p class="note" style="margin-top:8px">
       No history here, so this is scored with the default spot prior
       (${d.prior.toFixed(2)}) and no preferred tide stage — unlike a curated
       spot, none of this score is local knowledge.</p>` : ''}
