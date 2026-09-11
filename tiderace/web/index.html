@@ -654,8 +654,15 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
    "Fluke (Summer Flounder)" -- which took 242px of a 314px bar and pushed the
    chart menu and scan off the edge. min-width:0 is what lets a flex item go
    below its content width at all. */
-#bar > #species{flex:1 1 auto; min-width:0;
+#bar > #species{flex:1 1 auto; min-width:96px;
                 max-width:calc(46vw / var(--ui, 1))}
+/* At a scale between the honest phone (ui 1) and Chrome's desktop-site
+   980px (ui ~2.4) the divided bar is ~240px, and with the picker the only
+   thing allowed to shrink it went to 31px -- a chevron and no fish name
+   (11 Sep 2026, ui 1.62 in emulation). The picker keeps a readable floor
+   and the two buttons give up letters instead. */
+#bar > button{flex:0 1 auto; min-width:0; overflow:hidden;
+              text-overflow:ellipsis; white-space:nowrap}
 #layers{
   position:fixed; left:12px; right:12px; width:auto; max-width:none;
   /* Unbounded this came out 888px tall in an 839px viewport with
@@ -1265,6 +1272,11 @@ function clampLabels(){
 
   const tb = document.getElementById('timebar');
   const tbox = tb && tb.offsetParent !== null ? tb.getBoundingClientRect() : null;
+  // HERE is a 97 px disc over the bottom-right of the map on the phone, and
+  // it had no say either: at the best-dot zoom the labels of positions 1, 5
+  // and 6 ran under it (seen in the 11 Sep 2026 screenshots).
+  const hb = document.getElementById('here');
+  const hbox = hb && hb.offsetParent !== null ? hb.getBoundingClientRect() : null;
   const hits = (a, b) => a.right > b.left && a.left < b.right
                       && a.bottom > b.top && a.top < b.bottom;
   // On the phone the labels are what covers the chart: thirty positions
@@ -1295,6 +1307,7 @@ function clampLabels(){
       // The time bar sits over the map bottom-left and had no say here, so
       // labels under it were drawn into it.
       if (tbox && hits(lb, tbox)) show = false;
+      else if (hbox && hits(lb, hbox)) show = false;
       // And the real complaint: two labels on top of each other. Charlestown
       // Breachway publishes an inside and an east-side mark a few hundred
       // metres apart, so at bay zoom their labels land in the same place.

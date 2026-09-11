@@ -2694,6 +2694,20 @@ class PointReportForAnOffshoreFish(unittest.TestCase):
         self.assertNotIn("${now.score.toFixed(1)}", fn, "null.toFixed takes the card down")
         self.assertIn("d.prior_is_default && d.prior != null", fn)
 
+class AnEmptyLogSummarisesToZeros(unittest.TestCase):
+    """The desk page printed "0 trips · undefined fish · undefined blank"
+    on a fresh log: summary() returned only {"trips": 0} when there was
+    nothing to add up, and the page read the keys a full summary has."""
+
+    def test_every_key_is_present_and_zero(self):
+        import tempfile, os
+        from tiderace import log as catchlog
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "catch_log.jsonl")
+            s = catchlog.summary(path)
+        self.assertEqual(s, {"trips": 0, "fish": 0, "blanks": 0,
+                             "by_species": {}, "ready_to_fit": False})
+
 class RankedDotsOnTheMap(unittest.TestCase):
     """Matt, 9 September 2026: "it would be great to have the recommended
     spots color coded by quality, like make the best spot very noticeable and
@@ -5624,7 +5638,13 @@ class DaylightAndEveryFish(unittest.TestCase):
     def test_the_species_picker_can_shrink(self):
         """It sizes to its widest option -- "Fluke (Summer Flounder)" -- which
         took 242px of a 314px bar and pushed the chart menu and scan off."""
-        self.assertIn("min-width:0", self.css.split("#bar > #species{")[1].split("}")[0])
+        rule = self.css.split("#bar > #species{")[1].split("}")[0]
+        m = re.search(r"min-width:(\d+)px", rule)
+        self.assertIsNotNone(m, "a pixel floor, not auto: auto is the 242px content width")
+        # Below the widest option, so it can still shrink; above a chevron,
+        # so the fish name survives the divided bar (31px on 11 Sep 2026).
+        self.assertLess(int(m.group(1)), 160)
+        self.assertGreaterEqual(int(m.group(1)), 90)
 
     def test_the_map_contains_its_own_marker_z_indexes(self):
         """paint() gives every marker a z-index from its score, 0-100, and
@@ -5984,6 +6004,15 @@ class TheDesktopLayoutSurvivesTheZoomBlock(unittest.TestCase):
         # The best spot wins the label, and a selected spot outranks everything.
         self.assertIn("SEL", fn, "the selected spot must keep its name")
         self.assertIn("zIndex", fn, "score decides the rest")
+
+    def test_the_here_button_occludes_labels_too(self):
+        """HERE is a 97 px disc over the bottom-right of the phone's map, and
+        the labels of positions 1, 5 and 6 ran under it at the best-dot zoom
+        (11 September 2026 screenshots). Same treatment as the time bar."""
+        js = strip_comments(self.page)
+        fn = js.split("function clampLabels()")[1].split("\nfunction ")[0]
+        self.assertIn("document.getElementById('here')", fn)
+        self.assertIn("hits(lb, hbox)", fn, "the label must be tested against HERE's box")
 
     def test_the_time_bar_occludes_labels_too(self):
         """It sits over the bottom-left of the map and had no say, so names

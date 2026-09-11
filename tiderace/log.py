@@ -387,7 +387,11 @@ def load(path: str = LOG_PATH) -> list[dict]:
 def summary(path: str = LOG_PATH) -> dict:
     rows = load(path)
     if not rows:
-        return {"trips": 0}
+        # The same keys as a full summary, all zero. The desk page printed
+        # "0 trips · undefined fish · undefined blank" on a fresh log
+        # because these were missing (11 September 2026).
+        return {"trips": 0, "fish": 0, "blanks": 0, "by_species": {},
+                "ready_to_fit": False}
     by_species: dict[str, dict] = {}
     for r in rows:
         b = by_species.setdefault(r["species"], {"trips": 0, "fish": 0, "blanks": 0})

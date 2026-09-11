@@ -350,6 +350,11 @@ be bumped on every change or phones keep the old shell.
   absolute. A tap within 22 px of a position on a touch screen selects it
   before the chart-feature query runs (`nearestSpot`); the dot itself only
   took taps out to ~10 px, and a miss reported the water under the finger.
+- **Coordinate labels yield to the chrome.** `clampLabels` hides a label
+  that would draw into the top bar, the sheet, the time bar or the HERE
+  disc, and keeps at most five on the phone plus the selected one. Anything
+  new that floats over the map goes on that list, or the labels will run
+  under it (HERE did, 11 September 2026).
 - Verify on a real touch viewport, not by reading the CSS. Measure the thing
   Matt complains about before changing it; "clunky" turned out to be 2,590 px
   of content in an 812 px viewport, which is a structural fact, not a taste.

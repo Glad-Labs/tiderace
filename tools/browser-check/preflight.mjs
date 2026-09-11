@@ -322,6 +322,34 @@ async function run(url) {
     ok(`phone/${scheme}: a tap 18 px off the best dot selects it`,
        dots && snapped === dots.key, dots ? `selected ${snapped}` : 'no field');
 
+    // HERE is a 97 px disc over the bottom-right of the map, and the labels
+    // of positions 1, 5 and 6 drew under it at the best-dot zoom (11 Sep
+    // 2026 screenshots). Measured at that zoom with the sheet in peek.
+    const underHere = await p.evaluate(async () => {
+      const was = window.sheetState();
+      window.setSheet('peek');
+      const f = fieldAt(TI);
+      if (!f.ranked.length) return null;
+      const top = f.ranked[0].sp;
+      map.jumpTo({center: [top.lon, top.lat], zoom: 11.6});
+      await new Promise(r => setTimeout(r, 1200));
+      const h = document.getElementById('here').getBoundingClientRect();
+      let shown = 0, under = 0;
+      for (const m of Object.values(MARKERS)) {
+        const l = m.el.querySelector('.lbl');
+        if (!l || getComputedStyle(m.el).visibility === 'hidden' || getComputedStyle(l).visibility === 'hidden') continue;
+        shown++;
+        const b = l.getBoundingClientRect();
+        if (b.right > h.left && b.left < h.right && b.bottom > h.top && b.top < h.bottom) under++;
+      }
+      window.setSheet(was);
+      await new Promise(r => setTimeout(r, 400));
+      return { shown, under };
+    });
+    ok(`phone/${scheme}: no label drawn under HERE`,
+       underHere && underHere.under === 0 && underHere.shown > 0,
+       underHere ? `${underHere.under} of ${underHere.shown} labels` : 'no field');
+
     // The chart's own numbers have to be readable on this theme. Sounding
     // ink was a fixed grey chosen for the dark chart and measured 1.37:1 on
     // the daylight water; the contour numbers had gone theme-aware and the
@@ -636,6 +664,7 @@ async function run(url) {
         .getPropertyValue('--ui').trim();
       return { ui, scrollW: bar.scrollWidth, clientW: bar.clientWidth,
                h: Math.round(bar.getBoundingClientRect().height),
+               picker: Math.round(document.getElementById('species').getBoundingClientRect().width),
                warns: /Desktop site/.test(
                  (document.getElementById('diag') || {}).textContent || '') };
     });
@@ -644,6 +673,10 @@ async function run(url) {
     // divided width, and the app has to say what it noticed.
     ok('desktop-site 980px: the bar still fits',
        r.scrollW <= r.clientW + 1, `${r.scrollW} in ${r.clientW}, ui=${r.ui}`);
+    // The picker is the one control allowed to shrink, and it shrank to a
+    // 31px chevron with no fish name at an intermediate scale.
+    ok('desktop-site 980px: the species picker keeps a readable width',
+       r.picker >= 96, `${r.picker}px`);
     // The compensation itself cannot be exercised here. --ui is
     // innerWidth / min(screen.width, screen.height) and Playwright reports the
     // HOST's screen, so a 980px emulated viewport comes back with ui=1 and no
