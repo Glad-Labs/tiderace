@@ -74,6 +74,9 @@ SPECIES_HINTS = {
     "striped bass": "striped_bass", "bluefish": "bluefish",
     "summer flounder": "fluke", "fluke": "fluke", "scup": "scup",
     "black sea bass": "black_sea_bass", "tautog": "tautog",
+    # 14 Sep 2026: a 120,000 lb/vessel/day notice went unattributed because
+    # the parser had never heard of the fish it was about.
+    "menhaden": "menhaden",
 }
 
 
@@ -147,7 +150,7 @@ def _species(body: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def parse_notice(sentence: str) -> dict | None:
+def parse_notice(sentence: str, context: str = "") -> dict | None:
     m = NOTICE.search(sentence)
     if not m:
         return None
@@ -162,6 +165,13 @@ def parse_notice(sentence: str) -> dict | None:
     body = m.group("body")
     low = body.lower()
     name, key = _species(body)
+    if key is None:
+        # "Winter I Aggregate Program for Summer Flounder: Beginning 12:00am
+        # on Sunday, January 4, 2026, the possession limit will be..." -- the
+        # fish is named in the heading before the clause the pattern reads,
+        # and `context` is that heading when the page splitter has already
+        # cut the clause away from it.
+        name, key = _species(sentence[:m.start()] + " " + context)
 
     # Require the verb form. Bare "close" appears inside reopen clauses and
     # in prose about closures, and matching it labelled possession-limit
@@ -184,11 +194,21 @@ def parse_notice(sentence: str) -> dict | None:
     # General Category and a Floating Fish Trap fishery, and on 1 April 2026
     # both were set to 2,000 lb/day -- identical numbers, different fisheries,
     # indistinguishable unless the name is carried through.
+    # The sub-fishery can sit in the heading ("Scup - general category:
+    # Beginning ...") as well as in the clause, and the summer flounder
+    # exemption certificate is a sub-fishery too: RIDEM sets 400 lb/day with
+    # it and 200 without in consecutive sentences, and keyed together the
+    # later one silently replaced the earlier (15 Sep 2026).
+    sub_scope = low + " " + sentence[:m.start()].lower() + " " + context.lower()
     sub = None
-    if "floating fish trap" in low or "floating trap" in low:
+    if "floating fish trap" in sub_scope or "floating trap" in sub_scope:
         sub = "floating_fish_trap"
-    elif "general category" in low:
+    elif "general category" in sub_scope:
         sub = "general_category"
+    elif "exemption certificate" in low:
+        sub = ("without_exemption_certificate"
+               if re.search(r"(?i)\bwithout\b[^.]{0,40}exemption certificate", low)
+               else "with_exemption_certificate")
 
     reopens = None
     successor = None
@@ -225,10 +245,13 @@ def parse_notice(sentence: str) -> dict | None:
 
     # The Aggregate Program is a separate, permit-required fishery. Its limits
     # are not the general commercial ones and must not be compared against them.
+    # The programme can be named in the heading before the clause ("Winter I
+    # Aggregate Program for Summer Flounder: Beginning ...") as well as in it.
+    scope = low + " " + sentence[:m.start()].lower() + " " + context.lower()
     prog = None
-    if "aggregate" in low:
-        prog = ("winter" if "winter" in low
-                else "summer_fall" if "summer" in low or "fall" in low else "unknown")
+    if "aggregate" in scope:
+        prog = ("winter" if "winter" in scope
+                else "summer_fall" if "summer" in scope or "fall" in scope else "unknown")
 
     return {
         "effective_date": eff.isoformat(),
@@ -253,14 +276,24 @@ def parse_notice(sentence: str) -> dict | None:
 
 def parse_page(text: str) -> dict:
     """Split a RIDEM page into notices and parse each one."""
-    sentences = re.split(r"(?<=\.)\s+(?=Beginning)|\n", text)
     parsed, unparsed = [], []
-    for s in sentences:
-        s = s.strip()
-        if not s or not re.match(r"(?i)^beginning\b", s):
-            continue
-        rec = parse_notice(s)
-        (parsed if rec else unparsed).append(rec or s[:200])
+    for line in text.split("\n"):
+        # A line's heading -- "Winter I Aggregate Program for Summer
+        # Flounder:" -- names the fish and the programme for every clause on
+        # it, and the second clause lost it when the line was cut at each
+        # "Beginning" (a fortnight of "unrecognised species", 15 Sep 2026).
+        i = re.search(r"(?i)\bbeginning\b", line)
+        head = line[:i.start()].strip() if i else ""
+        for s in re.split(r"(?<=\.)\s+(?=Beginning)", line):
+            s = s.strip()
+            if not s:
+                continue
+            if head and s.lower().startswith(head.lower()):
+                s = s[len(head):].strip()
+            if not re.match(r"(?i)^beginning\b", s):
+                continue
+            rec = parse_notice(s, context=head)
+            (parsed if rec else unparsed).append(rec or s[:200])
 
     warnings = []
     for r in parsed:

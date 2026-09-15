@@ -9,10 +9,14 @@ Type=oneshot
 WorkingDirectory=%h/glad-labs-products/tiderace
 # The six report outlets. On The Water and most of the others publish weekly,
 # so reading them daily would be six requests a day to get the same page back.
-ExecStart=/usr/bin/python3 -m tiderace scrape \
+# --apply-bait since 15 September 2026. It was deliberately absent -- a
+# scheduled job writing sightings into the bait log with nobody reading the
+# output -- and the queue that replaced it held 68 sightings nobody had
+# time to read. Matt: "I don't have time to go chasing them all. I'd rather
+# just confirm them after they're applied." So a placed, high- or
+# medium-confidence sighting goes in on arrival, marked as a report's word
+# (SOURCE_TRUST 0.75), and the desk's Confirm tab takes it back out.
+ExecStart=/usr/bin/python3 -m tiderace scrape --apply-bait \
   --source otw_ri_report --source fisherman_ri --source coastal_angler_ri \
   --source hooked_ri --source eastbay_report --source risaa
-# Deliberately no --apply-bait: a scheduled job that writes sightings into the
-# bait log with nobody reading the output is how the log fills with somebody
-# else's guesses. They queue for review instead.
 Nice=10

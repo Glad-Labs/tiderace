@@ -136,6 +136,10 @@ def catch_reports(path: str | None = None) -> list[dict]:
     for r in rows:
         if r.get("kind") != "catch_report":
             continue
+        # Looked at and disagreed with; it stays in the file as a record of
+        # that and stops being a witness.
+        if r.get("status") == "retracted":
+            continue
         groups[(r.get("source_url", ""), r.get("species_key"),
                 r.get("place", ""), str(r.get("observed_on")))].append(r)
 

@@ -268,40 +268,88 @@ def aggregate_status(species: str, program: str,
 
 
 def commercial_status(species: str, when: date | None = None,
-                      program: str | None = None) -> dict:
+                      program: str | None = None, sub: str | None = None) -> dict:
     when = when or date.today()
+    if sub is None:
+        # The sub-fishery in hand, from the config; lazily, regs.py is
+        # imported by config's own users.
+        try:
+            from . import config as cfgmod
+            sub = cfgmod.load().get("sub_fishery")
+        except Exception:                                         # noqa: BLE001
+            sub = None
     r = COMMERCIAL.get(species)
-    if not r:
-        return {"known": False}
-    age = (date.today() - COMMERCIAL_CHECKED_ON).days
-    closed_reason = r.why_closed(when)
-
     # The machine-managed overlay sits on top of the hand-written rule above.
     # `regs.py` is still only edited by a person; this is what RIDEM published
     # since, applied automatically and carrying the notice it came from.
-    applied_rules, limit, applied_note = [], r.limit, None
     try:
         from . import applied as appliedmod
         applied_rules = appliedmod.overlay_for(species, "commercial", when)
-        for a in applied_rules:
-            if a.get("change_type") in ("season_close", "quota_closure"):
-                closed_reason = closed_reason or (
-                    "closed by RIDEM notice effective %s" % a.get("effective_date"))
-            elif a.get("change_type") == "possession_limit" and a.get("value"):
-                limit = a["value"]
-                applied_note = a
     except Exception:                                             # noqa: BLE001
         applied_rules = []
+    if not r and not applied_rules:
+        return {"known": False}
+    age = (date.today() - COMMERCIAL_CHECKED_ON).days
+    closed_reason = r.why_closed(when) if r else None
+
+    # The limit shown is the one for the licence in hand. RIDEM states a
+    # general-category daily figure and an Aggregate Program weekly one in
+    # the same breath, and taking the last possession limit written put the
+    # programme's 2,800 lb/week on a general-category strip (15 Sep 2026).
+    # `program` is the config's aggregate_program: "none" means general.
+    want = None if program in (None, "none") else program
+    limit, applied_note = (r.limit if r else ""), None
+    mine, others = [], []
+    for a in applied_rules:
+        if a.get("change_type") in ("season_close", "quota_closure"):
+            closed_reason = closed_reason or (
+                "closed by RIDEM notice effective %s" % a.get("effective_date"))
+        elif (a.get("change_type") == "possession_limit" and a.get("value")
+              and (a.get("aggregate_program") or None) == want):
+            # And the sub-fishery in hand: a rule for this one, or for no
+            # particular one. Scup's floating-trap number is not the general
+            # category's, and fluke's with-certificate number is not its
+            # without. When RIDEM states only sub-fisheries this licence is
+            # not in (fluke's certificate split, and the config does not say
+            # which), every one is shown rather than one of them picked.
+            if (a.get("sub_fishery") or None) in (None, sub):
+                mine.append(a)
+            else:
+                others.append(a)
+    if mine:
+        applied_note = sorted(mine, key=lambda a: (a.get("effective_date") or "",
+                                                   a.get("sub_fishery") is not None))[-1]
+        limit = applied_note["value"]
+        # A sub-less rule that is no newer than the sub-fishery rules beside
+        # it is the parser's blind spot, not RIDEM's general rule: fluke's
+        # "until Sep 16 at 100 lb" successor sat sub-less next to the
+        # 16 Sep with-certificate 400 and without 200 that replaced it. Show
+        # the split rather than the stale number.
+        newer_split = [a for a in others
+                       if (a.get("effective_date") or "") >= (applied_note.get("effective_date") or "")]
+        if applied_note.get("sub_fishery") is None and newer_split:
+            others, mine = newer_split, []
+    if mine:
+        pass
+    elif others:
+        limit = " · ".join("%s (%s)" % (a["value"], (a.get("sub_fishery") or "").replace("_", " "))
+                           for a in sorted(others, key=lambda a: a.get("sub_fishery") or ""))
+        applied_note = others[0]
 
     return {
         "known": True,
         "mode": "commercial",
         "open": closed_reason is None,
         "season": closed_reason or "open",
-        "min_inches": r.min_inches,
+        "min_inches": r.min_inches if r else None,
         "slot": None,
         "bag": limit,
-        "note": r.note,
+        # A fish with no hand-typed row (menhaden) is known only through the
+        # notices; say so rather than borrow a table entry that is not there.
+        "note": (r.note if r else
+                 "No hand-typed rule for this fish; what is shown is the RIDEM "
+                 "notice, linked, and nothing else."),
+        "from_notices_only": r is None,
         # Everything the overlay changed, with its source. The interface shows
         # the link so a number can be checked against the notice in one tap,
         # which is the trade made instead of an approval step.
@@ -322,7 +370,7 @@ def commercial_status(species: str, when: date | None = None,
         } for a in applied_rules],
         "applied_source": (applied_note or {}).get("source_url") or COMMERCIAL_SOURCE,
         "applied_effective": (applied_note or {}).get("effective_date"),
-        "quota_closed": r.quota_closed,
+        "quota_closed": r.quota_closed if r else False,
         "source": COMMERCIAL_SOURCE,
         "hotline": COMMERCIAL_HOTLINE,
         "checked_on": COMMERCIAL_CHECKED_ON.isoformat(),
@@ -336,9 +384,10 @@ def commercial_status(species: str, when: date | None = None,
 
 
 def status(species: str, when: date | None = None,
-           mode: str = "recreational", program: str | None = None) -> dict:
+           mode: str = "recreational", program: str | None = None,
+           sub: str | None = None) -> dict:
     if mode == "commercial":
-        return commercial_status(species, when, program)
+        return commercial_status(species, when, program, sub)
 
     when = when or date.today()
     r = RULES.get(species)

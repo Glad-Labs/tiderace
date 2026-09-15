@@ -91,6 +91,12 @@ def _promote(n: dict, on_date: str) -> dict | None:
                   else (sc.get("period") or n.get("period")),
         "change_type": "possession_limit",
         "superseded_on": None,
+        # The parent's reopens_on is the date this rule STARTED; left on the
+        # promoted rule, applied.overlay_for read it as the date it ended and
+        # dropped every promoted successor as spent -- so "until the next
+        # sub-period begins Oct 16 at 100 lb" never reached the strip and the
+        # hand-typed number showed instead (found 15 Sep 2026).
+        "reopens_on": None,
         "successor": None,
         "unlimited": sc.get("unlimited", False),
         "derived_from": n["effective_date"],

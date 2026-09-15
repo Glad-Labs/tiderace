@@ -77,9 +77,19 @@ class Species:
 
     @property
     def regulated(self) -> bool:
-        """Have the rules for this fish actually been read from a notice?"""
-        from .regs import RULES
-        return self.key in RULES
+        """Have the rules for this fish actually been read from a notice?
+
+        Hand-typed in regs.py, or applied from a RIDEM notice by the overlay
+        (menhaden has no table row and a 120,000 lb notice, 15 Sep 2026)."""
+        from .regs import RULES, COMMERCIAL
+        if self.key in RULES or self.key in COMMERCIAL:
+            return True
+        try:
+            from . import applied
+            return any(r.get("species") == self.key
+                       for r in applied.load().get("rules", {}).values())
+        except Exception:                                         # noqa: BLE001
+            return False
 
 
 # Ordered roughly by how often they turn up on a Narragansett Bay boat, because
@@ -164,6 +174,14 @@ SPECIES: tuple[Species, ...] = (
     # not occur in the Atlantic; what Rhode Island calls "ling" is red hake,
     # and that is what a boat south of Block Island catches in 25 m or more.
     # Registered as the fish it is, answering to the name it is called by.
+    Species("menhaden", "Menhaden (bunker)", INSHORE,
+            ("bunker", "pogy", "pogies", "pogie", "mossbunker", "peanut bunker",
+             "peanuts", "menhaden", "atlantic menhaden"),
+            notes="Brevoortia tyrannus. The bait everything else eats, and a "
+                  "commercial fishery of its own in the Menhaden Management "
+                  "Area. Not forecast: schools are found by eye and by plane, "
+                  "not by bottom structure, and the one published number is "
+                  "a preference near 18 C, not a band."),
     Species("red_hake", "Red Hake (ling)", NEARSHORE,
             ("ling", "lingcod", "red hake", "squirrel hake"),
             notes="'Ling' here is red hake, Urophycis chuss; lingcod is a Pacific "

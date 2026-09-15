@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 
@@ -90,6 +91,39 @@ def record(s: Sighting, path: str = BAIT_PATH) -> Sighting:
     with open(path, "a") as fh:
         fh.write(json.dumps(asdict(s)) + "\n")
     return s
+
+
+def retract(source_url: str, observed_on: str, bait: str,
+            path: str = BAIT_PATH, spot: str | None = None) -> int:
+    """Take a report-sourced sighting back out of the log: the one this
+    article put in for this bait on this day at this place, and nothing you
+    logged yourself. `spot` matters: one column reported squid in Newport
+    Harbor and squid off Brenton Reef on the same day, and retracting the
+    harbour took the reef with it (15 Sep 2026). Returns how many lines
+    went. Atomic, like every write here."""
+    rows = load(path)
+    keep = [r for r in rows if not (
+        r.get("source") == "report" and source_url and
+        source_url in (r.get("notes") or "") and
+        (r.get("bait") or "").lower() == (bait or "").lower() and
+        str(r.get("when", "")).startswith(str(observed_on)[:10]) and
+        (spot is None or r.get("spot") == spot))]
+    if len(keep) == len(rows):
+        return 0
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".bait-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            for r in keep:
+                fh.write(json.dumps(r) + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return len(rows) - len(keep)
 
 
 def load(path: str = BAIT_PATH) -> list[dict]:

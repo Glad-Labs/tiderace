@@ -37,6 +37,9 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 
+import hashlib
+import tempfile
+
 from . import bait as baitmod
 from . import fetch, llm, ridem
 
@@ -348,6 +351,15 @@ def extract_report(url: str, force: bool = False,
                "reuse a name from a different paragraph.",
                doc)
 
+    # Applied on arrival, confirmed after. Matt, 15 September 2026: "I don't
+    # have time to go chasing them all. I'd rather just confirm them after
+    # they're applied." So a placed, high- or medium-confidence bait sighting
+    # goes into the bait log now and a catch report is on file now; both
+    # wait in the queue for a confirm or a retraction, and a retraction
+    # takes the sighting back out. The same article read twice must not
+    # write the same sighting twice: an observation already applied under
+    # its id is a duplicate, not fresh corroboration.
+    seen = {item_id(r) for r in load_queue() if r.get("status") == "applied"}
     applied = 0
     for b in out.get("bait", []):
         b.update(source_url=doc["url"], fetched_at=doc["fetched_at"],
@@ -355,15 +367,11 @@ def extract_report(url: str, force: bool = False,
                  status="pending")
         spot = _match_spot(b.get("place", ""))
         b["matched_spot"] = spot.key if spot else None
-        if apply_bait and spot and b.get("confidence") in ("high", "medium"):
-            baitmod.record(baitmod.Sighting(
-                bait=b["bait"].lower(), lat=spot.lat, lon=spot.lon,
-                when=(b.get("observed_on") or date.today().isoformat()),
-                abundance=b.get("abundance", "scattered"),
-                spot=spot.key, source="report",
-                confidence=b.get("confidence", "medium"),
-                notes=f"{b.get('place','')} — {doc['url']}"))
-            b["status"] = "applied"
+        if item_id(b) in seen:
+            b["status"] = "duplicate"
+        elif apply_bait and spot and b.get("confidence") in ("high", "medium"):
+            _apply_bait(b, spot)
+            seen.add(item_id(b))
             applied += 1
         _queue(b)
 
@@ -372,7 +380,7 @@ def extract_report(url: str, force: bool = False,
         c.update(source_url=doc["url"], fetched_at=doc["fetched_at"],
                  kind="catch_report", species_key=key, species_raw=raw,
                  queued_at=datetime.now().isoformat(timespec="seconds"),
-                 status="pending")
+                 status="on_file")
         spot = _match_spot(c.get("place", ""))
         c["matched_spot"] = spot.key if spot else None
         _queue(c)
@@ -394,6 +402,8 @@ SPECIES_ALIASES = {
     "seabass": "black_sea_bass",
     "scup": "scup", "porgy": "scup", "porgies": "scup",
     "tautog": "tautog", "blackfish": "tautog", "tog": "tautog",
+    "menhaden": "menhaden", "bunker": "menhaden", "pogies": "menhaden",
+    "pogy": "menhaden", "peanut bunker": "menhaden",
 }
 
 
@@ -484,3 +494,162 @@ def load_queue(path: str = REVIEW_PATH) -> list[dict]:
 def pending(kind: str | None = None, path: str = REVIEW_PATH) -> list[dict]:
     rows = [r for r in load_queue(path) if r.get("status") == "pending"]
     return [r for r in rows if not kind or r.get("kind") == kind]
+
+
+# ------------------------------------------------------------- confirm after
+# Statuses a queue row can hold, and what each means for the app:
+#   pending    bait with no place to put it, or a low-confidence one; unused
+#   applied    bait written into the bait log; the model reads it
+#   on_file    a catch report; reports.py counts it as a witness
+#   confirmed  a person looked and agreed; nothing else changes
+#   retracted  a person looked and disagreed; the sighting is taken back out
+#              of the bait log and the report stops counting
+#   duplicate  the same observation read again from the same article
+#   superseded a regulation row from before the overlay existed
+DECISIONS = ("confirmed", "retracted")
+
+
+def item_id(r: dict) -> str:
+    """One observation, however many times an article was read. Stable
+    across re-scrapes so a decision made on Tuesday still covers Friday's
+    copy of the same sentence."""
+    key = "|".join(str(r.get(k) or "") for k in
+                   ("kind", "source_url", "species_key", "bait", "place",
+                    "observed_on")) + "|" + (r.get("quote") or "")[:80]
+    return hashlib.sha1(key.encode()).hexdigest()[:12]
+
+
+class _Placed:
+    """A coordinate the queue already resolved: the row's matched_spot key
+    is `at:lat,lon` (spots.coord_key), so applying it later needs neither
+    the marks file nor the gazetteer."""
+    def __init__(self, key: str, lat: float, lon: float):
+        self.key, self.lat, self.lon = key, lat, lon
+
+
+def _spot_from_key(key: str | None):
+    if not key or not str(key).startswith("at:"):
+        return None
+    try:
+        lat, lon = (float(v) for v in str(key)[3:].split(","))
+    except ValueError:
+        return None
+    return _Placed(str(key), lat, lon)
+
+
+def _apply_bait(b: dict, spot) -> None:
+    baitmod.record(baitmod.Sighting(
+        bait=b["bait"].lower(), lat=spot.lat, lon=spot.lon,
+        when=(b.get("observed_on") or date.today().isoformat()),
+        abundance=b.get("abundance", "scattered"),
+        spot=spot.key, source="report",
+        confidence=b.get("confidence", "medium"),
+        notes=f"{b.get('place','')} — {b.get('source_url', '')}"))
+    b["status"] = "applied"
+    b["applied_at"] = datetime.now().isoformat(timespec="seconds")
+
+
+def _rewrite(rows: list[dict], path: str = REVIEW_PATH) -> None:
+    """The queue is append-only for the scrapers; a decision rewrites it,
+    atomically, so the server and the CLI never see half a file."""
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".queue-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            for r in rows:
+                fh.write(json.dumps(r) + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def reconcile_queue(path: str = REVIEW_PATH, apply_bait: bool = True,
+                    bait_path: str | None = None) -> dict:
+    """Bring every row up to the applied-on-arrival rule. Idempotent, run
+    at the end of every scrape and on demand: regulation rows from before
+    the overlay are superseded, catch reports are on file, placed bait is
+    applied once per observation, and an already-applied copy is marked a
+    duplicate rather than applied again."""
+    rows = load_queue(path)
+    counts = {"superseded": 0, "on_file": 0, "applied": 0, "duplicate": 0,
+              "left_pending": 0}
+    seen = {item_id(r) for r in rows if r.get("status") == "applied"}
+    for r in rows:
+        st = r.get("status")
+        if r.get("kind") == "regulation" and st == "pending":
+            r["status"] = "superseded"; counts["superseded"] += 1
+        elif r.get("kind") == "catch_report" and st == "pending":
+            r["status"] = "on_file"; counts["on_file"] += 1
+        elif r.get("kind") == "bait" and st == "pending":
+            rid = item_id(r)
+            spot = _spot_from_key(r.get("matched_spot")) or (
+                _match_spot(r.get("place", "")) if r.get("matched_spot") else None)
+            if rid in seen:
+                r["status"] = "duplicate"; counts["duplicate"] += 1
+            elif apply_bait and spot and r.get("confidence") in ("high", "medium"):
+                if bait_path:
+                    baitmod.record(baitmod.Sighting(
+                        bait=r["bait"].lower(), lat=spot.lat, lon=spot.lon,
+                        when=(r.get("observed_on") or date.today().isoformat()),
+                        abundance=r.get("abundance", "scattered"), spot=spot.key,
+                        source="report", confidence=r.get("confidence", "medium"),
+                        notes=f"{r.get('place','')} — {r.get('source_url', '')}"),
+                        path=bait_path)
+                    r["status"] = "applied"
+                    r["applied_at"] = datetime.now().isoformat(timespec="seconds")
+                else:
+                    _apply_bait(r, spot)
+                seen.add(rid); counts["applied"] += 1
+            else:
+                counts["left_pending"] += 1
+    _rewrite(rows, path)
+    return counts
+
+
+def awaiting(path: str = REVIEW_PATH, limit: int = 200) -> list[dict]:
+    """What is in force and has not been looked at: applied bait, catch
+    reports on file, and bait that could not be placed. One row per
+    observation, newest first, with its id."""
+    latest: dict[str, dict] = {}
+    for r in load_queue(path):
+        if r.get("kind") == "regulation":
+            continue
+        if r.get("status") not in ("applied", "on_file", "pending"):
+            continue
+        rid = item_id(r)
+        if str(r.get("queued_at", "")) >= str(latest.get(rid, {}).get("queued_at", "")):
+            latest[rid] = dict(r, id=rid)
+    rows = sorted(latest.values(),
+                  key=lambda r: (str(r.get("observed_on") or ""), str(r.get("queued_at", ""))),
+                  reverse=True)
+    return rows[:limit]
+
+
+def decide(rid: str, decision: str, path: str = REVIEW_PATH,
+           bait_path: str | None = None) -> dict:
+    """Confirm or retract one observation, every copy of it. Retracting an
+    applied bait sighting takes it back out of the bait log."""
+    if decision not in DECISIONS:
+        raise ValueError("decision must be one of %s" % ", ".join(DECISIONS))
+    rows = load_queue(path)
+    hit = [r for r in rows if item_id(r) == rid]
+    if not hit:
+        raise KeyError("no queued observation with id %s" % rid)
+    removed = 0
+    for r in hit:
+        was = r.get("status")
+        if decision == "retracted" and r.get("kind") == "bait" and was == "applied":
+            removed += baitmod.retract(r.get("source_url", ""),
+                                       r.get("observed_on") or "", r.get("bait", ""),
+                                       spot=r.get("matched_spot"),
+                                       **({"path": bait_path} if bait_path else {}))
+        r["status"] = decision
+        r["decided_at"] = datetime.now().isoformat(timespec="seconds")
+    _rewrite(rows, path)
+    return {"id": rid, "decision": decision, "rows": len(hit),
+            "kind": hit[0].get("kind"), "sightings_removed": removed}

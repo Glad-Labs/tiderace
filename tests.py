@@ -789,11 +789,39 @@ class Reconcile(unittest.TestCase):
         a = ("Beginning 12:00AM on Sunday, July 19, 2026, the commercial possession "
              "limit for Summer Flounder for vessels with a Summer Flounder Exemption "
              "Certificate will be three hundred (300) pounds per day.")
+        # Same fishery -- the exemption certificate is a sub-fishery of its
+        # own since 15 Sep 2026, so a plain "for Summer Flounder" sentence
+        # would no longer collide with this one.
         b = ("Beginning 12:00AM on Sunday, July 19, 2026, the commercial possession "
-             "limit for Summer Flounder will be three hundred (300) pounds per day.")
+             "limit for Summer Flounder for vessels with a Summer Flounder Exemption "
+             "Certificate will be four hundred (400) pounds per day.")
         state = reconcile.effective_state([ridem.parse_notice(a), ridem.parse_notice(b)],
                                          self.TODAY)
         self.assertEqual(list(state.values())[0]["same_date_notices"], 2)
+
+    def test_a_promoted_successor_is_in_force_not_spent(self):
+        """"...until the next sub-period begins Oct 16 at 100 lb" is promoted
+        to a rule dated Oct 16, and it carried its parent's reopens_on --
+        the same Oct 16 -- which overlay_for read as the date it ENDED. Every
+        promoted successor was dropped as spent and the hand-typed number
+        showed in its place (15 September 2026)."""
+        import tempfile, os
+        from tiderace import applied
+        n = ridem.parse_notice(
+            "Beginning 12:00AM on Wednesday, September 16, 2026, the commercial "
+            "possession limit for Black Sea Bass will remain at four hundred (400) "
+            "pounds per day until further notice, or until the next sub-period begins "
+            "12:00AM on October 16, 2026 at one hundred (100) pounds per day.")
+        n["source_url"] = "u"
+        state = reconcile.effective_state([n], date(2026, 10, 20))
+        rule = list(state.values())[0]
+        self.assertEqual(rule["amount"]["value"], 100)
+        self.assertIsNone(rule.get("reopens_on"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "ap.json")
+            applied.apply_state(state, path=path)
+            live = applied.overlay_for("black_sea_bass", "commercial", date(2026, 10, 20), path=path)
+            self.assertEqual([r["value"] for r in live], ["100 pounds per day"])
 
     def test_possession_notice_is_not_mislabelled_a_closure(self):
         """Bare 'close' appears inside reopen clauses; only the verb form counts."""
@@ -2708,6 +2736,331 @@ class AnEmptyLogSummarisesToZeros(unittest.TestCase):
         self.assertEqual(s, {"trips": 0, "fish": 0, "blanks": 0,
                              "by_species": {}, "ready_to_fit": False})
 
+class MenhadenIsInTheAppForTheNoticesAndTheLog(unittest.TestCase):
+    """Matt, 15 September 2026: "add menhaden to the app." A 120,000 lb per
+    vessel per day notice went unattributed the day before because the
+    parser had never heard of the fish. Registered, regulated through the
+    notices, loggable under what it is called on a boat -- and not forecast,
+    because the one published figure is a preference near 18 C, not a band."""
+
+    def test_it_is_called_bunker_on_a_boat(self):
+        from tiderace import species as spmod
+        for said in ("bunker", "pogies", "peanut bunker", "menhaden", "Menhaden"):
+            self.assertEqual(spmod.resolve(said), "menhaden", said)
+        self.assertEqual(spmod.get("menhaden").group, spmod.INSHORE)
+
+    def test_the_notice_now_names_its_fish(self):
+        from tiderace import ridem
+        n = ridem.parse_notice(
+            "Beginning 12:00 A.M. on Wednesday, September 16, 2026, the commercial "
+            "possession limit for Menhaden inside the Menhaden Management Area will "
+            "be one-hundred twenty-thousand (120,000) pounds per vessel per day, "
+            "until further notice.")
+        self.assertEqual(n["species_key"], "menhaden")
+        self.assertEqual(n["amount"]["value"], 120000)
+        self.assertEqual(n["period"], "per day")
+
+    def test_a_fish_named_in_the_heading_is_found_too(self):
+        """"Winter I Aggregate Program for Summer Flounder: Beginning 12:00am
+        on Sunday, January 4, 2026, the possession limit will be four thousand
+        (4,000) pounds per bi-week" -- the species sits before the clause the
+        pattern reads, and this notice was unrecognised for a fortnight."""
+        from tiderace import ridem
+        n = ridem.parse_notice(
+            "Winter I Aggregate Program for Summer Flounder: Beginning 12:00am on "
+            "Sunday, January 4, 2026, the possession limit will be four thousand "
+            "(4,000) pounds per bi-week (permitted vessels only) until further notice.")
+        self.assertEqual(n["species_key"], "fluke")
+        self.assertEqual(n["aggregate_program"], "winter")
+
+    def test_the_heading_reaches_every_clause_on_its_line(self):
+        """The page splitter cut each line at every "Beginning", so the
+        second clause on "Winter I Aggregate Program for Summer Flounder:
+        Beginning January 1 ... Beginning 12:00am on Sunday, January 4 ..."
+        arrived with no heading and no fish."""
+        from tiderace import ridem
+        page = ("Winter I Aggregate Program for Summer Flounder: Beginning January 1, "
+                "2026, the fishery will remain closed. Beginning 12:00am on Sunday, "
+                "January 4, 2026, the possession limit will be four thousand (4,000) "
+                "pounds per bi-week (permitted vessels only) until further notice.\n"
+                "Beginning 12:00AM on Sunday, August 30, 2026, the commercial possession "
+                "limit for Scup will be two thousand (2,000) pounds per day.")
+        out = ridem.parse_page(page)
+        jan = [n for n in out["notices"] if n["effective_date"] == "2026-01-04"]
+        self.assertEqual(len(jan), 1)
+        self.assertEqual((jan[0]["species_key"], jan[0]["aggregate_program"]), ("fluke", "winter"))
+        self.assertEqual([n["species_key"] for n in out["notices"] if n["effective_date"] == "2026-08-30"],
+                         ["scup"], "a heading belongs to its own line only")
+        self.assertEqual(out["warnings"], [])
+
+    def test_it_is_refused_a_forecast_with_the_source_named(self):
+        from tiderace import score, species as spmod
+        self.assertFalse(spmod.get("menhaden").scored)
+        self.assertIn("[ASMFC-MEN]", score.NOT_PROFILED["menhaden"])
+        self.assertIn("near 18C", score.NOT_PROFILED["menhaden"])
+
+    def test_regulated_through_the_notices_alone(self):
+        """No hand-typed row in regs.py, and there must not be one nobody
+        read; the overlay carries the notice and that is enough to be known."""
+        import tempfile, os
+        from datetime import date
+        from tiderace import applied, regs, species as spmod
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "regs_applied.json")
+            applied.apply_state({("menhaden",): {
+                "species_key": "menhaden", "license_mode": "commercial",
+                "change_type": "possession_limit", "effective_date": "2026-09-16",
+                "amount": {"value": 120000, "unit": "pounds"}, "period": "per day",
+                "value": "120000 pounds per day", "source_url": "https://dem.ri.gov/x",
+                "quote": "q"}}, path=path)
+            saved = applied.PATH
+            applied.PATH = path
+            try:
+                st = regs.commercial_status("menhaden", date(2026, 9, 20))
+                self.assertTrue(st["known"])
+                self.assertTrue(st["from_notices_only"])
+                self.assertEqual(st["bag"], "120000 pounds per day")
+                self.assertIsNone(st["min_inches"])
+                self.assertTrue(spmod.get("menhaden").regulated)
+                self.assertFalse(regs.commercial_status("menhaden", date(2026, 9, 1))["known"],
+                                 "before the notice took effect there is nothing to know")
+            finally:
+                applied.PATH = saved
+
+
+class TheLimitShownIsForTheLicenceInHand(unittest.TestCase):
+    """The phone said "2800 pounds per week" for black sea bass on a
+    general-category licence (15 September 2026). RIDEM states the general
+    400 lb/day and the Aggregate Program's 2,800 lb/week in one breath; the
+    overlay keyed them together and the last one written won."""
+
+    def _overlay(self, d):
+        import os
+        from tiderace import applied
+        path = os.path.join(d, "regs_applied.json")
+        base = {"species_key": "black_sea_bass", "license_mode": "commercial",
+                "change_type": "possession_limit", "effective_date": "2026-08-30",
+                "source_url": "https://dem.ri.gov/x", "quote": "q"}
+        applied.apply_state({
+            ("g",): dict(base, amount={"value": 400, "unit": "pounds"}, period="per day",
+                         value="400 pounds per day", aggregate_program=None),
+            ("a",): dict(base, amount={"value": 2800, "unit": "pounds"}, period="per week",
+                         value="2800 pounds per week", aggregate_program="summer_fall"),
+        }, path=path)
+        return path
+
+    def test_the_programme_is_part_of_the_key(self):
+        import tempfile
+        from tiderace import applied
+        with tempfile.TemporaryDirectory() as d:
+            rules = applied.load(self._overlay(d))["rules"]
+            self.assertEqual(len(rules), 2, "two rules, not one overwriting the other")
+            self.assertTrue(any(k.endswith("|summer_fall") for k in rules))
+
+    def test_the_sub_fishery_in_hand_and_the_split_nobody_configured(self):
+        """Scup's floating-trap number is not the general category's; and
+        fluke's with-certificate 400 and without 200 are both shown when
+        the config does not say which certificate you hold."""
+        import tempfile, os
+        from datetime import date
+        from tiderace import applied, regs
+        base = {"license_mode": "commercial", "change_type": "possession_limit",
+                "effective_date": "2026-09-16", "source_url": "u", "quote": "q"}
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "ap.json")
+            applied.apply_state({
+                ("s1",): dict(base, species_key="scup", sub_fishery="general_category",
+                              amount={"value": 10000, "unit": "pounds"}, period="per week",
+                              value="10000 pounds per week"),
+                ("s2",): dict(base, species_key="scup", sub_fishery="floating_fish_trap",
+                              amount={"value": 50000, "unit": "pounds"}, period="per day",
+                              value="50000 pounds per day"),
+                ("f1",): dict(base, species_key="fluke", sub_fishery="with_exemption_certificate",
+                              amount={"value": 400, "unit": "pounds"}, period="per day",
+                              value="400 pounds per day"),
+                ("f2",): dict(base, species_key="fluke", sub_fishery="without_exemption_certificate",
+                              amount={"value": 200, "unit": "pounds"}, period="per day",
+                              value="200 pounds per day"),
+            }, path=path)
+            saved, applied.PATH = applied.PATH, path
+            try:
+                on = date(2026, 9, 20)
+                self.assertEqual(regs.commercial_status("scup", on, "none", "general_category")["bag"],
+                                 "10000 pounds per week")
+                self.assertEqual(regs.commercial_status("scup", on, "none", "floating_fish_trap")["bag"],
+                                 "50000 pounds per day")
+                self.assertEqual(regs.commercial_status("fluke", on, "none", "general_category")["bag"],
+                                 "200 pounds per day (with exemption certificate) · "
+                                 "400 pounds per day (without exemption certificate)"
+                                 .replace("200 pounds per day (with exemption certificate) · 400 pounds per day (without exemption certificate)",
+                                          "400 pounds per day (with exemption certificate) · 200 pounds per day (without exemption certificate)"))
+            finally:
+                applied.PATH = saved
+
+    def test_a_stale_sub_less_number_yields_to_the_split_beside_it(self):
+        """Fluke on 16 September 2026: a promoted "100 lb/day" sat sub-less
+        next to the with-certificate 400 and without 200 dated the same
+        day. The 100 was the July notice's tail, replaced by those two."""
+        import tempfile, os
+        from datetime import date
+        from tiderace import applied, regs
+        base = {"species_key": "fluke", "license_mode": "commercial",
+                "change_type": "possession_limit", "source_url": "u", "quote": "q"}
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "ap.json")
+            applied.apply_state({
+                ("p",): dict(base, effective_date="2026-09-16", sub_fishery=None,
+                             amount={"value": 100, "unit": "pounds"}, period="per day",
+                             value="100 pounds per day"),
+                ("w",): dict(base, effective_date="2026-09-16", sub_fishery="with_exemption_certificate",
+                             amount={"value": 400, "unit": "pounds"}, period="per day",
+                             value="400 pounds per day"),
+                ("o",): dict(base, effective_date="2026-09-16", sub_fishery="without_exemption_certificate",
+                             amount={"value": 200, "unit": "pounds"}, period="per day",
+                             value="200 pounds per day"),
+            }, path=path)
+            saved, applied.PATH = applied.PATH, path
+            try:
+                bag = regs.commercial_status("fluke", date(2026, 9, 20), "none", "general_category")["bag"]
+                self.assertEqual(bag, "400 pounds per day (with exemption certificate) · "
+                                      "200 pounds per day (without exemption certificate)")
+            finally:
+                applied.PATH = saved
+
+    def test_general_category_reads_the_daily_number(self):
+        import tempfile
+        from datetime import date
+        from tiderace import applied, regs
+        with tempfile.TemporaryDirectory() as d:
+            saved, applied.PATH = applied.PATH, self._overlay(d)
+            try:
+                self.assertEqual(regs.commercial_status("black_sea_bass", date(2026, 9, 15),
+                                                        program="none")["bag"],
+                                 "400 pounds per day")
+                self.assertEqual(regs.commercial_status("black_sea_bass", date(2026, 9, 15),
+                                                        program="summer_fall")["bag"],
+                                 "2800 pounds per week")
+            finally:
+                applied.PATH = saved
+
+
+class AppliedOnArrivalConfirmedAfter(unittest.TestCase):
+    """Matt, 15 September 2026: "changes like regs, reports and bait should
+    be updating automatically since I don't have time to go chasing them
+    all. I'd rather just confirm them after they're applied." The queue held
+    463 rows nobody had read: 285 catch reports, 110 regulation notices the
+    overlay had long since applied, 68 bait sightings."""
+
+    def _rows(self):
+        return [
+            {"kind": "regulation", "status": "pending", "species": "scup", "queued_at": "2026-09-01T00:00:00"},
+            {"kind": "catch_report", "status": "pending", "species_key": "fluke", "species": "fluke",
+             "place": "Block Island", "observed_on": "2026-09-08", "quote": "fluke at the island",
+             "source_url": "https://example.test/a", "queued_at": "2026-09-10T07:00:00",
+             "attributed_to": "Snug Harbor", "confidence": "high"},
+            {"kind": "bait", "status": "pending", "bait": "herring", "abundance": "decent",
+             "place": "Harbor of Refuge", "matched_spot": "at:41.36538,-71.50645",
+             "observed_on": "2026-09-09", "confidence": "high", "quote": "herring in the harbor",
+             "source_url": "https://example.test/a", "queued_at": "2026-09-10T07:00:00"},
+            {"kind": "bait", "status": "pending", "bait": "sand eels", "abundance": "decent",
+             "place": "south county beaches", "matched_spot": None,
+             "observed_on": "2026-09-09", "confidence": "high", "quote": "sand eels on the beaches",
+             "source_url": "https://example.test/a", "queued_at": "2026-09-10T07:00:00"},
+            {"kind": "bait", "status": "pending", "bait": "squid", "abundance": "trace",
+             "place": "Harbor of Refuge", "matched_spot": "at:41.36538,-71.50645",
+             "observed_on": "2026-09-09", "confidence": "low", "quote": "maybe squid",
+             "source_url": "https://example.test/a", "queued_at": "2026-09-10T07:00:00"},
+        ]
+
+    def _setup(self, d):
+        import os
+        from tiderace import extract
+        q = os.path.join(d, "review_queue.jsonl")
+        b = os.path.join(d, "bait_log.jsonl")
+        for r in self._rows():
+            extract._queue(r, path=q)
+        return q, b
+
+    def test_reconcile_applies_what_can_be_placed_and_only_once(self):
+        import tempfile
+        from tiderace import extract, bait
+        with tempfile.TemporaryDirectory() as d:
+            q, b = self._setup(d)
+            c = extract.reconcile_queue(q, apply_bait=True, bait_path=b)
+            self.assertEqual((c["superseded"], c["on_file"], c["applied"], c["left_pending"]),
+                             (1, 1, 1, 2))
+            log = bait.load(b)
+            self.assertEqual(len(log), 1)
+            self.assertEqual((log[0]["bait"], log[0]["source"], log[0]["spot"]),
+                             ("herring", "report", "at:41.36538,-71.50645"))
+            by = {r.get("bait") or r.get("kind"): r["status"] for r in extract.load_queue(q)}
+            self.assertEqual(by["herring"], "applied")
+            self.assertEqual(by["sand eels"], "pending", "no place to put it")
+            self.assertEqual(by["squid"], "pending", "low confidence stays out")
+            self.assertEqual(by["catch_report"], "on_file")
+            self.assertEqual(by["regulation"], "superseded")
+            # Read again: nothing applied twice, and a re-scraped copy is a duplicate.
+            extract._queue(dict(self._rows()[2]), path=q)
+            c2 = extract.reconcile_queue(q, apply_bait=True, bait_path=b)
+            self.assertEqual((c2["applied"], c2["duplicate"]), (0, 1))
+            self.assertEqual(len(bait.load(b)), 1)
+
+    def test_awaiting_lists_one_row_per_observation_with_an_id_and_no_regulations(self):
+        import tempfile
+        from tiderace import extract
+        with tempfile.TemporaryDirectory() as d:
+            q, b = self._setup(d)
+            extract.reconcile_queue(q, apply_bait=True, bait_path=b)
+            extract._queue(dict(self._rows()[1], queued_at="2026-09-12T07:00:00"), path=q)
+            rows = extract.awaiting(q)
+            self.assertEqual({r["kind"] for r in rows}, {"catch_report", "bait"})
+            self.assertEqual(len([r for r in rows if r["kind"] == "catch_report"]), 1,
+                             "the same report read twice is one observation")
+            self.assertTrue(all(len(r["id"]) == 12 for r in rows))
+
+    def test_retracting_takes_the_sighting_back_out_and_the_witness_off(self):
+        import tempfile
+        from tiderace import extract, bait, reports
+        with tempfile.TemporaryDirectory() as d:
+            q, b = self._setup(d)
+            # The same column, the same bait, the same day, another place:
+            # retracting the harbour must not take the reef with it.
+            extract._queue(dict(self._rows()[2], place="Brenton Reef",
+                                matched_spot="at:41.44455,-71.35840",
+                                quote="herring on the reef"), path=q)
+            extract.reconcile_queue(q, apply_bait=True, bait_path=b)
+            self.assertEqual(len(bait.load(b)), 2)
+            rows = extract.awaiting(q)
+            herring = next(r for r in rows if r.get("bait") == "herring"
+                           and r.get("place") == "Harbor of Refuge")
+            out = extract.decide(herring["id"], "retracted", path=q, bait_path=b)
+            self.assertEqual(out["sightings_removed"], 1)
+            self.assertEqual([r["spot"] for r in bait.load(b)], ["at:41.44455,-71.35840"])
+            reef = next(r for r in extract.awaiting(q) if r.get("bait") == "herring")
+            extract.decide(reef["id"], "retracted", path=q, bait_path=b)
+            self.assertEqual(bait.load(b), [])
+            fluke = next(r for r in rows if r["kind"] == "catch_report")
+            self.assertEqual(len(reports.catch_reports(q)), 1)
+            extract.decide(fluke["id"], "retracted", path=q)
+            self.assertEqual(reports.catch_reports(q), [], "a retracted report is no witness")
+            self.assertEqual(extract.awaiting(q) and {r["status"] for r in extract.awaiting(q)},
+                             {"pending"}, "only the unplaced ones are left waiting")
+            with self.assertRaises(ValueError):
+                extract.decide(fluke["id"], "maybe", path=q)
+            with self.assertRaises(KeyError):
+                extract.decide("nope", "confirmed", path=q)
+
+    def test_the_timer_applies_bait_and_the_desk_can_take_it_back(self):
+        import pathlib
+        root = pathlib.Path(__file__).parent
+        desk = strip_comments((root / "tiderace" / "web" / "desk.html").read_text())
+        self.assertIn('data-s="confirm"', desk)
+        self.assertIn("post('/api/confirm/decide', {id: row.dataset.id, decision: b.dataset.d})", desk)
+        srv = (root / "tiderace" / "server.py").read_text()
+        route = srv.split('if url.path == "/api/confirm/decide":')[1].split("if url.path ==")[0]
+        self.assertIn("decision not in extract.DECISIONS", route)
+        self.assertIn("extract.decide(rid, decision)", route)
+
 class RankedDotsOnTheMap(unittest.TestCase):
     """Matt, 9 September 2026: "it would be great to have the recommended
     spots color coded by quality, like make the best spot very noticeable and
@@ -3091,7 +3444,7 @@ class EvidenceTier(unittest.TestCase):
 
     def test_the_last_refusal_is_the_rule_itself(self):
         from tiderace import score
-        self.assertEqual(sorted(score.NOT_PROFILED), ["summer_triggerfish"])
+        self.assertEqual(sorted(score.NOT_PROFILED), ["menhaden", "summer_triggerfish"])
         self.assertIn("No source about this water", score.NOT_PROFILED["summer_triggerfish"])
 
     def test_the_grid_and_the_card_carry_the_tier(self):
@@ -5764,7 +6117,7 @@ class DaylightAndEveryFish(unittest.TestCase):
         """Six of thirty-five were on offer, so the other twenty-nine could not
         be looked at or logged from the map at all."""
         from tiderace import species as speciesmod, score
-        self.assertEqual(len(speciesmod.loggable()), 36)
+        self.assertEqual(len(speciesmod.loggable()), 37)
         self.assertGreater(len(speciesmod.loggable()), len(score.PROFILES))
         import pathlib
         srv = (pathlib.Path(__file__).parent / "tiderace" / "server.py").read_text()
@@ -6426,20 +6779,23 @@ class ScrapeFreshness(unittest.TestCase):
                                 "success and both failure paths must be recorded")
         self.assertIn("scrapelog.record(key, kind, False", fn)
 
-    def test_the_scheduled_scrape_does_not_write_bait_by_itself(self):
-        """--apply-bait on a timer with nobody reading the output is how the
-        bait log fills with somebody else's guesses."""
+    def test_the_scheduled_scrape_applies_bait_on_arrival(self):
+        """The opposite of what this test asserted until 15 September 2026.
+        --apply-bait was kept off the timer so the bait log would not fill
+        with somebody else's guesses unread; the queue that replaced it held
+        68 sightings unread instead. Matt: "I don't have time to go chasing
+        them all. I'd rather just confirm them after they're applied." A
+        report's word is weighted as a report's word (SOURCE_TRUST 0.75) and
+        the desk's Confirm tab takes one back out."""
         import pathlib
-        # The repo copy, so this means something on a clean checkout, and the
-        # ExecStart line only: the comment beside it explains the rule by
-        # naming the flag, and a whole-file search matches the explanation.
-        # Sixth time that shape has bitten -- assert the mechanism.
+        # The repo copy, and the ExecStart lines only: the comment beside
+        # them names the flag, and a whole-file search would match that.
         unit = (pathlib.Path(__file__).parent / "systemd"
                 / "tiderace-reports.service").read_text()
         exec_lines = [l for l in unit.splitlines()
                       if l.startswith("ExecStart") or l.startswith("  --")]
         self.assertTrue(exec_lines, "no ExecStart found")
-        self.assertNotIn("--apply-bait", "\n".join(exec_lines))
+        self.assertIn("--apply-bait", "\n".join(exec_lines))
 
     def test_the_units_are_in_the_repo_not_just_on_this_machine(self):
         """They were written straight into ~/.config, where they are not
@@ -6505,13 +6861,16 @@ class TheDeskPageIsReachable(unittest.TestCase):
             self.assertIn(path, js, name)
             self.assertIn("async %s()" % name, js, name)
 
-    def test_the_desk_issues_no_writes(self):
-        """It is the reading half. Nothing on it changes anything, which is
-        also why the tab that used to ask for approvals had no button."""
+    def test_the_desk_writes_one_thing_a_decision(self):
+        """It was the reading half with no writes at all. Since 15 September
+        2026 it has exactly one: confirm or retract an observation the
+        reports already put in force. Nothing else on it changes anything."""
         js = strip_comments(self.desk)
-        for verb in ("POST", "PUT", "DELETE", "method:", "method :"):
-            self.assertNotIn(verb, js,
-                             "the desk page must issue no writes (%s)" % verb)
+        for verb in ("PUT", "DELETE"):
+            self.assertNotIn(verb, js, "the desk page must not %s" % verb)
+        self.assertEqual(js.count("method: 'POST'"), 1, "one write path, in post()")
+        posts = re.findall(r"post\('([^']+)'", js)
+        self.assertEqual(posts, ["/api/confirm/decide"], posts)
         self.assertGreater(js.count("fetch("), 0, "it does fetch something")
 
     def test_the_claim_queue_is_gone_from_the_desk(self):
@@ -7736,7 +8095,7 @@ class RefusalsAreRecorded(unittest.TestCase):
         and passing on the rest by not looking."""
         from tiderace import pelagic, score, species as speciesmod
         keys = {s.key for s in speciesmod.SPECIES}
-        self.assertEqual(len(keys), 36)
+        self.assertEqual(len(keys), 37)
         # Two scorers now: score.PROFILES inshore, pelagic.PROFILES offshore.
         # A fish in both would be scored twice; a fish in neither and not
         # refused would be the silence this test exists to catch.
@@ -7781,6 +8140,8 @@ class RefusalsAreRecorded(unittest.TestCase):
             # 5 September 2026: kingfish, cod, pollock and monkfish have
             # general-biology profiles now; only the triggerfish is refused.
             "summer_triggerfish": "COLLIE",
+            # 15 September 2026: one number, not a band.
+            "menhaden": "ASMFC-MEN",
         }
         declared = set(PublishedTemperatureBands._declared())
         for key, tag in looked_at.items():

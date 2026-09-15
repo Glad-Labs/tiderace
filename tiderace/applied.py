@@ -105,14 +105,21 @@ def apply_state(state: dict, path: str = PATH,
         # The answer is not to re-split the key. It is that one number is not
         # the whole rule, so the interface lists every applied rule for a
         # species with its own notice rather than picking one to display.
-        rid = "%s|%s|%s|%s" % (sp, mode, n.get("change_type"),
-                               n.get("sub_fishery") or "-")
+        # The Aggregate Program is in the key, as it is in reconcile's
+        # identity: without it the programme's 2,800 lb/week for black sea
+        # bass landed on the same key as the general 400 lb/day, the later
+        # one won, and a general-category licence read the weekly number on
+        # its strip (15 Sep 2026).
+        rid = "%s|%s|%s|%s|%s" % (sp, mode, n.get("change_type"),
+                                  n.get("sub_fishery") or "-",
+                                  n.get("aggregate_program") or "-")
         old = prev.get(rid) or {}
         rec = {
             "species": sp,
             "license_mode": mode,
             "change_type": n.get("change_type"),
             "sub_fishery": n.get("sub_fishery"),
+            "aggregate_program": n.get("aggregate_program"),
             "effective_date": n.get("effective_date"),
             "reopens_on": n.get("reopens_on"),
             "value": n.get("value") or _fmt(n),
@@ -145,12 +152,13 @@ def _fmt(n: dict) -> str:
     return v or n.get("change_type", "")
 
 
-def load(path: str = PATH) -> dict:
-    return cache.read_json(path) or {"rules": {}}
+def load(path: str | None = None) -> dict:
+    # Resolved at call time: a default bound at import cannot be redirected.
+    return cache.read_json(path or PATH) or {"rules": {}}
 
 
 def overlay_for(species: str, mode: str = "commercial",
-                when: date | None = None, path: str = PATH) -> list[dict]:
+                when: date | None = None, path: str | None = None) -> list[dict]:
     """Applied rules in force for one species and licence mode.
 
     A closure whose `reopens_on` has passed is not in force. That is the whole
@@ -181,7 +189,7 @@ def overlay_for(species: str, mode: str = "commercial",
     return out
 
 
-def summary(path: str = PATH) -> dict:
+def summary(path: str | None = None) -> dict:
     d = load(path)
     rules = list(d.get("rules", {}).values())
     return {

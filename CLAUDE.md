@@ -145,9 +145,12 @@ claimed:
   literature is allowed, cited to the document and page, and labelled on the
   card; a band from nowhere is not. Adding a species means finding the
   document, not guessing. The card says the tier; the slider strip says
-  "unvalidated here" for anything not this water. Only grey triggerfish is
-  refused: the one figure reachable is an AquaMaps model envelope, and a
-  model's output is not a measurement.
+  "unvalidated here" for anything not this water. Two are refused: grey triggerfish, whose one reachable figure is an
+  AquaMaps model envelope, and menhaden (15 September 2026), whose one
+  published figure is a preference "near 18C" -- a trapezoid needs four
+  numbers, and schools are found by eye, not by the bottom structure the
+  bay scorer ranks. A model's output is not a measurement and one number
+  is not a band.
 
   The offshore scorer (3 September 2026) keeps the same two tiers apart:
   the bands in `pelagic.py` each name the document and page they came from
@@ -170,7 +173,10 @@ claimed:
   construction.
 
 - **regulated** — only where the rule was actually read out of a RIDEM or DMF
-  notice. **Scored no longer implies regulated**, and that is deliberate: 8 of
+  notice: hand-typed into `regs.py` by a person, or applied from a notice by
+  the overlay. Menhaden (15 September 2026) is the case with no table row
+  at all -- `commercial_status` is known through the overlay alone, says
+  `from_notices_only`, and shows the notice, linked, and nothing else. **Scored no longer implies regulated**, and that is deliberate: 8 of
   the 14 have no transcribed rule, because the only way to keep the old
   invariant would have been to type eight size limits in from memory. What is
   enforced instead is that the app says so out loud — `paintLegal` on the
@@ -189,6 +195,25 @@ say on the desk whether either changed; **a limits-table change after
 `COMMERCIAL_CHECKED_ON` is the signal to re-transcribe `regs.py`**, and it is
 the only regulation event that still needs a human. A number the *model*
 read (`parser="model"`, from `--use-model`) never reaches the overlay.
+
+The overlay keys a rule by species, mode, change, sub-fishery **and
+Aggregate Program**, and `commercial_status` picks the possession limit for
+the programme in `config.json` (`aggregate_program: none` is general
+category). Without that, RIDEM's one-breath "400 lb/day, or 2,800 lb/week
+for Aggregate Program participants" put the weekly number on a
+general-category strip (15 September 2026).
+
+**Reports and bait are applied on arrival and confirmed after.** Matt, 15
+September 2026: "I don't have time to go chasing them all. I'd rather just
+confirm them after they're applied." A placed, high- or medium-confidence
+bait sighting from a report goes into the bait log the moment it is read
+(the timer runs `scrape --apply-bait`), a catch report counts as a witness
+the moment it is read, and `extract.reconcile_queue` brings the queue up to
+that rule after every scrape. The desk's Confirm tab and `tiderace review
+--confirm/--retract ID` are the review: a retraction takes the sighting back
+out of the log and the report off the witness list. Regulations never queue;
+the overlay applies them itself. The one thing this does not do is guess a
+place: a sighting with no coordinate stays pending and unused.
 
 A wrong size limit is not a bad forecast, it is a fine — and under Matt's
 father's commercial licence it is worse than a fine. When the app says a rule

@@ -114,6 +114,7 @@ a{color:var(--depth)}
 <nav>
   <button data-s="history" class="on">Log</button>
   <button data-s="reports">Reports</button>
+  <button data-s="confirm">Confirm</button>
   <button data-s="regs">Regs</button>
   <button data-s="hms">HMS</button>
   <button data-s="sources">Sources</button>
@@ -122,6 +123,7 @@ a{color:var(--depth)}
 <main>
   <section id="history" class="on"><div class="empty">reading…</div></section>
   <section id="reports"><div class="empty">reading…</div></section>
+  <section id="confirm"><div class="empty">reading…</div></section>
   <section id="regs"><div class="empty">reading…</div></section>
   <section id="hms"><div class="empty">reading…</div></section>
   <section id="sources"><div class="empty">reading…</div></section>
@@ -136,6 +138,13 @@ const esc = t => String(t == null ? '' : t)
 const LOADED = {};
 async function get(url){
   const r = await fetch(url);
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  return d;
+}
+async function post(url, body){
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                              body: JSON.stringify(body)});
   const d = await r.json();
   if (d.error) throw new Error(d.error);
   return d;
@@ -179,6 +188,49 @@ const RENDER = {
        <div class="card">${rows}</div>
        <div class="dim">Blanks count as much as fish. A model trained only on
          good days learns that every day is good.</div>`;
+  },
+
+  // Applied on arrival, confirmed after. Matt, 15 September 2026: "I don't
+  // have time to go chasing them all. I'd rather just confirm them after
+  // they're applied." Every row here is already in force -- a bait sighting
+  // in the log, a catch report counting as a witness -- and the two buttons
+  // are the whole review: agree, or take it back out.
+  async confirm(){
+    const d = await get('/api/confirm');
+    const rows = d.rows || [];
+    const what = r => r.kind === 'bait'
+      ? `${esc(r.abundance || '')} ${esc(r.bait || '')}`.trim()
+      : esc(r.species_raw || r.species || '?');
+    const state = r => r.status === 'applied' ? '<span class="tag">in the bait log</span>'
+      : r.status === 'on_file' ? '<span class="tag">counted as a witness</span>'
+      : '<span class="tag lo">no place to put it</span>';
+    const list = rows.map(r =>
+      `<div class="row" data-id="${esc(r.id)}">
+         <span class="k">${what(r)}${r.place ? ' · ' + esc(r.place) : ''}
+           ${r.matched_spot ? '<span class="dim">→ ' + esc(r.matched_spot) + '</span>' : ''}<br>
+           <span class="dim">${esc(r.observed_on || '')} · ${esc((r.source_url || '').replace(/^https?:\/\/(www\.)?/, '').split('/')[0])}
+           · ${esc(r.confidence || '')}</span><br>
+           <span class="dim">“${esc((r.quote || '').slice(0, 140))}”</span></span>
+         <span class="v" style="white-space:nowrap">${state(r)}
+           <button class="ok" data-d="confirmed">confirm</button>
+           <button class="no" data-d="retracted">not right</button></span>
+       </div>`).join('') || '<div class="empty">Nothing waiting. Everything read has been looked at.</div>';
+    const c = d.counts || {};
+    $('#confirm').innerHTML =
+      `<h2>${d.total || rows.length} waiting${(d.total || 0) > rows.length ? ', first ' + rows.length + ' shown' : ''}</h2>
+       <div class="dim" style="margin-bottom:9px">Already in force: ${c['bait/applied'] || 0} bait sightings
+         in the log, ${c['catch_report/on_file'] || 0} catch reports counting as witnesses,
+         ${c['bait/pending'] || 0} sightings with no place to put them. Confirm keeps one;
+         not right takes it back out.</div>
+       <div class="card">${list}</div>`;
+    $('#confirm').querySelectorAll('button[data-d]').forEach(b => b.onclick = async () => {
+      const row = b.closest('.row');
+      b.disabled = true;
+      try {
+        await post('/api/confirm/decide', {id: row.dataset.id, decision: b.dataset.d});
+        row.remove();
+      } catch (e) { b.disabled = false; alert('could not save: ' + e.message); }
+    });
   },
 
   async reports(){

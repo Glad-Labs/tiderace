@@ -887,6 +887,24 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(img["bytes"])
                 return
+            if url.path == "/api/confirm":
+                # What was applied on arrival and not yet looked at. Matt,
+                # 15 Sep 2026: "I'd rather just confirm them after they're
+                # applied." Each row carries the id a decision is posted with.
+                from . import extract
+                try:
+                    rows = extract.awaiting(limit=5000)
+                except (OSError, ValueError) as exc:
+                    return self._send_json({"error": str(exc)}, 500)
+                # Counted before the page is cut, so the numbers are the
+                # truth and the list is the first three hundred of it.
+                counts: dict[str, int] = {}
+                for r in rows:
+                    k = "%s/%s" % (r.get("kind"), r.get("status"))
+                    counts[k] = counts.get(k, 0) + 1
+                return self._send_json({"rows": rows[:300], "total": len(rows),
+                                        "counts": counts,
+                                        "decisions": list(extract.DECISIONS)})
             if url.path == "/api/place":
                 # A place said in prose, resolved to a public coordinate.
                 from . import gazetteer as gaz
@@ -900,6 +918,28 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------- POST
     def do_POST(self):
         url = urlparse(self.path)
+
+        if url.path == "/api/confirm/decide":
+            # One observation, confirmed or retracted. A retraction of an
+            # applied bait sighting takes it back out of the bait log; a
+            # retracted catch report stops counting as a witness.
+            from . import extract
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                data = json.loads(self.rfile.read(n) or b"{}")
+            except Exception as exc:                              # noqa: BLE001
+                return self._send_json({"error": str(exc)}, 400)
+            rid, decision = str(data.get("id") or ""), str(data.get("decision") or "")
+            if not rid or decision not in extract.DECISIONS:
+                return self._send_json(
+                    {"error": "needs id and a decision: %s" % ", ".join(extract.DECISIONS)}, 400)
+            try:
+                out = extract.decide(rid, decision)
+            except KeyError as exc:
+                return self._send_json({"error": str(exc).strip("'")}, 404)
+            except OSError as exc:
+                return self._send_json({"error": str(exc)}, 500)
+            return self._send_json({"ok": True, **out})
 
         if url.path == "/api/log/amend":
             # One row, corrected in place, old values kept on the row. The

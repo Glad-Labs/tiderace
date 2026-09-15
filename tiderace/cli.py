@@ -156,8 +156,16 @@ def run(argv=None) -> int:
     sc.add_argument("--use-model", action="store_true",
                     help="also ask the model about notices the rule parser missed")
 
-    rv = sub.add_parser("review", help="review extracted facts awaiting approval")
-    rv.add_argument("--kind", choices=("regulation", "bait", "catch_report"))
+    rv = sub.add_parser("review", help="what the reports put in force; confirm or take back")
+    rv.add_argument("--kind", choices=("bait", "catch_report"))
+    rv.add_argument("--confirm", metavar="ID", action="append",
+                    help="agree with an observation (id from the list)")
+    rv.add_argument("--retract", metavar="ID", action="append",
+                    help="take one back out: a bait sighting leaves the log, "
+                         "a catch report stops counting")
+    rv.add_argument("--apply", action="store_true",
+                    help="bring the queue up to the applied-on-arrival rule now, "
+                         "without fetching anything")
 
     rg = sub.add_parser("regs", help="compare recreational and commercial rules")
     rg.add_argument("--species", choices=sorted(score.PROFILES) + sorted(pelagic.PROFILES))
@@ -522,6 +530,17 @@ def _cmd_scrape(args) -> int:
             print(f"    ! fetch failed: {e}")
             scrapelog.record(key, kind, False, "fetch failed: %s" % e)
 
+    # The queue is brought up to the applied-on-arrival rule after every
+    # read, so a sighting placed today is in the log today and a report is
+    # a witness today; the desk's Confirm tab is where they get looked at.
+    try:
+        c = extract.reconcile_queue(apply_bait=bool(getattr(args, "apply_bait", False)))
+        if any(c.values()):
+            print(f"\n  queue: {c['applied']} bait applied, {c['on_file']} reports on file, "
+                  f"{c['superseded']} old regulation rows retired, {c['duplicate']} duplicates")
+    except OSError as e:
+        print(f"\n  ! could not reconcile the queue: {e}")
+
     if all_changes:
         try:
             from . import applied, reconcile
@@ -598,34 +617,57 @@ def _cmd_diff(args) -> int:
 
 
 def _cmd_review(args) -> int:
+    """Applied on arrival, confirmed after (Matt, 15 September 2026). This
+    lists what the reports put in force and takes a decision per id."""
     from . import extract
-    rows = extract.pending(args.kind)
-    if not rows:
-        print("\n  Nothing awaiting review.\n")
-        return 0
+    rc = 0
+    if getattr(args, "apply", False):
+        c = extract.reconcile_queue()
+        print(f"\n  queue brought up to date: {c['applied']} bait applied, "
+              f"{c['on_file']} reports on file, {c['superseded']} old regulation "
+              f"rows retired, {c['duplicate']} duplicates, {c['left_pending']} "
+              f"sightings with no place to put them")
+    for rid in (getattr(args, "confirm", None) or []):
+        try:
+            out = extract.decide(rid, "confirmed")
+            print(f"  confirmed {rid} ({out['kind']})")
+        except KeyError as exc:
+            print(f"  {str(exc).strip(chr(39))}", file=sys.stderr); rc = 2
+    for rid in (getattr(args, "retract", None) or []):
+        try:
+            out = extract.decide(rid, "retracted")
+            print(f"  retracted {rid} ({out['kind']}, "
+                  f"{out['sightings_removed']} sighting(s) taken out of the bait log)")
+        except KeyError as exc:
+            print(f"  {str(exc).strip(chr(39))}", file=sys.stderr); rc = 2
+    if getattr(args, "confirm", None) or getattr(args, "retract", None):
+        return rc
 
-    print(f"\n  {len(rows)} item(s) awaiting review")
+    rows = [r for r in extract.awaiting() if not args.kind or r.get("kind") == args.kind]
+    if not rows:
+        print("\n  Nothing waiting. Everything read has been looked at.\n")
+        return rc
+
+    print(f"\n  {len(rows)} observation(s) in force and not yet looked at")
     print("  " + "─" * 74)
+    state = {"applied": "in the bait log", "on_file": "counted as a witness",
+             "pending": "no place to put it"}
     for r in rows:
         kind = r.get("kind", "?")
-        print(f"\n  [{kind}] {r.get('species') or r.get('bait', '')}"
-              f"  ({r.get('confidence', '?')} confidence)")
-        if kind == "regulation":
-            print(f"    {r.get('license_mode')} · {r.get('change_type')} · "
-                  f"{r.get('value', '')}")
-            if r.get("effective_date"):
-                print(f"    effective {r['effective_date']}")
-        else:
-            print(f"    {r.get('abundance', '')} at {r.get('place', '')}"
-                  f" → {r.get('matched_spot') or 'unmatched'}")
+        print(f"\n  {r['id']}  [{kind}] {r.get('species_raw') or r.get('species') or r.get('bait', '')}"
+              f"  ({r.get('confidence', '?')}) · {state.get(r.get('status'), r.get('status'))}")
+        print(f"    {r.get('observed_on', '')} · {r.get('abundance', '')} at {r.get('place', '')}"
+              f" → {r.get('matched_spot') or 'unplaced'}")
         print(f"    \"{r.get('quote', '')[:110]}\"")
         print(f"    {r.get('source_url', '')}")
 
     print("\n  " + "─" * 74)
-    print("  Regulations are NOT applied automatically. Check each against the")
-    print("  source, then edit tiderace/regs.py by hand and bump CHECKED_ON.")
+    print("  Everything above is already in force. To take one back:")
+    print("    tiderace review --retract ID      (or --confirm ID to agree)")
+    print("  Regulations are not here: the overlay applies RIDEM's notices itself,")
+    print("  and every applied number links to its notice on the desk.")
     print(f"  Queue: {extract.REVIEW_PATH}\n")
-    return 0
+    return rc
 
 
 def _res(m):

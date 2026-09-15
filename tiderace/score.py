@@ -111,6 +111,16 @@ Second cohort, consulted 2026-09-02, for the inshore and nearshore species:
            warm summer temperatures". OBIS within 40 nm of Block Island, fetched
            5 September 2026: 929 records, March 95, October 74, February and
            September 49 each.
+  [ASMFC-MEN] ASMFC, Atlantic Menhaden: Life History and Habitat Needs
+           (habitat fact sheet, asmfc.org, 2024 upload). "Adults appear to
+           prefer water temperatures near 18C; adult migrations and movement
+           may be attributed to seeking waters within a certain temperature
+           range." One number, and the range itself unstated.
+  [HARE2016] Hare et al. 2016, Northeast Fish and Shellfish Climate
+           Vulnerability Assessment, Atlantic Menhaden narrative: presence
+           "peaks in spring and fall in the north"; juveniles leave the
+           estuaries "in fall, when temperatures begin to fall more
+           quickly"; survival "linked to ... temperatures above 5 C".
   [COLLIE] Collie, Wood & Jeffries 2008, Can. J. Fish. Aquat. Sci.
            65:1352-1365 -- the GSO trawl series. Its 25 species are 96% of
            every animal caught in the series, out of 130 recorded.
@@ -1193,6 +1203,21 @@ NOT_PROFILED: dict[str, str] = {
         "everything the GSO trawl has caught in this bay since 1959 [COLLIE]. "
         "A band would be a Mid-Atlantic number wearing a Narragansett Bay "
         "label."),
+    # 15 September 2026, added for the notices and the log, not the forecast.
+    # The habitat literature gives a single preference, not a band: "near
+    # 18C" [ASMFC-MEN], with the range it implies left unstated, and the
+    # seasonal picture is words -- spring and fall peaks in the north
+    # [HARE2016] -- with 24 dated OBIS records within 40 nm of Block Island,
+    # too few for a season. Four numbers from one is invention. And the
+    # positions this scorer ranks are bottom structure, which a surface
+    # filter-feeder found by eye and by spotter plane does not care about.
+    "menhaden": (
+        "One number, not a band: adults 'appear to prefer water temperatures "
+        "near 18C' [ASMFC-MEN], and the seasonal picture is spring and fall "
+        "peaks in the north [HARE2016]. A trapezoid needs four figures and "
+        "would be invented from one. Schools are found by eye, not by the "
+        "bottom structure this scorer ranks. Logged and regulated, not "
+        "forecast."),
 }
 
 
