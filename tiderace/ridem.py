@@ -310,10 +310,19 @@ def parse_page(text: str) -> dict:
             # never existed (15 Sep 2026). It inherits the date in front of it.
             parts = re.split(r"(?<=\.)\s+(?=The possession limit\b)", s)
             when = re.match(r"(?i)^beginning\s+.*?\d{4},?\s*", parts[0])
+            first = None
             for j, part in enumerate(parts):
                 if j and when:
                     part = when.group(0).rstrip() + " " + part
                 rec = parse_notice(part, context=head)
+                # The second sentence says "the possession limit", not "the
+                # commercial possession limit": it is the same notice and the
+                # same licence, and keyed as "unstated" it sat beside the
+                # commercial rule that replaced it instead of colliding with it.
+                if rec and j and first and rec.get("license_mode") == "unstated":
+                    rec["license_mode"] = first.get("license_mode", "unstated")
+                if rec and not j:
+                    first = rec
                 (parsed if rec else unparsed).append(rec or part[:200])
 
     warnings = []

@@ -2813,10 +2813,12 @@ class MenhadenIsInTheAppForTheNoticesAndTheLog(unittest.TestCase):
             "day until further notice, or until the next sub period begins 12:00AM on "
             "September 16, 2026 at one hundred (100) pounds per vessel per day.")
         got = sorted((n["sub_fishery"], n["amount"]["value"], n["effective_date"],
-                      (n.get("successor") or {}).get("amount", {}).get("value"))
+                      (n.get("successor") or {}).get("amount", {}).get("value"),
+                      n["license_mode"])
                      for n in out["notices"])
-        self.assertEqual(got, [("with_exemption_certificate", 300, "2026-07-19", 100),
-                               ("without_exemption_certificate", 200, "2026-07-19", 100)])
+        self.assertEqual(got, [("with_exemption_certificate", 300, "2026-07-19", 100, "commercial"),
+                               ("without_exemption_certificate", 200, "2026-07-19", 100, "commercial")],
+                         "the second sentence is the same licence as the first")
 
     def test_the_management_area_is_a_sub_fishery(self):
         """Inside the MMA and state waters outside it carry different
