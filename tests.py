@@ -813,10 +813,14 @@ class Reconcile(unittest.TestCase):
             "pounds per day until further notice, or until the next sub-period begins "
             "12:00AM on October 16, 2026 at one hundred (100) pounds per day.")
         n["source_url"] = "u"
+        # As the scrape path hands it over: with the words already rendered.
+        # Scup's promoted 10,000 lb/week carried "2000 pounds per day".
+        n["value"] = "400 pounds per day"
         state = reconcile.effective_state([n], date(2026, 10, 20))
         rule = list(state.values())[0]
         self.assertEqual(rule["amount"]["value"], 100)
         self.assertIsNone(rule.get("reopens_on"))
+        self.assertNotIn("value", rule, "the parent's words must not ride along")
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "ap.json")
             applied.apply_state(state, path=path)
@@ -2792,6 +2796,46 @@ class MenhadenIsInTheAppForTheNoticesAndTheLog(unittest.TestCase):
         self.assertEqual([n["species_key"] for n in out["notices"] if n["effective_date"] == "2026-08-30"],
                          ["scup"], "a heading belongs to its own line only")
         self.assertEqual(out["warnings"], [])
+
+    def test_a_second_rule_in_the_same_sentence_keeps_the_date(self):
+        """19 July 2026, one "Beginning": with a certificate 300 lb/day, and
+        "The possession limit for vessels without ... will remain at 200" --
+        the second had no date and was dropped, so fluke's without-certificate
+        limit never existed."""
+        from tiderace import ridem
+        out = ridem.parse_page(
+            "Beginning 12:00AM on Sunday, July 19, 2026, the commercial possession limit "
+            "for Summer Flounder for vessels with a Summer Flounder Exemption Certificate "
+            "will be three hundred (300) pounds per day, until further notice or until the "
+            "next sub period begins 12:00AM on September 16, 2026 at one hundred (100) "
+            "pounds per day. The possession limit for vessels without a Summer Flounder "
+            "Exemption Certificate will remain at two hundred (200) pounds per vessel per "
+            "day until further notice, or until the next sub period begins 12:00AM on "
+            "September 16, 2026 at one hundred (100) pounds per vessel per day.")
+        got = sorted((n["sub_fishery"], n["amount"]["value"], n["effective_date"],
+                      (n.get("successor") or {}).get("amount", {}).get("value"))
+                     for n in out["notices"])
+        self.assertEqual(got, [("with_exemption_certificate", 300, "2026-07-19", 100),
+                               ("without_exemption_certificate", 200, "2026-07-19", 100)])
+
+    def test_the_management_area_is_a_sub_fishery(self):
+        """Inside the MMA and state waters outside it carry different
+        limits and are opened and closed separately."""
+        from tiderace import ridem
+        inside = ridem.parse_notice(
+            "Beginning 12:00 A.M. on Wednesday, September 16, 2026, the commercial "
+            "possession limit for Menhaden inside the Menhaden Management Area will be "
+            "one-hundred twenty-thousand (120,000) pounds per vessel per day, until "
+            "further notice; the commercial possession limit for Menhaden in state waters "
+            "outside the Menhaden Management Area remains at one-hundred twenty-thousand "
+            "(120,000) pounds per vessel per day, until further notice.")
+        self.assertEqual(inside["sub_fishery"], "inside_mma")
+        out = ridem.parse_page(
+            "Menhaden - State Waters outside the Menhaden Management Area: Beginning "
+            "12:00am on Thursday, January 1, 2026, the commercial possession limit remains "
+            "@ one hundred twenty thousand (120,000) pounds per vessel per day.")
+        self.assertEqual(out["notices"][0]["sub_fishery"], "outside_mma")
+        self.assertEqual(out["notices"][0]["species_key"], "menhaden")
 
     def test_it_is_refused_a_forecast_with_the_source_named(self):
         from tiderace import score, species as spmod

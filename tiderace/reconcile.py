@@ -82,6 +82,11 @@ def _promote(n: dict, on_date: str) -> dict | None:
     if sc.get("closes"):
         return None
     promoted = dict(n)
+    # The parent's rendered value ("2000 pounds per day") must not ride
+    # along: apply_state keeps a `value` it is given, so the promoted
+    # 10,000 lb/week for scup carried the April number's words (15 Sep
+    # 2026). Dropped, it is rebuilt from the successor's amount and period.
+    promoted.pop("value", None)
     promoted.update({
         "effective_date": on_date,
         "amount": sc.get("amount"),

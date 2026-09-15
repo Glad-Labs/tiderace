@@ -209,6 +209,16 @@ def parse_notice(sentence: str, context: str = "") -> dict | None:
         sub = ("without_exemption_certificate"
                if re.search(r"(?i)\bwithout\b[^.]{0,40}exemption certificate", low)
                else "with_exemption_certificate")
+    # Menhaden is two fisheries by area: inside the Menhaden Management Area
+    # (the upper bay, opened and closed on the biomass survey) and state
+    # waters outside it. One notice sets both in one sentence, the inside
+    # first; the annual table names each in its heading.
+    elif re.search(r"inside the menhaden management area", sub_scope):
+        sub = "inside_mma"
+    elif re.search(r"outside the menhaden management area", sub_scope):
+        sub = "outside_mma"
+    elif "menhaden management area" in sub_scope:
+        sub = "inside_mma"
 
     reopens = None
     successor = None
@@ -292,8 +302,19 @@ def parse_page(text: str) -> dict:
                 s = s[len(head):].strip()
             if not re.match(r"(?i)^beginning\b", s):
                 continue
-            rec = parse_notice(s, context=head)
-            (parsed if rec else unparsed).append(rec or s[:200])
+            # One "Beginning ..." can carry two rules: "...for vessels with
+            # a Summer Flounder Exemption Certificate will be 300 lb/day ...
+            # The possession limit for vessels without ... will remain at
+            # 200 lb/day ..." -- and the second sentence, having no date of
+            # its own, was dropped, so fluke's without-certificate limit
+            # never existed (15 Sep 2026). It inherits the date in front of it.
+            parts = re.split(r"(?<=\.)\s+(?=The possession limit\b)", s)
+            when = re.match(r"(?i)^beginning\s+.*?\d{4},?\s*", parts[0])
+            for j, part in enumerate(parts):
+                if j and when:
+                    part = when.group(0).rstrip() + " " + part
+                rec = parse_notice(part, context=head)
+                (parsed if rec else unparsed).append(rec or part[:200])
 
     warnings = []
     for r in parsed:
