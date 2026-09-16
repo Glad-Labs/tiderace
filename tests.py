@@ -3474,8 +3474,21 @@ class EvidenceTier(unittest.TestCase):
         self.assertEqual(sorted(general), ["cobia", "cod", "haddock", "northern_kingfish",
                                            "pollock", "spanish_mackerel"])
         for k in general:
-            w = score.PROFILES[k].weights
-            self.assertEqual(set(w) - {"temp", "season"}, set(), k)
+            prof = score.PROFILES[k]
+            w = prof.weights
+            # "Only what its sources speak to" is the rule, not "only temp and
+            # season" -- that was the rule's consequence while substrate was
+            # unsourced. From 2026-09-16 the EFH source documents speak to the
+            # seabed for cod and haddock at a named table and page, so bottom
+            # is admissible HERE and nowhere else: current, light, wind and
+            # pressure stay out, because nothing published says what a cod
+            # wants of them off this shore.
+            self.assertEqual(set(w) - {"temp", "season", "bottom"}, set(), k)
+            if "bottom" in w:
+                self.assertTrue(prof.bottom, k + ": weights a term it cannot score")
+                self.assertTrue(prof.bottom_claim,
+                                k + ": a general profile may only weight a term "
+                                    "it can cite, and this one cites nothing")
             self.assertAlmostEqual(sum(w.values()), 1.0, places=6)
         for k in ("monkfish", "red_hake"):
             self.assertEqual(score.PROFILES[k].basis, "regional",
@@ -3545,7 +3558,13 @@ class LingIsRedHake(unittest.TestCase):
         c2f = lambda c: round(c * 9 / 5 + 32)
         self.assertEqual(p.temp, (c2f(2), c2f(8), c2f(10), c2f(22)))
         self.assertIn("[NE-133]", p.temp_claim)
-        self.assertEqual(set(p.weights), {"temp", "season"})
+        self.assertEqual(set(p.weights), {"temp", "season", "bottom"})
+        # The substrate half of the same document. "Sand-mud, and in holes and
+        # depressions" is the adult row of Table 1; the holes are the relief
+        # the candidate list already measures, and this is the other half.
+        self.assertIn("[NE-133 Table 1, p.8]", p.bottom_claim)
+        self.assertEqual(score.bottom_fit("mud", p), 1.0)
+        self.assertEqual(score.bottom_fit("rock", p), score.BOTTOM_UNLISTED)
         self.assertIn(3, p.peak_months); self.assertIn(10, p.peak_months)
         self.assertNotIn(7, p.months, "offshore in summer to avoid the warm water [NE-133]")
 
@@ -4110,6 +4129,54 @@ class Survey(unittest.TestCase):
         self.assertEqual(survey.zone(41.20, -71.60, depth_ft=30), survey.MIDBAY)
         self.assertEqual(survey.zone(41.20, -71.60, depth_ft=120), survey.OFFSHORE)
 
+    def test_the_seabed_layer_carries_a_verdict_for_every_fish_that_has_one(self):
+        """The noun alone is half an answer. "mud" is the cited habitat for a
+        red hake [NE-133 p.8] and a contradiction under a tautog [EFH-TOG
+        p.5], and the person reading it is on a boat rather than in score.py.
+
+        Every fish with a cited substrate rides along, not just the one the
+        request named, because `window.surveyURL` carries no species: the dock
+        bundle prefetches one URL per position and a tap on the water has to
+        hit that key byte for byte. Keying the verdict off the species would
+        either break the offline cache or multiply the bundle by the picker.
+
+        Both the phrase and the number come from `score`, so the sheet cannot
+        disagree with the gate that chose the position."""
+        from tiderace import score
+        v = survey._bottom_verdicts("mud")
+        cited = sorted(k for k, p in score.PROFILES.items() if p.bottom)
+        self.assertEqual(sorted(v), cited)
+        self.assertEqual(sorted(v), ["black_sea_bass", "cod", "fluke",
+                                     "haddock", "red_hake", "squid", "tautog"])
+        self.assertEqual(v["tautog"]["verdict"], score.BOTTOM_MISMATCH)
+        self.assertEqual(v["tautog"]["fit"], score.BOTTOM_UNLISTED)
+        self.assertIn("cited habitat", v["red_hake"]["verdict"])
+        self.assertEqual(v["red_hake"]["fit"], 1.0)
+        # The claim travels with the verdict, or a phrase on a card has
+        # nothing behind it.
+        self.assertIn("[EFH-TOG", v["tautog"]["claim"])
+        # Named by the source but not its preference is a third answer, and
+        # must not read as either of the other two.
+        sand = survey._bottom_verdicts("sand")
+        self.assertIn("cited habitat", sand["fluke"]["verdict"])
+        self.assertIn("not preferred", sand["black_sea_bass"]["verdict"])
+        # And nothing charted is its own answer again, never silence.
+        for entry in survey._bottom_verdicts(None).values():
+            self.assertIn("no seabed sample", entry["verdict"])
+        # A fish with no cited substrate is absent from the map entirely, and
+        # score.bottom_verdict is what says so for it.
+        self.assertNotIn("striped_bass", v)
+        self.assertEqual(score.bottom_verdict("rock",
+                                              score.PROFILES["striped_bass"]),
+                         "no substrate cited")
+        # Short enough for the phone. The sheet gives a row's sub-text 122 px
+        # on a 375 px screen; the first wording ran to seven lines and made
+        # that one row 322 px tall against a 164 px next-tallest.
+        for b in ("rock", "sand", "mud", None):
+            for prof in score.PROFILES.values():
+                self.assertLessEqual(len(score.bottom_verdict(b, prof)), 24,
+                                     score.bottom_verdict(b, prof))
+
     def test_resolutions_span_orders_of_magnitude(self):
         # The reason every value carries a footprint at all.
         self.assertLess(survey.RES["sounding"], survey.RES["station"])
@@ -4345,11 +4412,81 @@ class SurveyRendering(unittest.TestCase):
                 sheet, r"row\('" + layer + r"',\s*(val\('" + layer + r"'\)|\w+),\s*res",
                 f"{layer} looks like it is rendered as a bare object")
 
-    def test_bottom_shows_its_distance(self):
+    def test_bottom_shows_its_distance_and_what_it_means_for_this_fish(self):
         # "rock" underfoot and "rock" a fifth of a mile away are different
         # claims, and the survey is supposed to be honest about footprints.
-        self.assertIn("distance_nm", self.page.split("const bt = val('bottom')")[1][:400])
-        self.assertIn("distance_nm", self.cli.split('L.get("bottom")')[1][:400])
+        #
+        # The [:400] windows this used to slice broke the moment a comment was
+        # added above the line -- the fixed-character-window failure this
+        # project has now had four times. Slice to the end of the statement
+        # instead, which moves with the code.
+        js = strip_comments(self.page).split("const bt = val('bottom')")[1]
+        js = js.split("const st = val('structure')")[0]
+        self.assertIn("distance_nm", js)
+        cli = strip_py_comments(self.cli).split('L.get("bottom")')[1]
+        cli = cli.split('L.get("structure")')[0]
+        self.assertIn("distance_nm", cli)
+        # And the noun is never alone. "mud" is alarming under a tautog and is
+        # the cited habitat under a red hake; the verdict is what makes the
+        # row actionable, and it comes from the server so the phone cannot
+        # disagree with the gate that chose the position.
+        self.assertIn("bnote", js, "the phone drops the server's verdict")
+        self.assertIn("not charted here", js,
+                      "a position with no seabed sample renders no bottom row "
+                      "at all, which reads as clean ground")
+        # The verdict is read out of what the server sent, for the species in
+        # the picker -- not recomputed here against a threshold. The page
+        # owning that arithmetic is how the sheet and the candidate gate start
+        # disagreeing about the same piece of ground.
+        self.assertIn("val('bottom_fit')", js)
+        self.assertIn("SPECIES()", js)
+        self.assertNotRegex(js, r"BOTTOM_UNLISTED|bottom_unlisted|>=\s*0\.85",
+                            "the page is deciding the verdict itself")
+        # And the one phrase the card colours is compared to the server's
+        # string, not recognised by pattern. A regex here and a literal in
+        # score.py are two files that must change together and only one that
+        # fails when they do not.
+        card = strip_comments(self.page).split("function bottomLine(")[1]
+        card = card.split("\nfunction ")[0]
+        self.assertIn("GRID.bottom_mismatch", card)
+        self.assertNotRegex(card, r"/\^?not a substrate|test\(v\)",
+                            "the card matches the verdict wording by pattern")
+
+    def test_a_long_sub_gets_its_own_line_rather_than_a_122px_column(self):
+        """Measured, because "cramped" is not a reason and the first two
+        attempts at this were both wrong. `.srow .v` is flex:1 beside a 34%
+        label and a resolution chip, which leaves the sub-text 122 px on a
+        375 px phone. The seabed row's sub wrapped to four lines and made that
+        one row 322 px tall against a 164 px next-tallest -- and shortening
+        the wording twice only reached 243 px, because the column was the
+        constraint and not the phrase. Wrapping the row gives the sub 325 px
+        and the row comes back to 162 px."""
+        css = self.page
+        self.assertIn(".srow.wide{flex-wrap:wrap}", css)
+        # flex-basis and not display:block: .srow is a flex row, so a block
+        # child becomes a fourth column with nothing left to occupy.
+        wide = css.split(".srow.wide .sub{")[1].split("}")[0]
+        self.assertIn("flex-basis:100%", wide)
+        self.assertNotIn("display:block", wide)
+        js = strip_comments(self.page)
+        self.assertIn("function row(k, v, res, sub, fixed, wide)", js,
+                      "the wide variant is not an option on the shared helper")
+        # Opt-in: every other row keeps the layout it had, or this is a
+        # redesign of the whole sheet wearing a bug fix's clothes.
+        body = js.split("function render(d)")[1].split("\n  function ")[0]
+        self.assertEqual(body.count("false, true)"), 2,
+                         "the wide row is being applied to rows that did not "
+                         "ask for it")
+
+    def test_the_species_helper_cannot_fall_into_a_dead_zone(self):
+        """Twice now this file has taken the whole script down by calling a
+        const arrow from above its declaration -- once it was `showConditions`,
+        and tapping the map did nothing at all. `render` runs from a fetch
+        callback, so a hoisted declaration is the only safe shape."""
+        js = strip_comments(self.page)
+        self.assertIn("function SPECIES()", js,
+                      "SPECIES must be a hoisted function declaration")
+        self.assertNotRegex(js, r"(const|let)\s+SPECIES\s*=")
 
 
 class CoordinateLogging(unittest.TestCase):
@@ -5873,6 +6010,81 @@ class TermsAreConfigurablePerSpecies(unittest.TestCase):
                              "%s scored a term it does not weight, or missed "
                              "one it does" % key)
 
+    def test_bottom_fit_reads_a_mixture_by_its_best_part(self):
+        """ENC records mixtures -- "sand,shells", "rock,mud", "pebbles,sand"
+        are all real values in this bay -- and a mixture containing rock
+        contains the shelter the tautog paper is about. Averaging it against
+        the mud beside it would score the absence of the thing that matters."""
+        from tiderace import score
+        tog = score.PROFILES["tautog"]
+        self.assertEqual(score.bottom_fit("rock", tog), 1.0)
+        self.assertEqual(score.bottom_fit("rock,mud", tog), 1.0)
+        self.assertEqual(score.bottom_fit("mud,shells", tog), 0.85)
+        self.assertEqual(score.bottom_fit("mud", tog), score.BOTTOM_UNLISTED)
+        self.assertEqual(score.bottom_fit(None, tog), score.BOTTOM_UNKNOWN)
+        self.assertEqual(score.bottom_fit("", tog), score.BOTTOM_UNKNOWN)
+        # A profile with no cited preference has no opinion and does not
+        # invent one from the chart.
+        self.assertEqual(score.bottom_fit("rock", score.PROFILES["scup"]),
+                         score.BOTTOM_UNKNOWN)
+
+    def test_one_function_owns_the_substrate_arithmetic(self):
+        """`score` weights it and `prospect.candidates_for` GATES on it. Two
+        copies would be a forecast ranking a position the candidate list had
+        already decided was not for this fish, or the reverse -- and neither
+        would show up as a failure anywhere, only as a wrong map."""
+        import pathlib
+        root = pathlib.Path(__file__).parent / "tiderace"
+        # An assertion about CODE, so it runs against the source with the
+        # comments stripped: every one of these files explains the rule in
+        # prose right above the line that implements it.
+        for name in ("prospect.py", "heat.py"):
+            src = strip_py_comments((root / name).read_text())
+            self.assertNotIn(".bottom.items()", src,
+                             "%s has its own copy of the substrate "
+                             "arithmetic" % name)
+        # prospect GATES, so it calls the function directly. heat does not and
+        # must not: it hands the cell's seabed to `score`, which is the only
+        # caller that should be weighting anything.
+        pro = strip_py_comments((root / "prospect.py").read_text())
+        self.assertIn("score.bottom_fit(", pro,
+                      "the candidate gate does not go through the shared "
+                      "function, so the gate and the scorer can drift apart")
+        hea = strip_py_comments((root / "heat.py").read_text())
+        self.assertNotIn("bottom_fit", hea,
+                         "heat is weighting the seabed itself instead of "
+                         "handing it to score.score")
+        scr = strip_py_comments((root / "score.py").read_text())
+        self.assertEqual(scr.count(".bottom.items()"), 1,
+                         "the substrate arithmetic exists more than once")
+
+    def test_explain_survives_a_strong_seabed(self):
+        """`explain` looks every strong term up in a label table, so a term
+        missing from it raises KeyError the first time that term is one of the
+        three strongest -- which for a tautog on rock is most of the time."""
+        from tiderace import score
+        res = score.score("tautog", self._feat(month=11, week=45,
+                                               water_temp_f=52.0,
+                                               bottom="rock"))
+        self.assertEqual(res["terms"]["bottom"], 1.0)
+        self.assertIn("bottom type", score.explain(res))
+        # Every weightable term has a label, for every species -- driven
+        # through the real function rather than by reading its table, because
+        # a table that exists is not a table that is consulted. top_n high
+        # enough that every term counts as strong, so every label is looked
+        # up; without the entry this raises KeyError, which is the bug.
+        checked = set()
+        for key, prof in score.PROFILES.items():
+            result = {"species": key,
+                      "terms": {t: 1.0 for t in prof.weights},
+                      "weighted": {t: w for t, w in prof.weights.items()},
+                      "modifiers": {}}
+            score.explain(result, top_n=99)
+            checked |= set(prof.weights)
+        self.assertIn("bottom", checked,
+                      "no species weights the seabed, so this proved nothing")
+        self.assertGreaterEqual(len(checked), 7, sorted(checked))
+
     def test_opting_one_species_into_a_term_does_not_move_another(self):
         """Normalised by the weights actually used, so the menu can grow
         without silently rescaling every other fish."""
@@ -5958,20 +6170,49 @@ class TermsAreConfigurablePerSpecies(unittest.TestCase):
             self.assertNotIn("bait", prof.weights)
             self.assertNotIn("birds", prof.weights)
 
-    def test_bottom_is_reported_and_not_scored_without_a_source(self):
-        """Fluke on sand is among the best-established associations there is,
-        and the fluke notes already say "over sand and edges" -- but a number
-        written from that sentence is one nobody published. Same rule as
-        depth: machinery now, claim on citation."""
+    def test_bottom_is_scored_only_where_a_document_says_so(self):
+        """Was `test_bottom_is_reported_and_not_scored_without_a_source`, and
+        the rule has not changed -- only whether anything satisfies it. The
+        machinery sat inert from 2026-08 until the documents were read on
+        2026-09-16. A substrate preference still may not exist without a
+        claim, and a profile with no preference still scores no such term."""
         from tiderace import score
+        cited, uncited = [], []
         for key, prof in score.PROFILES.items():
-            if prof.bottom is not None:
-                self.assertTrue(prof.bottom_claim,
-                                "%s declares a substrate preference with no "
-                                "claim attached" % key)
+            if prof.bottom is None:
+                uncited.append(key)
+                self.assertNotIn("bottom", prof.weights,
+                                 "%s weights a substrate it cannot score" % key)
+                continue
+            cited.append(key)
+            self.assertTrue(prof.bottom_claim,
+                            "%s declares a substrate preference with no claim "
+                            "attached" % key)
+            # A claim has to name a document AND a page, because "the EFH doc
+            # says so" is how a number stops being checkable. Every tag in
+            # this file is bracketed and every page is "p.N".
+            self.assertRegex(prof.bottom_claim, r"\[[A-Z0-9-]+[^]]*\]",
+                             "%s: bottom_claim names no document" % key)
+            self.assertRegex(prof.bottom_claim, r"p\.\d+",
+                             "%s: bottom_claim names no page" % key)
+        self.assertEqual(sorted(cited),
+                         ["black_sea_bass", "cod", "fluke", "haddock",
+                          "red_hake", "squid", "tautog"])
+        # The fish this test was originally written about. Fluke on sand was
+        # the example of a claim nobody had published; NEFSC-NE-151 p.3 and
+        # p.14 publish it, so it scores now -- and rock, which that document
+        # never names for a fluke, does not.
         out = score.score("fluke", self._feat(bottom="sand", depth_ft=45.0))
-        self.assertNotIn("bottom", out["terms"],
-                         "no profile cites a substrate yet, so nothing scores it")
+        self.assertEqual(out["terms"]["bottom"], 1.0)
+        rock = score.score("fluke", self._feat(bottom="rock", depth_ft=45.0))
+        self.assertEqual(rock["terms"]["bottom"], score.BOTTOM_UNLISTED)
+        # And a fish with no cited substrate still scores no such term, which
+        # is the half of the rule that did not change.
+        bass = score.score("striped_bass", self._feat(bottom="rock"))
+        self.assertNotIn("bottom", bass["terms"],
+                         "striped_bass has no cited substrate and must not "
+                         "score one -- the positions this scorer ranks are "
+                         "bottom structure, and a bass is not on it")
 
     def test_the_station_distance_reaches_the_features(self):
         """The scorer drops `current` past FAR_NM, but only if it is told how
@@ -7220,6 +7461,47 @@ class ProspectsSeparateAreaFromSpot(unittest.TestCase):
         self.assertNotIn("blended_score", src)
         self.assertNotIn("combined_score", src)
 
+    def test_the_area_score_is_blind_to_the_seabed(self):
+        """The seabed is the sharpest datum this module can reach -- ENC
+        samples 460 m apart -- and `features.build` resolves it under the
+        box's MIDPOINT. Letting that into a number the module publishes as
+        "one number for the whole box" would be exactly the fake precision the
+        header argues against, committed with the finest input available.
+
+        The seabed reaches the answer per prospect instead, where it varies."""
+        import inspect
+        from tiderace import prospect, score
+        src = strip_py_comments(inspect.getsource(prospect._area))
+        self.assertIn("bottom=None", src,
+                      "the area score is reading the midpoint's substrate and "
+                      "publishing it as a property of the whole box")
+        # Not merely present: it has to be what reaches the scorer.
+        self.assertIn("score.score(species, dict(row, bottom=None)", src)
+        # And the blinded value is a declared constant, identical in every
+        # box, rather than whatever the chart happens to say at the centre.
+        self.assertEqual(score.bottom_fit(None, score.PROFILES["tautog"]),
+                         score.BOTTOM_UNKNOWN)
+
+    def test_the_seabed_is_reported_on_every_prospect(self):
+        """Blinding the area number is only honest if the fact still arrives
+        somewhere. It arrives per prospect, labelled as a spot fact, and says
+        so out loud when there is no sample rather than going quiet."""
+        from tiderace import prospect
+        area = {"current_speed": 1.15, "current_stage": "building",
+                "water_temp_f": 70.0, "limiting": "light"}
+        bump = {"relief_ft": 13.0, "depth_ft": 42.0, "surround_ft": 55.0,
+                "drop_ft": 18.0, "novel": True}
+        why = prospect._why(dict(bump, bottom="rock", bottom_nm=0.08), area)
+        line = [w for w in why if "rock" in w]
+        self.assertTrue(line, why)
+        self.assertFalse(line[0].startswith("area"),
+                         "the seabed is a spot fact and must not be labelled "
+                         "as an area one")
+        blank = prospect._why(bump, area)
+        self.assertTrue([w for w in blank if "no charted seabed" in w],
+                        "a prospect with no seabed sample says nothing about "
+                        "the bottom at all, which reads as clean ground")
+
     def test_area_facts_are_labelled_as_area(self):
         """A spot fact and an area fact side by side, unlabelled, reads as
         though the water were measured at the bump."""
@@ -7726,29 +8008,40 @@ class PotentialSurface(unittest.TestCase):
             {k for k, p in score.PROFILES.items() if p.depth is not None},
             {"fluke", "black_sea_bass"})
 
-    def test_depth_is_the_one_term_scored_per_cell(self):
+    def test_depth_and_seabed_are_the_terms_scored_per_cell(self):
         """Everything else a cell knows comes from its stations, which is why
-        cells sharing one are identical. The bottom is measured per cell, so
-        where a band exists two cells on the same station must be able to
-        differ -- and where none exists they must not, because re-scoring
-        would be the same arithmetic twice."""
+        cells sharing one are identical. Depth and the charted seabed are
+        measured per cell, so where either applies two cells on the same
+        station must be able to differ -- and where neither does they must
+        not, because re-scoring would be the same arithmetic twice.
+
+        Was `test_depth_is_the_one_term_scored_per_cell`, and depth was the
+        one term until 2026-09-16. The guard is what this really protects:
+        unguarded, every species pays for terms most of them do not have."""
         import inspect
         from tiderace import heat
         src = inspect.getsource(heat.surface)
         loop = src.split("for i, j, la, lo, res in members:")[1]
-        self.assertIn("if prof.depth is not None:", loop,
+        code = "\n".join(ln for ln in loop.splitlines()
+                         if not ln.strip().startswith("#"))
+        self.assertIn("if prof.depth is not None or prof.bottom:", code,
                       "the per-cell re-score is unguarded, so every species "
-                      "pays for a term four of them do not have")
-        self.assertIn("depth_ft=depth_ft", loop,
+                      "pays for terms most of them do not have")
+        self.assertIn("depth_ft=depth_ft", code,
                       "the cell's own depth never reaches the scorer")
-        self.assertIn('"score": cell["score"]', loop,
+        self.assertIn("bottom=_bottom_at(la, lo)", code,
+                      "the cell's own seabed never reaches the scorer, so a "
+                      "whole binding paints the colour of one member cell")
+        self.assertIn('"score": cell["score"]', code,
                       "cells still publish the group score, so a depth band "
                       "cannot move one")
 
-    def test_the_binding_record_carries_no_depth(self):
-        """A binding is what two stations say about the water, and depth is
-        the one thing they do not say. `row` has no depth, so a depth key here
-        would publish the neutral placeholder as though it were measured."""
+    def test_the_binding_record_carries_no_depth_or_seabed(self):
+        """A binding is what two stations say about the water. Depth is a
+        thing they do not say -- `row` has no depth, so a depth key here would
+        publish the neutral placeholder as though it were measured. The seabed
+        is worse: `row` DOES carry one, read under a single member cell, and a
+        binding can span kilometres while ENC samples sit 460 m apart."""
         import inspect
         from tiderace import heat
         # Slice the whole statement, not to the first "}" -- the dict
@@ -7762,7 +8055,7 @@ class PotentialSurface(unittest.TestCase):
         # own.
         code = "\n".join(ln for ln in binding.splitlines()
                          if not ln.strip().startswith("#"))
-        self.assertIn('k != "depth"', code)
+        self.assertIn('k not in ("depth", "bottom")', code)
         self.assertIn("terms", code)
 
     def test_the_surface_admits_its_own_resolution(self):
@@ -8295,6 +8588,113 @@ class ProspectedCandidates(unittest.TestCase):
         # And the gate did something: the ungated structure has shallower bumps.
         ungated = self.prospect.candidates_for(None, marks=False)
         self.assertTrue(any(c.depth_ft < 30 for c in ungated))
+
+    def _bottoms(self, key):
+        """(spot, charted seabed string or None) for each candidate."""
+        bumps = {(b["lat"], b["lon"]): b for b in self.prospect.bay_structure()}
+        out = []
+        for c in self.prospect.candidates_for(key, marks=False):
+            b = bumps.get((c.lat, c.lon)) or {}
+            out.append((c, b.get("bottom")))
+        return out
+
+    def test_a_cited_substrate_is_a_gate_and_not_a_label(self):
+        """The depth band's argument, one tier coarser. A tautog candidate on
+        charted sand is the scorer contradicting [EFH-TOG p.5], which says
+        hard substrate is required -- so it is not a candidate for that fish
+        however good the bump is.
+
+        Measured on 16 September 2026, before this gate existed: the thirty
+        tautog candidates were the same thirty coordinates as the striped bass
+        candidates and ten of them sat on charted mud or sand."""
+        from tiderace import score
+        gated = 0
+        for key, prof in score.PROFILES.items():
+            if not prof.bottom:
+                continue
+            rows = self._bottoms(key)
+            self.assertTrue(rows, key)
+            for c, bottom in rows:
+                fit = score.bottom_fit(bottom, prof)
+                self.assertGreater(
+                    fit, score.BOTTOM_UNLISTED,
+                    "%s candidate at %s sits on charted %r, which its source "
+                    "never names" % (key, c.key, bottom))
+                gated += 1
+        # A check that examined nothing has not passed.
+        self.assertGreater(gated, 100,
+                           "only %d candidates examined; the gate is being "
+                           "asserted against almost nothing" % gated)
+
+    def test_the_substrate_gate_removes_real_positions(self):
+        """And the ungated structure still holds them, or the gate above is
+        passing on an empty set."""
+        from tiderace import score
+        prof = score.PROFILES["tautog"]
+        ungated = [b for b in self.prospect.bay_structure()
+                   if b.get("bottom")]
+        self.assertGreater(len(ungated), 40,
+                           "hardly any candidate has a charted seabed at all, "
+                           "so nothing here is being tested")
+        refused = [b for b in ungated
+                   if score.bottom_fit(b["bottom"], prof) <= score.BOTTOM_UNLISTED]
+        self.assertGreater(len(refused), 10,
+                           "the bay's bumps hold almost nothing a tautog "
+                           "source refuses, so the gate cannot be shown to bite")
+        kept = {(c.lat, c.lon) for c, _ in self._bottoms("tautog")}
+        for b in refused:
+            self.assertNotIn((b["lat"], b["lon"]), kept, b.get("bottom"))
+
+    def test_the_gate_runs_before_the_limit_so_it_promotes(self):
+        """Filtering the top thirty would only reorder them. Filtering the
+        hundred and twenty and THEN taking thirty reaches down the relief
+        order for hard bottom, which is the whole point -- a rock pile ranked
+        45th by relief was invisible to a tautog before this."""
+        limit = self.prospect.CANDIDATE_LIMIT
+        ungated_top = {(b["lat"], b["lon"])
+                       for b in self.prospect.bay_structure()[:limit]}
+        tog = {(c.lat, c.lon) for c, _ in self._bottoms("tautog")}
+        promoted = tog - ungated_top
+        self.assertTrue(promoted,
+                        "every tautog candidate was already in the ungated "
+                        "top %d, so the gate is running after the truncation "
+                        "and can only reorder" % limit)
+
+    def test_nothing_charted_is_not_the_same_as_nothing_there(self):
+        """27% of the ENC seabed points carry no type and `bottom_at` gives up
+        past 0.35 nm. Dropping the uncharted would delete every candidate in
+        the unsurveyed parts of the bay on the strength of no evidence."""
+        from tiderace import score
+        blank = [c for c, bottom in self._bottoms("tautog") if not bottom]
+        self.assertTrue(blank,
+                        "no uncharted position survived into the tautog list, "
+                        "so this cannot tell a kept one from a dropped one")
+        self.assertEqual(score.bottom_fit(None, score.PROFILES["tautog"]),
+                         score.BOTTOM_UNKNOWN)
+        self.assertGreater(score.BOTTOM_UNKNOWN, score.BOTTOM_UNLISTED,
+                           "unknown must outrank a charted mismatch, or the "
+                           "gate deletes the unsurveyed bay")
+        for c in blank:
+            self.assertIn("no charted seabed sample", c.notes,
+                          "a candidate that passed the gate on absent evidence "
+                          "must say so, or it reads as clean rock")
+
+    def test_cod_and_haddock_cannot_draw_the_same_map(self):
+        """[NE-124 p.13] puts cod on "Rocky, pebbly, gravelly" and has them
+        "Avoid finer sediments"; [NE-128 p.10] puts haddock on gravel, pebbles
+        and smooth hard sand and has them "Avoid ledges, rocks". Two fish from
+        the same series sharing a temperature band and a season. If the app
+        ever sends them to the same ground, the documents are not being read."""
+        cod = {(c.lat, c.lon): b for c, b in self._bottoms("cod")}
+        had = {(c.lat, c.lon): b for c, b in self._bottoms("haddock")}
+        self.assertTrue(cod and had)
+        self.assertTrue(any("rock" in (b or "") for b in cod.values()),
+                        "no cod candidate is on charted rock")
+        self.assertFalse([b for b in had.values() if "rock" in (b or "")],
+                         "a haddock candidate is on charted rock, which its "
+                         "own source says it avoids")
+        self.assertLess(len(set(cod) & set(had)), min(len(cod), len(had)),
+                        "cod and haddock drew identical lists")
 
     def test_the_fall_run_fish_stay_below_the_bridges(self):
         """The one piece of local knowledge kept from the curated list: bonito

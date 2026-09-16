@@ -127,6 +127,27 @@ Second cohort, consulted 2026-09-02, for the inshore and nearshore species:
   [GSO]    the trawl series itself, read through `gso.build_trends()`. Annual
            means per species at Fox Island and Whale Rock, 1959-2024.
 
+Substrate, consulted 2026-09-16. All NOAA NEFSC "Essential Fish Habitat
+Source Document" technical memoranda unless noted, read as PDFs from the NOAA
+Institutional Repository. **Page numbers below are the printed page**, which
+in this series runs about six behind the PDF page -- a first pass through a
+two-column text extraction put every one of them a page out, because
+`pdftotext -layout` emits the page footer wherever the column break falls
+rather than at the foot. Each quote was re-checked by extracting its PDF page
+alone and reading the footer on that page:
+These five are already cited above for their temperature bands, by number.
+The same tags are used here rather than new ones, because one document with
+two names is how a file starts disagreeing with itself:
+  [NE-124]  Fahay, Berrien, Johnson & Morse 1999 (Atlantic cod) -- Table 4,
+            p.13, the adult row.
+  [NE-127]  Steimle, Morse & Johnson 1999 (goosefish) -- Table 1, p.10.
+  [NE-128]  Cargnelli, Griesbach, Berrien, Johnson & Morse 1999 (haddock) --
+            Table 1, p.10, the adult row.
+  [NE-131]  Cargnelli, Griesbach, Packer et al. 1999 (pollock) -- Table 1,
+            p.9, the adult row.
+  [NE-133]  Steimle, Morse, Berrien et al. 1999 (red hake) -- Table 1, p.8,
+            the adult row; and p.3.
+
 Depth, added 2026-09-02, is scored for **two** of the fourteen species. The
 other twelve are not "no number was found" -- most of them are "the source
 says depth is the wrong variable", which is a stronger answer and worth
@@ -206,6 +227,145 @@ For scale, the terms already here measure sd 0.263 (current), 0.182 (temp),
 envelopes sit closer to the constants than to the signals: a term worth 1.0
 over ninety per cent of the bay does not inform the forecast, it dilutes the
 terms that do.
+
+--------------------------------------------------------------------------
+Substrate, added 2026-09-16, and the reason it was added is a measurement.
+
+`prospect.candidates_for` had been picking positions off the bottom since
+3 September -- relief, measured off 25,895 charted soundings -- and that is
+why every position on the map is a bump. But relief was the ONLY thing about
+the bottom that reached the answer. Measured on 16 September: the thirty
+tautog candidates were the same thirty coordinates as the striped bass
+candidates, position for position, because the only per-species gate was a
+published depth band and tautog has none. Ten of the thirty sat on charted
+mud or sand. Three of the first eleven were mud. The app had `charts.bottom_at`
+for six weeks, printed its answer on the card, drew it on the map as a
+coloured layer -- and then sent a tautog to mud anyway. Structure chose where
+to look; nothing chose what to look at.
+
+The data is the ENC seabed layer: 1,399 samples in the box, of which 384 are
+rock and 18 boulder against 195 mud and 185 sand, at a median spacing of about
+460 m. That is a third resolution tier -- coarser than the 3 m bottom model,
+far finer than the 5.5 km current field -- and it is a real charted
+observation rather than a model. 375 of the 1,399 carry no type at all, which
+is 27%, and that is why the two numbers below are two numbers and not one:
+
+    BOTTOM_UNKNOWN   0.6    nothing charted within reach of this position
+    BOTTOM_UNLISTED  0.15   charted, and not a substrate this fish's source
+                            names
+
+"Nobody charted it" is not "it is mud", and collapsing the two would quietly
+delete every candidate in the unsurveyed parts of the bay. UNLISTED is also a
+**gate**, not just a low score: `prospect.candidates_for` drops a candidate
+whose charted seabed scores UNLISTED, on the same argument the depth band is
+gated on -- a tautog candidate on charted sand is the scorer contradicting the
+paper it cites. An uncharted candidate is kept and scored at UNKNOWN.
+
+Seven species carry a preference. Every one is a substrate list read out of a
+named document at a named page, and the quote is in the profile's
+`bottom_claim` so it travels with the number:
+
+  * **tautog** [EFH-TOG p.5]: "hard substrates are usually required to support
+    the epibenthic or encrusting invertebrates upon which the fish generally
+    feed", and p.4 lists adult habitat as "vegetation, rocks, natural and
+    artificial reefs, pilings, jetties and groins, mussel and oyster beds,
+    shipwrecks". The same page is the source of the "extremely local" line
+    this file already quotes to REFUSE tautog a depth band -- the document
+    that said depth is the wrong variable said in the same breath what the
+    right one is. This is the strongest substrate claim in the file.
+  * **black_sea_bass** [EFH-BSB p.2]: "Habitats used by adults include rocky
+    reefs, cobble and rock fields, stone coral patches, exposed stiff clay,
+    and mussel beds", and -- the nearest water anyone has written this down
+    for -- "In Long Island Sound, adults are generally associated with
+    structurally complex habitats embedded within areas of sandy rather than
+    muddy substratum". Sand is scored as the matrix the structure sits in;
+    mud is unlisted, which is the document's own contrast.
+  * **cod** [NE-124 Table 4, p.13]: "Rocky, pebbly, gravelly. Avoid finer
+    sediments." Four words of avoidance are worth more than a paragraph of
+    occurrence, and this is the only flat avoidance statement in the set.
+  * **haddock** [NE-128 Table 1, p.10]: "chiefly broken ground, gravel,
+    pebbles, smooth hard sand & smooth areas between rocky patches. Avoid
+    ledges, rocks, kelp or soft mud." Note that this is the OPPOSITE of cod
+    on rock, from the same series, for two fish that share a temperature band
+    and a season. If the two ever draw the same map, something is wrong.
+  * **fluke** [NEFSC-SF p.3, p.14]: adults and juveniles in Pamlico Sound
+    "prefer a sandy or sand/shell substrate", and "juvenile summer flounder
+    occur more frequently over sandy substrates than mud or silt bottoms".
+    Weaker than it looks and weighted accordingly: both statements are North
+    Carolina, the New Jersey one is Barnegat Bay, and NONE of them is this
+    bay -- unlike fluke's depth band, which is the RIDEM trawl. Mud and silt
+    are listed low rather than omitted, because the document names them as
+    used, just less.
+  * **squid** [EFH-SQ Table 1, p.9]: adults, "Mud or sandy mud."
+  * **red_hake** [NE-133 Table 1, p.8]: adults, "Sand-mud, and in holes and
+    depressions", with p.3 adding that "red hake prefer silty, fine sand
+    sediments" (Reid et al. 1979).
+
+One caveat applies to all seven and is not in any of the documents. S-57
+records `silt` and `clay` as their own seabed classes where the literature
+says "mud", and `stone` where it says "rock". Reading those as the chart's
+vocabulary for the same thing is a reading of S-57, not a second source, and
+it is the one place in this block where a word was moved rather than quoted.
+Mixtures take the best of their parts -- "rock,mud" scores rock for a tautog
+-- because a mixture containing rock contains the shelter the paper is about.
+
+Six are refused, and five of the six are the document refusing rather than the
+document being silent, which is the stronger kind:
+
+  * **scup** [SCUP Table 1, p.14] gives summer adults "Fine to silty-sand,
+    mud, mussel beds, rock, artificial reefs, wrecks, and other structures".
+    That is every class the chart has. There IS a preference statement at p.5
+    -- Long Island Sound scup "exhibit a strong preference for mixed sand and
+    mud sediments" -- but it is cited to Gottschall et al. *in review*, and it
+    contradicts the document's own summary table. A list that includes
+    everything is not a preference, and the profile's own note already says
+    so in other words: "if the day is fishable at all, scup are catchable".
+  * **winter_flounder** [EFH-WF Table 1, p.19]: adults, "Mud, sand, cobble,
+    rocks, boulders." Catholic, same call as scup. The document's fine-sediment
+    preference is stated about YOY, explicitly.
+  * **dogfish** [EFH-DOG Table 4, p.14]: adults are "demersal at times,
+    swimming over areas of sand, silt, and mud **where food is available**".
+    That is a statement about prey, not about the seabed, on a fish the same
+    table has swimming in the water column.
+  * **monkfish** [NE-127 Table 1, p.10]: adults, "Mud to gravelly sand,
+    algae and rocks." Soft through hard, in five words.
+  * **pollock** [NE-131 Table 1, p.9]: adults are "unselective for bottom
+    type on the Scotian Shelf; associated with sediments ranging from gravels
+    to clay", and "pollock school throughout the water column". The document
+    uses the word.
+  * **weakfish** and **northern_kingfish** [ASMFC-SCI, p.92 and p.104] both
+    get the same sentence: "specific habitat use or habitat preference in
+    adult [species] has not been reported", and for weakfish it goes on --
+    "weakfish are pelagic, open water foragers ... therefore substrate in not
+    a significant environment variable" (sic). This file is not going to
+    out-claim a habitat review that declined to claim.
+
+**striped_searobin is the one honest gap** rather than a finding. [SEAROBIN] is
+a 1981 Sandy Hook laboratory report that has not been located online, so no
+substrate statement has been READ for this fish. That is different from the
+six above and is recorded as different: it is the next document to find.
+
+The remaining pelagics -- striped_bass, bluefish, bonito, false_albacore,
+atlantic_mackerel, spanish_mackerel, cobia -- get no substrate term for the
+reason the scorer gives everywhere else about them: the positions this scorer
+ranks are bottom structure, and these fish are not on the bottom. Scoring the
+seabed under a bass would be the [EFH-BLU] mistake, made deliberately.
+
+What is NOT cited, as always: every weight. `bottom` is weighted 0.26 for
+tautog (the largest single term it has, because the document says the
+substrate is what decides where the fish is), 0.25 for the three general-tier
+gadids, 0.20 for black sea bass, 0.14 for fluke and 0.12 for squid. Those six
+numbers are priors in exactly the sense the rest of this file's weights are
+priors, and `evaluate` is still the only thing that could say whether any of
+them is right.
+
+One consequence worth stating because it is easy to miss. cod, haddock and
+red_hake are `basis` "general biology" or "regional" profiles, and the rule
+for those is that they weight only the terms their sources speak to -- which
+had meant temperature and season. Their sources speak to substrate, at a named
+page, so substrate is now a third. It does not promote them to "this water":
+the bands are still from wherever they were studied, and the card still says
+so.
 
 --------------------------------------------------------------------------
 The second cohort, added 2026-09-02: eight inshore and nearshore species.
@@ -338,6 +498,15 @@ Note what this does NOT change: all three stay loggable. If a cod comes over
 the rail the log takes it, which is the entire point of the three tiers in
 species.py.
 
+**Superseded in part, 2026-09-05.** The three tiers of claim arrived and cod,
+pollock and monkfish came back with them -- as `general biology` and `regional`
+profiles weighting only the terms their sources speak to, which is a weaker
+thing than a bay profile and says so on the card. `NOT_PROFILED` now holds two
+species, menhaden and summer_triggerfish, not eleven. The paragraph above is
+kept because the [COLLIE] argument it makes is still the reason those three
+score the mouth and the south shore in the cold months rather than the bay,
+and the reason their notes say "effectively absent from the bay itself".
+
 --------------------------------------------------------------------------
 The fourteen offshore species are deliberately absent, and the reason is
 structural rather than a shortage of reading.
@@ -395,6 +564,69 @@ def trapezoid(x: float, lo_out: float, lo_in: float, hi_in: float, hi_out: float
 
 def gaussian(x: float, mu: float, sigma: float) -> float:
     return math.exp(-((x - mu) ** 2) / (2 * sigma * sigma))
+
+
+# ---- the seabed ----------------------------------------------------------
+#
+# Two numbers, because the chart has two ways of saying nothing. See the
+# substrate section of the module docstring for the measurement behind them.
+BOTTOM_UNKNOWN = 0.6        # no ENC sample within reach -- considered, unknown
+BOTTOM_UNLISTED = 0.15      # sampled, and not a substrate this fish's source
+                            # names. Also the gate in prospect.candidates_for.
+
+
+def bottom_fit(bottom, prof) -> float:
+    """What a charted seabed type is worth to this fish, 0..1.
+
+    One function, because two callers have to agree about it: `score` weights
+    it, and `prospect.candidates_for` GATES on it. Two copies of this
+    arithmetic would be a forecast that ranked a position the candidate list
+    had already decided was not for this fish, or worse, the reverse.
+
+    `bottom` is the ENC string -- "rock", "sand,shells", "mud,pebbles" -- and
+    matching is by substring, taking the BEST match rather than the mean: a
+    mixture containing rock contains the shelter a tautog paper is about, and
+    averaging it against the mud beside it would score the absence of the
+    thing that matters. A profile with no cited preference has no opinion and
+    says so by returning UNKNOWN rather than by guessing.
+    """
+    if not prof.bottom or not bottom:
+        return BOTTOM_UNKNOWN
+    return max((w for k, w in prof.bottom.items() if k in bottom),
+               default=BOTTOM_UNLISTED)
+
+
+# The wording, once, beside the arithmetic. The desk card and the phone's
+# conditions sheet both print this, and two copies of the phrasing would be
+# two chances for one of them to say "cited habitat" about a seabed the other
+# had already refused.
+BOTTOM_PREFERRED = 0.85     # at or above this, the source names it outright
+
+# Short on purpose, and the number is why. The conditions sheet gives a row's
+# sub-text 122 px on a 375 px phone; "not a substrate its source names" wrapped
+# to seven lines and made the bottom row 322 px tall against a 164 px
+# next-tallest -- a fifth of the screen, for one row. Measured 16 September
+# 2026. The desk card has room for prose and the phone does not, so the phrase
+# is written for the phone and both read the same words.
+BOTTOM_MISMATCH = "source does not name it"
+
+
+def bottom_verdict(bottom, prof) -> str:
+    """One short phrase about a charted seabed, for this fish. Never empty.
+
+    Silence is the wrong default for the same reason the legal strip is never
+    blank: a bottom line with no verdict reads as "fine", and the whole point
+    of reading the documents was the case where it is not.
+    """
+    if not prof.bottom:
+        return "no substrate cited"
+    if not bottom:
+        return "no seabed sample near"
+    fit = bottom_fit(bottom, prof)
+    if fit <= BOTTOM_UNLISTED:
+        return BOTTOM_MISMATCH
+    return ("cited habitat" if fit >= BOTTOM_PREFERRED
+            else "named, not preferred")
 
 
 def peaked(x: float, opt: float, sigma_lo: float, sigma_hi: float,
@@ -555,9 +787,25 @@ PROFILES: dict[str, Profile] = {
                     "range [NEFSC-SF]; the cold pair is hand-set, "
                     "deliberately warmer than the published 9C floor, "
                     "because presence in cold water is not yet a fishery"),
+        # Weaker than it looks, and weighted for that. [NEFSC-SF p.3] is
+        # Pamlico Sound and Barnegat Bay; p.14 is Pamlico Sound again. NONE of
+        # it is this bay -- unlike the depth band above, which is the RIDEM
+        # trawl. Mud and silt are listed low rather than omitted, because the
+        # document names them as used and merely less preferred; omitting them
+        # would gate fluke off soft bottom entirely, which the source does not
+        # support. Rock is not named and is therefore gated.
+        bottom={"sand": 1.0, "shell": 0.9, "gravel": 0.5, "pebble": 0.5,
+                "mud": 0.35, "silt": 0.35, "clay": 0.35},
+        bottom_claim=("[NEFSC-SF p.3] adults and juveniles in Pamlico Sound "
+                      "\"prefer a sandy or sand/shell substrate\", and Barnegat "
+                      "Bay scarcity is put down to \"their apparent preference "
+                      "for sandy substrates\"; p.14 has them \"more frequently "
+                      "over sandy substrates than mud or silt bottoms\". "
+                      "Regional, not this water -- North Carolina and New "
+                      "Jersey -- which is why the weight is half tautog's"),
         light={"day": 1.0, "golden": 0.90, "twilight": 0.58, "night": 0.30},
-        weights={"season": 0.18, "temp": 0.13, "current": 0.31, "depth": 0.10,
-                 "light": 0.13, "wind": 0.10, "pressure": 0.05},
+        weights={"season": 0.16, "temp": 0.11, "current": 0.27, "depth": 0.09,
+                 "bottom": 0.14, "light": 0.11, "wind": 0.08, "pressure": 0.04},
         wind_max_kt=20,
         likes_falling_pressure=False,
         notes="Drift speed is the whole game: 0.5-1.5 kt over sand and edges. "
@@ -597,9 +845,29 @@ PROFILES: dict[str, Profile] = {
                     "and the warm edge the 27C inshore summer maximum "
                     "[ASMFC-BSB]; the cold half is angling knowledge, since "
                     "the 7C migration threshold is presence not catchability"),
+        # [EFH-BSB p.2] names the habitat -- "rocky reefs, cobble and rock
+        # fields, stone coral patches, exposed stiff clay, and mussel beds" --
+        # and then, for the nearest water anybody has written this down for,
+        # draws the contrast this file needs: "In Long Island Sound, adults are
+        # generally associated with structurally complex habitats embedded
+        # within areas of sandy rather than muddy substratum". So sand is the
+        # matrix the structure sits in and scores; mud is the document's own
+        # counter-example and is unlisted, therefore gated. Clay is here on
+        # its own merit, not as a fine sediment: the paper says "exposed stiff
+        # clay", which is structure.
+        bottom={"rock": 1.0, "boulder": 1.0, "stone": 1.0, "shell": 0.9,
+                "clay": 0.7, "gravel": 0.6, "pebble": 0.6, "sand": 0.45},
+        bottom_claim=("[EFH-BSB p.2] adult habitat is \"rocky reefs, cobble and "
+                      "rock fields, stone coral patches, exposed stiff clay, and "
+                      "mussel beds\"; in Long Island Sound they sit in complex "
+                      "habitat \"embedded within areas of sandy rather than "
+                      "muddy substratum\". Sand scores as that matrix; mud is "
+                      "the document's own contrast and is not listed. Shell "
+                      "carries \"mussel beds\", with the same S-57 caveat as "
+                      "tautog: the chart does not say live bed or hash"),
         light={"day": 1.0, "golden": 0.90, "twilight": 0.60, "night": 0.36},
-        weights={"season": 0.18, "temp": 0.14, "current": 0.24, "depth": 0.10,
-                 "light": 0.14, "wind": 0.12, "pressure": 0.08},
+        weights={"season": 0.15, "temp": 0.12, "current": 0.19, "depth": 0.08,
+                 "bottom": 0.20, "light": 0.12, "wind": 0.09, "pressure": 0.05},
         wind_max_kt=20,
         likes_falling_pressure=False,
         notes="Structure fish. Enough current to hold them on the piece, "
@@ -646,9 +914,31 @@ PROFILES: dict[str, Profile] = {
                     "says only that feeding is depressed at elevated "
                     "temperatures without giving a number. The least "
                     "defensible pair in this file"),
+        # The strongest substrate claim in the file, and it comes from the
+        # same page of the same document that REFUSED this fish a depth band.
+        # [EFH-TOG] p.5: "hard substrates are usually required to support the
+        # epibenthic or encrusting invertebrates upon which the fish generally
+        # feed." p.4 lists the adult habitat itself. Sand, mud, silt and clay
+        # are absent from that list and so are absent here, which makes them
+        # UNLISTED -- scored at 0.15 and gated out of the candidate list.
+        bottom={"rock": 1.0, "boulder": 1.0, "stone": 1.0, "shell": 0.85,
+                "gravel": 0.45, "pebble": 0.45},
+        bottom_claim=("[EFH-TOG p.5] \"hard substrates are usually required\"; "
+                      "p.4 gives adult habitat as \"vegetation, rocks, natural "
+                      "and artificial reefs, pilings, jetties and groins, mussel "
+                      "and oyster beds, shipwrecks\". Shell carries the mussel "
+                      "and oyster beds -- but S-57 \"shells\" does not tell a "
+                      "live mussel bed from shell hash on sand, so that one is "
+                      "read generously and sits below rock. Gravel and pebble "
+                      "are hard but are not named, and sit low because the "
+                      "habitats the document does name all have crevices to "
+                      "shelter in"),
         light={"day": 1.0, "golden": 0.80, "twilight": 0.40, "night": 0.18},
-        weights={"season": 0.26, "temp": 0.20, "current": 0.20,
-                 "light": 0.14, "wind": 0.14, "pressure": 0.06},
+        # `bottom` is the largest single term this fish has, which is what the
+        # document supports: the same page that says depth is the wrong
+        # variable says the substrate is the right one.
+        weights={"bottom": 0.26, "season": 0.20, "temp": 0.15, "current": 0.15,
+                 "light": 0.10, "wind": 0.10, "pressure": 0.04},
         wind_max_kt=18,
         likes_falling_pressure=False,
         notes="Cold water, hard structure, anchored. Resident most of the year, "
@@ -942,9 +1232,19 @@ PROFILES: dict[str, Profile] = {
         # the water column at night (MAFMC 1996)". That is the fishery: lights
         # over the side after dark. The one night-dominant curve in this file
         # that rests on a publication rather than on a striper fisherman.
+        # [EFH-SQ Table 1, p.9], adults: "Mud or sandy mud." Silt and clay are
+        # here as the chart's finer words for the document's "mud" -- an S-57
+        # vocabulary reading, not a second source, and the weight is small
+        # because the bay fishery for these is a night fishery in the water
+        # column under a light, which is the same argument that refused this
+        # species a depth band.
+        bottom={"mud": 1.0, "silt": 0.85, "sand": 0.6, "clay": 0.6},
+        bottom_claim=("[EFH-SQ Table 1, p.9] adults: \"Mud or sandy mud.\" "
+                      "Silt and clay read as the chart's vocabulary for the "
+                      "same fines; that mapping is S-57, not the document"),
         light={"night": 1.0, "twilight": 0.90, "golden": 0.55, "day": 0.20},
-        weights={"season": 0.24, "temp": 0.18, "current": 0.16,
-                 "light": 0.26, "wind": 0.12, "pressure": 0.04},
+        weights={"bottom": 0.12, "season": 0.21, "temp": 0.16, "current": 0.14,
+                 "light": 0.23, "wind": 0.11, "pressure": 0.03},
         wind_max_kt=16,
         likes_falling_pressure=False,
         notes="Both a target and the reason everything else shows up. Light "
@@ -1053,7 +1353,17 @@ PROFILES: dict[str, Profile] = {
         # [NE-124] adults "generally < 10C"; juveniles 4-7C spring, 7-12C fall.
         temp=(32, 36, 50, 55),
         current=(0.6, 0.4, 0.6, 3.0), light={},
-        weights={"temp": 0.6, "season": 0.4},
+        # The only flat avoidance statement in the substrate set, and the
+        # reason cod and haddock must not draw the same map: [NE-124 Table 4,
+        # p.13] adults, "Rocky, pebbly, gravelly. Avoid finer sediments."
+        # Everything finer is unlisted and therefore gated.
+        bottom={"rock": 1.0, "boulder": 1.0, "stone": 1.0,
+                "pebble": 1.0, "gravel": 1.0},
+        bottom_claim=("[NE-124 Table 4, p.13] adults: \"Rocky, pebbly, "
+                      "gravelly. Avoid finer sediments.\" The avoidance is the "
+                      "document's own words, which is why sand and mud are "
+                      "not merely low here but absent"),
+        weights={"temp": 0.45, "season": 0.30, "bottom": 0.25},
         temp_claim=("adults 'generally < 10C' and juveniles 4-7C in spring, 7-12C in fall "
                     "[NE-124]: full credit 36-50F; zero at freezing and at 55F, one degree "
                     "above the fall juvenile top, both edges derived and said so"),
@@ -1085,7 +1395,17 @@ PROFILES: dict[str, Profile] = {
         # [NE-128] adults 0-13C (Hardy 1978), most common 2-9C.
         temp=(32, 36, 48, 55),
         current=(0.6, 0.4, 0.6, 3.0), light={},
-        weights={"temp": 0.6, "season": 0.4},
+        # The mirror image of cod, from the same series, for a fish that
+        # shares its band and its season: [NE-128 Table 1, p.10] adults,
+        # "chiefly broken ground, gravel, pebbles, smooth hard sand & smooth
+        # areas between rocky patches. Avoid ledges, rocks, kelp or soft mud."
+        # Rock is gated OUT here and gated IN for cod, which is the point.
+        bottom={"gravel": 1.0, "pebble": 1.0, "sand": 0.8},
+        bottom_claim=("[NE-128 Table 1, p.10] adults: \"chiefly broken ground, "
+                      "gravel, pebbles, smooth hard sand & smooth areas between "
+                      "rocky patches. Avoid ledges, rocks, kelp or soft mud.\" "
+                      "The one fish in this file the documents put OFF rock"),
+        weights={"temp": 0.45, "season": 0.30, "bottom": 0.25},
         temp_claim=("adults 0-13C, 'most common at 2-9C' [NE-128]: full credit 36-48F, "
                     "zero at freezing and 55F"),
         notes=("'Rare' in Narragansett Bay [NE-128]; 76 records within 40 nm, September "
@@ -1165,7 +1485,16 @@ PROFILES: dict[str, Profile] = {
         # [NE-133] adults 2-22C, most abundant 8-10C, avoid < 5C.
         temp=(36, 46, 50, 72),
         current=(0.6, 0.4, 0.6, 3.0), light={},
-        weights={"temp": 0.6, "season": 0.4},
+        # [NE-133 Table 1, p.8] adults: "Sand-mud, and in holes and
+        # depressions", and p.3 adds that "red hake prefer silty, fine sand
+        # sediments" (Reid et al. 1979). The holes and depressions are relief,
+        # which the candidate list already measures -- this is the substrate
+        # half of the same sentence.
+        bottom={"mud": 1.0, "silt": 1.0, "sand": 0.9, "clay": 0.6},
+        bottom_claim=("[NE-133 Table 1, p.8] adults: \"Sand-mud, and in holes "
+                      "and depressions\"; p.3, \"red hake prefer silty, fine "
+                      "sand sediments\" (Reid et al. 1979)"),
+        weights={"temp": 0.45, "season": 0.30, "bottom": 0.25},
         temp_claim=("adults 2-22C, 'most abundant at 8-10C', 'avoid < 5C' [NE-133]: full "
                     "credit 46-50F, zero at 36F and at 72F, the 22C top of the adult range"),
         notes=("The fish called ling south of Block Island. Adults in the Rhode Island "
@@ -1327,18 +1656,13 @@ def score(species: str, feat: dict, exposed: bool = False,
         d = feat.get("depth_ft")
         available["depth"] = trapezoid(float(d), *p.depth) if d is not None else 0.6
 
-    # Bottom type, scored only where a profile names a preference. None do
-    # yet, so this is inert -- deliberately. Fluke on sand and tautog on rock
-    # are among the best-established habitat associations there are, and the
-    # fluke profile's own notes already say "0.5-1.5 kt over sand and edges",
-    # but a preference written from that sentence would be a number nobody
-    # published. Same rule as depth: the machinery exists, the claim waits for
-    # a citation.
+    # Bottom type, scored only where a profile names a preference -- seven of
+    # the twenty-two do, each from a document and a page. The machinery sat
+    # here inert from 2026-08 to 2026-09-16 waiting for exactly that, which was
+    # the right call and also the reason a tautog could be sent to mud for six
+    # weeks: the term nothing filled in is the term nothing corrected.
     if p.bottom:
-        b = feat.get("bottom")
-        available["bottom"] = (0.6 if b is None
-                               else max((w for k, w in p.bottom.items()
-                                         if k in b), default=0.15))
+        available["bottom"] = bottom_fit(feat.get("bottom"), p)
 
     # Where the current prediction came from decides two things at once, and
     # they are the same decision seen from both ends.
@@ -1441,6 +1765,10 @@ def explain(result: dict, top_n: int = 3) -> str:
         "season": "seasonal timing", "temp": "water temperature",
         "current": "current speed", "light": "light level",
         "wind": "wind", "pressure": "barometer", "depth": "depth",
+        # Missing from here, `explain` raises KeyError the first time the
+        # seabed is one of the three strongest terms -- which for a tautog on
+        # rock is most of the time.
+        "bottom": "bottom type",
     }
     bits = []
     if strong:

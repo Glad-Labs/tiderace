@@ -85,6 +85,18 @@ def _limiting(terms: dict, weights: dict) -> str | None:
     return max(lost, key=lost.get) if lost else None
 
 
+def _bottom_at(lat: float, lon: float):
+    """The charted seabed type at one cell, or None where nothing is charted
+    within reach. None is a real answer -- `score.bottom_fit` scores it as
+    UNKNOWN -- and must not be turned into a substrate."""
+    try:
+        from . import charts
+        b = charts.bottom_at(lat, lon)
+    except (OSError, ValueError, KeyError):
+        return None
+    return (b or {}).get("bottom")
+
+
 def _depth_ft(elev_m):
     """Seafloor elevation in metres (negative down) to depth in feet.
 
@@ -194,8 +206,14 @@ def surface(species: str, bbox, when: datetime | None = None,
             # no depth, so the value here would be the neutral placeholder --
             # a number nothing measured, published under a key that reads as
             # though it had.
+            #
+            # `bottom` is out for the same reason and more urgently. A binding
+            # can span kilometres of water; ENC seabed samples sit about 460 m
+            # apart. The value in `row` is the seabed under ONE member cell,
+            # and publishing it against the binding would hand every cell in
+            # the group a substrate read at a coordinate none of them is.
             "terms": {k: v for k, v in out.get("terms", {}).items()
-                      if k != "depth"},
+                      if k not in ("depth", "bottom")},
         }
 
         for i, j, la, lo, res in members:
@@ -207,14 +225,23 @@ def surface(species: str, bbox, when: datetime | None = None,
                     d = None
             depth_ft = _depth_ft(d)
 
-            # Re-score only where there is a band to apply. For the other four
-            # species this is the same arithmetic twice, and `out` already
-            # holds it. features.build -- the expensive part -- stays above,
-            # once per binding.
+            # Re-score only where there is something that varies per cell to
+            # apply. Where there is not, this would be the same arithmetic
+            # twice and `out` already holds it. features.build -- the
+            # expensive part -- stays above, once per binding.
+            #
+            # The seabed joined depth here on 2026-09-16, and it had to: the
+            # binding row carries the substrate under one member cell, so
+            # without this a tautog surface would paint a whole current
+            # station's worth of bay the colour of whichever cell happened to
+            # be first in the group. 878 water cells cost about 0.14 s of
+            # `bottom_at`, measured.
             cell = out
-            if prof.depth is not None:
+            if prof.depth is not None or prof.bottom:
                 try:
-                    cell = score.score(species, dict(row, depth_ft=depth_ft),
+                    cell = score.score(species,
+                                       dict(row, depth_ft=depth_ft,
+                                            bottom=_bottom_at(la, lo)),
                                        exposed=row["exposed"],
                                        prior=spot.prior(species),
                                        best_stage=spot.best_stage)

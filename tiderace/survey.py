@@ -84,6 +84,27 @@ def _try(fn, *a, **kw):
         return None, f"{type(e).__name__}: {str(e)[:90]}"
 
 
+def _bottom_verdicts(bottom) -> dict:
+    """What every fish with a cited substrate makes of this seabed.
+
+    All of them, not just the one asked for, and the reason is the offline
+    cache rather than generosity. `window.surveyURL` carries no species -- the
+    dock bundle prefetches one URL per position and the tap on the water has
+    to hit that byte-identical key or the boat gets nothing back. Keying the
+    verdict off the species would either break that or multiply the bundle by
+    the length of the picker.
+
+    Seven short strings instead, and the page reads its own. The wording and
+    the arithmetic both come from `score`, so nothing here can disagree with
+    the gate that chose the position in the first place.
+    """
+    from . import score
+    return {key: {"fit": round(score.bottom_fit(bottom, prof), 3),
+                  "verdict": score.bottom_verdict(bottom, prof),
+                  "claim": prof.bottom_claim}
+            for key, prof in score.PROFILES.items() if prof.bottom}
+
+
 def survey(lat: float, lon: float, when: datetime | None = None,
            species: str = "striped_bass", include_slow: bool = True) -> dict:
     """Assemble every layer that means something at this place.
@@ -110,7 +131,17 @@ def survey(lat: float, lon: float, when: datetime | None = None,
                     if depth is not None else
                     ("no chart data for this area" if not charted else
                      "no sounding at this point"))
-    L["bottom"] = _d(charts.bottom_at(lat, lon), "NOAA ENC", RES["chart_feature"])
+    # The seabed, and what each fish's source makes of it. The noun on its own
+    # is only half an answer: "mud" under a tautog is alarming, under a red
+    # hake it is the cited habitat, and the person reading this is on a boat
+    # rather than in score.py. Every verdict rides along rather than the one
+    # for `species` -- see `_bottom_verdicts` for why that is about the
+    # offline cache key and not about being thorough.
+    _bot = charts.bottom_at(lat, lon)
+    L["bottom"] = _d(_bot, "NOAA ENC", RES["chart_feature"])
+    L["bottom_fit"] = _d(_bottom_verdicts((_bot or {}).get("bottom")),
+                         "NOAA ENC + score.PROFILES", RES["chart_feature"],
+                         "what each fish's cited source makes of this seabed")
     L["structure"] = _d(pointmod.structure_near(lat, lon), "NOAA ENC",
                         RES["chart_feature"],
                         "wrecks, rocks and obstructions within 0.25 nm")
