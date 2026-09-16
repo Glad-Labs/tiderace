@@ -8743,6 +8743,206 @@ class SpeciesCard(unittest.TestCase):
         self.assertGreater(checked, 5, "only %d rules examined" % checked)
 
 
+class ReferencePhotos(unittest.TestCase):
+    """A photograph of the wrong animal on a card headed "Tautog" is worse
+    than no photograph, because a card is where somebody goes to check.
+
+    This project has made the mistake once and written it down -- whales.py:
+    "an earlier pass used 47178 for sharks and got mummichogs and gobies,
+    which is exactly the sort of wrong that looks fine in aggregate." It then
+    made it again here: matching "Monkfish" on its common name alone resolved
+    to *Lophiodes naresi*, an Indo-Pacific fish that also answers to
+    "Goosefish", where the document this project read says *Lophius
+    americanus*.
+
+    Hermetic: the suite stays stdlib-only and about a second, so every
+    response here is a stub. `tiderace species --photos` is what talks to
+    iNaturalist, and nothing on a forecast path ever does.
+    """
+
+    def _stub(self, results):
+        from tiderace import fishpic
+        calls = []
+
+        def fake(url, params):
+            calls.append((url, params))
+            return {"results": results}
+        return fishpic, fake, calls
+
+    def test_a_sourced_binomial_beats_a_common_name(self):
+        """The monkfish regression, pinned. Both taxa answer to "Goosefish";
+        only one of them is the fish in NMFS-NE-127."""
+        import unittest.mock as mock
+        from tiderace import fishpic, species
+        self.assertEqual(species.SCIENTIFIC["monkfish"], "Lophius americanus")
+        results = [
+            {"id": 1, "name": "Lophiodes naresi",
+             "preferred_common_name": "Goosefish"},
+            {"id": 2, "name": "Lophius americanus",
+             "preferred_common_name": "Goosefish"},
+        ]
+        _, fake, calls = self._stub(results)
+        with mock.patch.object(fishpic, "_get", fake), \
+                mock.patch.object(fishpic.time, "sleep", lambda *a: None):
+            hit = fishpic.resolve("Monkfish", ("goosefish",),
+                                  species.SCIENTIFIC["monkfish"])
+        self.assertEqual(hit["scientific"], "Lophius americanus")
+        self.assertEqual(hit["verified"], "scientific name")
+        # And without the binomial it takes the first common-name match,
+        # which is the wrong fish. That is the bug, reproduced.
+        _, fake2, _ = self._stub(results)
+        with mock.patch.object(fishpic, "_get", fake2), \
+                mock.patch.object(fishpic.time, "sleep", lambda *a: None):
+            loose = fishpic.resolve("Monkfish", ("goosefish",))
+        self.assertEqual(loose["scientific"], "Lophiodes naresi")
+        self.assertEqual(loose["verified"], "common name")
+
+    def test_a_genus_revision_still_resolves_and_says_so(self):
+        """NMFS-NE-146 calls the longfin squid *Loligo pealeii*; the current
+        combination is *Doryteuthis pealeii*. Matching the epithet finds it,
+        and the record says the genus moved rather than pretending it did
+        not."""
+        import unittest.mock as mock
+        from tiderace import fishpic, species
+        self.assertEqual(species.SCIENTIFIC["squid"], "Loligo pealeii")
+        _, fake, _ = self._stub([{"id": 9, "name": "Doryteuthis pealeii",
+                                  "preferred_common_name": "Longfin Squid"}])
+        with mock.patch.object(fishpic, "_get", fake), \
+                mock.patch.object(fishpic.time, "sleep", lambda *a: None):
+            hit = fishpic.resolve("Longfin Squid", (), "Loligo pealeii")
+        self.assertEqual(hit["scientific"], "Doryteuthis pealeii")
+        self.assertIn("genus revised", hit["verified"])
+
+    def test_a_taxon_whose_own_name_does_not_match_is_refused(self):
+        """iNaturalist's match is against the string we sent, not against the
+        taxon. A result that does not call itself what we asked for is not an
+        answer, and no photo is a fine outcome."""
+        import unittest.mock as mock
+        from tiderace import fishpic
+        _, fake, _ = self._stub([{"id": 3, "name": "Pollachius pollachius",
+                                  "preferred_common_name": "European Pollack"}])
+        with mock.patch.object(fishpic, "_get", fake), \
+                mock.patch.object(fishpic.time, "sleep", lambda *a: None):
+            self.assertIsNone(fishpic.resolve("Longfin Squid", ()))
+
+    def test_only_creative_commons_photos_are_kept(self):
+        """These are somebody's photographs. This repository is AGPL and
+        somebody else may run it, so shipping an all-rights-reserved image
+        would be the same class of mistake as inventing a size limit."""
+        from tiderace import fishpic
+        for code in fishpic.OPEN_LICENCES:
+            got = fishpic._photo_of({"default_photo": {
+                "license_code": code, "medium_url": "http://x/y.jpg",
+                "attribution": "(c) somebody", "id": 1}})
+            self.assertIsNotNone(got, code)
+            self.assertEqual(got["licence"], code)
+        for code in (None, "", "c", "all rights reserved"):
+            self.assertIsNone(fishpic._photo_of({"default_photo": {
+                "license_code": code, "medium_url": "http://x/y.jpg"}}), code)
+        self.assertNotIn(None, fishpic.OPEN_LICENCES)
+
+    def test_a_photo_never_reaches_a_card_without_its_credit(self):
+        """Attribution is the licence's one condition, not decoration."""
+        import unittest.mock as mock
+        from tiderace import dossier, fishpic
+        man = {"tautog": {"file": "tautog.jpg", "scientific": "Tautoga onitis",
+                          "attribution": "(c) somebody, CC BY-NC",
+                          "licence": "cc-by-nc", "verified": "scientific name"}}
+        with mock.patch.object(fishpic, "load", lambda: man), \
+                mock.patch.object(fishpic.os.path, "exists", lambda p: True):
+            d = dossier.build("tautog")
+        self.assertTrue(d["photo"]["credit"])
+        self.assertIn("somebody", d["photo"]["credit"])
+        self.assertIn("cc-by-nc", d["photo"]["credit"])
+        # The binomial travels with it, because a wrong fish has to be
+        # something a person can see rather than something buried in a cache.
+        self.assertEqual(d["photo"]["scientific"], "Tautoga onitis")
+
+    def test_no_photo_says_which_kind_of_no(self):
+        """Three different absences, and a card that rendered them the same
+        would turn "we could not be sure" into "nothing here"."""
+        import unittest.mock as mock
+        from tiderace import dossier, fishpic
+        cases = [
+            ({}, "not fetched yet"),
+            ({"resolved": False}, "no confident match"),
+            ({"resolved": True, "file": None}, "no Creative Commons"),
+        ]
+        for entry, expect in cases:
+            with mock.patch.object(fishpic, "load", lambda e=entry: {"tautog": e}):
+                d = dossier.build("tautog")
+            self.assertIsNone(d["photo"])
+            self.assertIn(expect, d["unavailable"]["photo"], entry)
+
+    def test_the_card_says_why_there_is_no_photo(self):
+        """Nine of thirty-seven have none: five could not be matched with
+        confidence and four have only an all-rights-reserved photograph. A
+        blank where the reason lives reads as "we did not bother"."""
+        import pathlib
+        desk = strip_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "web" / "desk.html").read_text())
+        fish = desk.split("async fish()")[1].split("\n  async ")[0]
+        self.assertIn("unavailable.photo", fish)
+        self.assertIn("no photo —", fish)
+        # And the binomial it matched on rides with the image, because a wrong
+        # fish has to be visible.
+        self.assertIn("d.photo.scientific", fish)
+        self.assertIn("d.photo.verified", fish)
+
+    def test_the_photo_route_serves_images_and_nothing_else(self):
+        """The manifest sits in the same directory and holds the taxon ids and
+        attributions. basename() cannot traverse, but it would happily serve
+        manifest.json."""
+        import pathlib
+        server = strip_py_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "server.py").read_text())
+        route = server.split('url.path.startswith("/species-photo/")')[1]
+        route = route.split('if url.path == "/api/dossier"')[0]
+        self.assertIn("os.path.basename", route)
+        self.assertIn('.endswith((".jpg", ".png"))', route)
+
+    def test_hms_binomials_are_not_written_down_twice(self):
+        """hms.py transcribed a binomial for every federally managed fish
+        when it transcribed their rules. Repeating them in species.py would
+        be a name that can disagree with itself, so `scientific()` reads
+        through to hms rather than duplicating."""
+        from tiderace import hms, species
+        found = 0
+        for key in ("bluefin", "albacore", "swordfish"):
+            self.assertNotIn(key, species.SCIENTIFIC,
+                             "%s is written down in two places" % key)
+            self.assertEqual(species.scientific(key),
+                             hms.status(key)["scientific"])
+            found += 1
+        self.assertEqual(found, 3)
+        # And a fish nothing has a name for gets an empty string, never a
+        # guess, so the lookup falls back to a labelled common-name match.
+        self.assertEqual(species.scientific("spanish_mackerel"), "")
+
+    def test_every_sourced_binomial_looks_like_one(self):
+        """Genus capitalised, epithet not, two words. A typo here sends the
+        lookup somewhere else entirely, and the fallback would then quietly
+        take over."""
+        import re
+        from tiderace import species
+        self.assertGreater(len(species.SCIENTIFIC), 10)
+        for key, name in species.SCIENTIFIC.items():
+            self.assertIsNotNone(species.get(key), "%s is not a species" % key)
+            self.assertRegex(name, r"^[A-Z][a-z]+ [a-z]+$", "%s: %r" % (key, name))
+
+    def test_nothing_on_a_forecast_path_calls_inaturalist(self):
+        """Thirty-seven round trips at a polite one per second. A boat asking
+        for a forecast must never wait on it, and `tiderace species --photos`
+        is the only thing that should reach the network here."""
+        import pathlib
+        root = pathlib.Path(__file__).parent / "tiderace"
+        for name in ("score.py", "prospect.py", "heat.py", "features.py",
+                     "server.py", "survey.py"):
+            src = strip_py_comments((root / name).read_text())
+            self.assertNotIn("fishpic.fetch_all", src, name)
+            self.assertNotIn("fishpic.resolve", src, name)
+
+
 class ProspectedCandidates(unittest.TestCase):
     """Matt, 3 September 2026: the goal is for the system to come up with the
     coordinates itself, for a species and the conditions. So there is no list.

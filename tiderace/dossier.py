@@ -274,6 +274,31 @@ def build(key: str, when: date | None = None) -> dict:
         "unavailable": {},
     }
 
+    # A reference photograph, and the binomial it was resolved through. Both
+    # or neither: an image with no credit would be somebody's work taken
+    # without the licence's one condition, and an image with no binomial
+    # would hide exactly the failure this is most likely to have -- matching
+    # "Monkfish" to a fish on the other side of the world that answers to the
+    # same common name.
+    try:
+        from . import fishpic
+        out["photo"] = fishpic.get(key)
+        e = fishpic.entry(key)
+        if out["photo"] is None:
+            out["unavailable"]["photo"] = (
+                "no Creative Commons photograph on this taxon"
+                if e.get("resolved") and not e.get("file") else
+                "no confident match on iNaturalist for this fish"
+                if e.get("resolved") is False else
+                "not fetched yet — run `tiderace species --photos`")
+        else:
+            out["photo"]["verified"] = e.get("verified") or ""
+    except Exception:                                             # noqa: BLE001
+        # A card is reference material and must render without a photo. The
+        # forecast path never touches this module, so a failure here can cost
+        # an image and nothing else.
+        out["unavailable"]["photo"] = "photo lookup unavailable"
+
     if key in score.PROFILES:
         p = score.PROFILES[key]
         out["forecast"] = {

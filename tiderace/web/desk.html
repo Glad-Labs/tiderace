@@ -479,7 +479,15 @@ const RENDER = {
         // Somebody else's photograph under a Creative Commons licence. The
         // credit is a condition of using it, not decoration, so it renders
         // with the image or the image does not render at all.
-        h += `<p class="credit">${esc(d.photo.credit || '')}</p>`;
+        h += `<p class="credit">${esc(d.photo.credit || '')} · `
+           + `${esc(d.photo.scientific || '')}`
+           + `${d.photo.verified ? ' — matched by ' + esc(d.photo.verified) : ''}</p>`;
+      } else if (d.unavailable && d.unavailable.photo){
+        // Said rather than left blank. "No confident match on iNaturalist" is
+        // a fact about this app's ability to identify the fish, and given
+        // that matching "Monkfish" by common name once landed on a species
+        // from the Indian Ocean, it is worth a line.
+        h += `<p class="credit">no photo — ${esc(d.unavailable.photo)}</p>`;
       }
       h += `<h3>${esc(d.name)}</h3>`;
       if ((d.aliases || []).length)

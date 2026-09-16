@@ -246,6 +246,11 @@ def run(argv=None) -> int:
     sc.add_argument("name", nargs="?", help="species key or anything you'd call it")
     sc.add_argument("--all", action="store_true",
                     help="list every loggable fish and which tiers it reaches")
+    sc.add_argument("--photos", action="store_true",
+                    help="fetch a reference photo per fish from iNaturalist "
+                         "(Creative Commons only; a few minutes)")
+    sc.add_argument("--refresh", action="store_true",
+                    help="with --photos, re-fetch ones already on disk")
 
     sv = sub.add_parser("serve", help="run the local map UI")
     sv.add_argument("--port", type=int, default=8765)
@@ -377,6 +382,24 @@ def _cmd_species(args) -> int:
     as the same confident tuple in the same source file.
     """
     from . import dossier, species as speciesmod
+    if getattr(args, "photos", False):
+        from . import fishpic
+        print("\n  resolving each fish on iNaturalist and keeping the "
+              "Creative Commons photos.")
+        print("  a common name is not a key: where a document gave a binomial "
+              "the lookup uses that,")
+        print("  because matching \"Monkfish\" by common name alone returned a "
+              "fish from the Indian Ocean.\n")
+        rep = fishpic.fetch_all(speciesmod.loggable(), refresh=args.refresh)
+        print()
+        print("  %d matched · %d downloaded · %d already on disk"
+              % (rep["matched"], rep["downloaded"], rep["kept"]))
+        if rep["no_match"]:
+            print("  no confident match: " + ", ".join(rep["no_match"]))
+        if rep["no_licence"]:
+            print("  photo is all rights reserved: " + ", ".join(rep["no_licence"]))
+        print()
+        return 0
     if args.all or not args.name:
         print()
         print(f"  {'KEY':<22}{'NAME':<28}{'GROUP':<11}TIERS")
@@ -408,6 +431,12 @@ def _cmd_species(args) -> int:
         ("forecast" if tiers["scored"] else "no forecast",
          "rules transcribed" if tiers["regulated"] else "rules NOT modelled",
          "federal (HMS)" if d["hms"] else "state waters")))
+    ph = d.get("photo")
+    if ph:
+        print(f"  {ph.get('scientific') or ''}"
+              f"   ({ph.get('verified') or 'matched'})")
+    elif d["unavailable"].get("photo"):
+        print(f"  photo: {d['unavailable']['photo']}")
     if d["notes"]:
         print()
         for line in _wrap(d["notes"], w - 4):

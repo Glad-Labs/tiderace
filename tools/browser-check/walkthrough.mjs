@@ -224,6 +224,8 @@ async function walk(url) {
         cited: marks.filter(m => m === 'cited').length,
         prior: marks.filter(m => m === 'prior').length,
         claim: (document.querySelector('#fishcard .tclaim') || {}).textContent || '',
+        img: !!document.querySelector('#fishcard img.photo'),
+        credit: (document.querySelector('#fishcard .credit') || {}).textContent || '',
       };
     });
     step('desk fish: every loggable fish is pickable',
@@ -233,6 +235,13 @@ async function walk(url) {
          card ? `${card.cited} cited, ${card.prior} prior` : 'no card');
     step('desk fish: the claim names its document',
          card && /\[/.test(card.claim), (card && card.claim.slice(0, 60)) || '');
+    // Somebody else's photograph under a Creative Commons licence. The credit
+    // is a condition of using it, so an image without one is worse than no
+    // image at all -- and this is a check that could only pass against a real
+    // rendered page.
+    step('desk fish: a photo carries its licence and credit',
+         card && (!card.img || /iNaturalist/.test(card.credit)),
+         card ? (card.img ? card.credit.slice(0, 70) : 'no photo for this fish') : '');
   }
 
   // Regs replaced Review, and the point of the swap was the link: a rule you

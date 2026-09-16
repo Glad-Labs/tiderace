@@ -75,3 +75,10 @@ data/regs_applied.json
 browser-check.png
 walkthrough-map.png
 walkthrough-desk.png
+
+# Reference photographs of each fish, fetched from iNaturalist by
+# `tiderace species --photos`. Somebody else's Creative Commons work, a couple
+# of megabytes of it, and regenerable — so it belongs on the machine and not
+# in this history, which already carries 3.8 MB of blobs from one careless
+# `git add -A`.
+data/species_photos/

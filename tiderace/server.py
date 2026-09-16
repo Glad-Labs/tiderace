@@ -735,6 +735,31 @@ class Handler(BaseHTTPRequestHandler):
                     "attribution": "© <a href=\"https://protomaps.com\">Protomaps</a> "
                                    "© <a href=\"https://openstreetmap.org\">OpenStreetMap</a>",
                 })
+            if url.path.startswith("/species-photo/"):
+                # Somebody else's photograph, served from the gitignored cache
+                # rather than hotlinked: the app has to work on a boat with no
+                # signal, and hotlinking would also tell iNaturalist which
+                # fish Matt looks up.
+                from . import fishpic
+                name = os.path.basename(url.path)
+                # basename() alone is the guard -- it cannot traverse -- but
+                # the extension check keeps this from serving the manifest.
+                if not name.endswith((".jpg", ".png")):
+                    return self._send_json({"error": "not an image"}, 404)
+                path = os.path.join(fishpic.PHOTO_DIR, name)
+                if not os.path.exists(path):
+                    return self._send_json({"error": "no photo"}, 404)
+                with open(path, "rb") as fh:
+                    blob = fh.read()
+                self.send_response(200)
+                self.send_header("Content-Type",
+                                 "image/png" if name.endswith(".png") else "image/jpeg")
+                self.send_header("Content-Length", str(len(blob)))
+                # Immutable by construction: the filename is the species key
+                # and the file only changes when somebody re-runs the fetch.
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.end_headers()
+                return self.wfile.write(blob)
             if url.path == "/api/dossier":
                 # Everything the app claims about ONE fish. A separate path
                 # rather than /api/species/<key>: this router is a chain of
