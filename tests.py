@@ -3,6 +3,9 @@
 Deliberately stdlib unittest and no network. Anything that needs NOAA belongs
 in a manual check, not here -- a test suite that fails when a government
 website is slow trains you to ignore it.
+
+"No network" is enforced below rather than merely asserted, because for the
+station catalog it was untrue for as long as that sentence has been there.
 """
 
 from __future__ import annotations
@@ -21,6 +24,36 @@ from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, 
 STALE_REC = regs.STALE_AFTER_DAYS
 from tiderace.features import _local_tz, _wind_against_tide
 from tiderace.sources import current_at
+from tiderace import stations as stationsmod
+
+
+# "No network" above was not true, and the exception wrote to data/.
+#
+# `stations.catalog()` defaults to `auto_refresh=True`: a missing catalog is a
+# 290 KB download from NOAA landing in the real `data/stations.json`, and a
+# catalog older than CATALOG_MAX_AGE_DAYS is refetched and overwritten the
+# same way. Three tests wrapped it in `except StationError: skipTest(...)`, a
+# guard that reads as "skip when the catalog is absent" and never once fired.
+# A fourth -- `AdHocSpots.test_a_typed_coordinate_never_joins_your_marks` --
+# reached it indirectly, `spots.at_coord` -> `stations.resolve` -> `catalog`,
+# where no call-site guard could have seen it coming at all.
+#
+# Found on 16 September 2026 by hooking `os.replace` across a full run. It is
+# the rename inside `cache.write_json` that lands on the durable name, never
+# an `open(..., "w")`, which is why watching `open` finds nothing.
+#
+# Refusing the fetch here, rather than only at the call sites, is what covers
+# that indirect route: `catalog` already handles a failed refresh the way it
+# handles a network outage, so a stale cache is served unchanged and a missing
+# one raises StationError -- precisely what the skip guards were written for.
+# A test that ever wants the real thing must save and restore this itself.
+def _the_suite_does_not_fetch(path: str | None = None) -> dict:
+    raise stationsmod.StationError(
+        "the suite does not fetch the station catalog; "
+        "run: python3 -m tiderace stations --refresh")
+
+
+stationsmod.refresh = _the_suite_does_not_fetch
 
 
 class Astro(unittest.TestCase):
@@ -1027,10 +1060,25 @@ class Packaging(unittest.TestCase):
         self.assertTrue(os.access(w, os.X_OK), "launcher is not executable")
 
     def test_wrapper_runs_from_a_foreign_directory(self):
+        # The subprocess is a fresh interpreter, so the suite's no-fetch guard
+        # does not reach it and neither does any in-process hook watching for
+        # writes. `spots` goes prospect.candidates_for -> spots.at_coord ->
+        # stations.resolve -> stations.catalog, which on a stale or absent
+        # catalog fetches from NOAA and writes the real data/stations.json --
+        # correct for the CLI, not for a test. Confirmed on 16 September 2026
+        # by aging data/stations.json and running the wrapper by hand: the
+        # mtime came back as now. TIDERACE_STATIONS is the redirection
+        # stations.py already provides; the copy means it finds a fresh
+        # catalog there and has no reason to fetch at all.
+        import shutil
         import subprocess, tempfile
         with tempfile.TemporaryDirectory() as d:
+            env = dict(os.environ, TIDERACE_STATIONS=os.path.join(d, "stations.json"))
+            if os.path.exists(stationsmod.CATALOG_PATH):
+                shutil.copyfile(stationsmod.CATALOG_PATH, env["TIDERACE_STATIONS"])
             r = subprocess.run([os.path.join(self.ROOT, "tiderace-cli"), "spots"],
-                               cwd=d, capture_output=True, text=True, timeout=90)
+                               cwd=d, capture_output=True, text=True, timeout=90,
+                               env=env)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("prospected from the charted soundings", r.stdout)
             self.assertRegex(r.stdout, r"41\.\d{4}, -71\.\d{4}\s+\d+ ft\s+structure")
@@ -3810,7 +3858,7 @@ class ReviewRegressions(unittest.TestCase):
         really be somewhere else -- but it no longer passes quietly."""
         from tiderace import stations
         try:
-            cat = stations.catalog()
+            cat = stations.catalog(auto_refresh=False)
         except stations.StationError:
             self.skipTest("station catalog not cached")
         lat, lon = spots.parse_coord("41.4408,71.4228")
@@ -3828,7 +3876,7 @@ class ReviewRegressions(unittest.TestCase):
         warning -- not an exception."""
         from tiderace import stations
         try:
-            cat = stations.catalog()
+            cat = stations.catalog(auto_refresh=False)
         except stations.StationError:
             self.skipTest("station catalog not cached")
         res = stations.resolve(37.81, -122.45, cat)     # Golden Gate
@@ -3849,7 +3897,7 @@ class ReviewRegressions(unittest.TestCase):
         every land test can only return 'don't know' at a cost of seconds."""
         from tiderace import stations
         try:
-            cat = stations.catalog()
+            cat = stations.catalog(auto_refresh=False)
         except stations.StationError:
             self.skipTest("station catalog not cached")
         self.assertLess(stations.FAR_NM, stations.NO_STATIONS_NM)
@@ -3897,12 +3945,22 @@ class ReviewRegressions(unittest.TestCase):
         """Twenty-one spots meant twenty-one round trips describing the same
         40 km of water. eBird answers for a 50 km radius in one request, so a
         spot far enough inside an existing circle reuses it."""
+        # `candidates_for` prospects the soundings and binds each position to
+        # its stations, so it needs both files -- the same pair
+        # ProspectedCandidates guards for the same call. This test guarded
+        # neither: without the charts it raised FileNotFoundError, and without
+        # the catalog it used to fetch one, which is what put a 290 KB
+        # download from NOAA into the real data/stations.json.
+        from tiderace import prospect, stations, structure
+        if not os.path.exists(structure.SOUNDINGS):
+            self.skipTest("soundings not cached — run: tiderace charts")
+        if not os.path.exists(stations.CATALOG_PATH):
+            self.skipTest("no station catalog — run: tiderace stations --refresh")
         calls = []
         real = birds._get
         birds._get = lambda path, **kw: (calls.append(kw), real(path, **kw))[1]
         try:
             birds.forget_regions()
-            from tiderace import prospect
             targets = prospect.candidates_for("striped_bass", marks=False)
             self.assertGreater(len(targets), 10)
             if not birds.prime([(s.lat, s.lon) for s in targets]):
@@ -9250,6 +9308,168 @@ class ZoomedChromeStaysOnTheGlass(unittest.TestCase):
         self.assertEqual(offenders, [],
                          "vh/vw on a zoomed element must be divided by "
                          "var(--ui, 1) or it is scaled twice: "
+                         + "; ".join(offenders))
+
+
+class TestsDoNotWriteToTheRealData(unittest.TestCase):
+    """A try/except meant to detect absent data must not go and fetch it.
+
+    `test_a_dropped_minus_sign_is_said_out_loud` called `stations.catalog()`
+    inside `except stations.StationError: self.skipTest(...)`. That reads as
+    "skip when data/stations.json is missing" and it never skipped once:
+    `catalog` defaults to `auto_refresh=True`, so the missing file was a
+    download from NOAA written into the real `data/stations.json`, and a file
+    older than CATALOG_MAX_AGE_DAYS was refetched and written over the top.
+    CLAUDE.md's rule is that tests use temp paths; this wrote to `data/` on
+    every machine where the catalog was absent or stale.
+
+    Three things had to be true for it to hide this long. The write goes
+    through `os.replace` inside `cache.write_json`, never an `open(..., "w")`,
+    so it is invisible to the obvious guard. `catalog` memoises into a module
+    global, so only the first of the three call sites paid and the other two
+    looked innocent. And the one that fired with a *stale* catalog was not a
+    call site at all -- `spots.at_coord` -> `stations.resolve` -> `catalog`,
+    three frames below any test.
+
+    So the guards are layered to match: the flag means what it says, every
+    call site passes it, and the suite as a whole cannot fetch.
+    """
+
+    def _forget_the_memo(self):
+        """`catalog` caches into a module global. A test that does not clear
+        it measures whichever test happened to run first, and a test that does
+        not restore it hands the next one a temp-dir catalog."""
+        before = stationsmod._CATALOG
+        stationsmod._CATALOG = None
+        self.addCleanup(setattr, stationsmod, "_CATALOG", before)
+
+    def _tripwire_on_refresh(self):
+        """`refresh` is already stubbed for the whole suite; this makes the
+        stub loud instead of survivable, so a call cannot be absorbed by
+        `catalog`'s own `except StationError` and read as a pass."""
+        def reached(*a, **kw):
+            raise AssertionError("refresh() reached; this path fetches")
+        before = stationsmod.refresh
+        stationsmod.refresh = reached
+        self.addCleanup(setattr, stationsmod, "refresh", before)
+
+    def _catalog_file(self, d, name, body, age_days=0.0):
+        import json
+        import time
+        path = os.path.join(d, name)
+        with open(path, "w") as fh:
+            if body is None:
+                fh.write('{"current": [')        # truncated mid-write
+            else:
+                json.dump(body, fh)
+        if age_days:
+            old = time.time() - age_days * 86400
+            os.utime(path, (old, old))
+        return path
+
+    GOOD = {"current": [{"id": "ACT2201", "name": "a", "lat": 41.44, "lon": -71.42}],
+            "tide": []}
+
+    def test_declining_to_fetch_means_declining_to_write(self):
+        """`auto_refresh=False` is the branch the skip guards rely on, in all
+        three states the file can be in. The unreadable one used to fall
+        through to a refresh regardless of the flag, which made the promise a
+        suggestion: a caller that asked not to touch the network had the cache
+        rewritten underneath it anyway."""
+        import tempfile
+        self._forget_the_memo()
+        self._tripwire_on_refresh()
+        stale_days = stationsmod.CATALOG_MAX_AGE_DAYS + 30
+
+        with tempfile.TemporaryDirectory() as d:
+            missing = os.path.join(d, "absent.json")
+            with self.assertRaises(stationsmod.StationError):
+                stationsmod.catalog(missing, auto_refresh=False)
+            self.assertFalse(os.path.exists(missing),
+                             "created the catalog it was asked not to fetch")
+
+            self._forget_the_memo()
+            corrupt = self._catalog_file(d, "corrupt.json", None)
+            with self.assertRaises(stationsmod.StationError):
+                stationsmod.catalog(corrupt, auto_refresh=False)
+            with open(corrupt) as fh:
+                self.assertEqual(fh.read(), '{"current": [',
+                                 "overwrote a cache file it could not read")
+
+            self._forget_the_memo()
+            stale = self._catalog_file(d, "stale.json", self.GOOD, stale_days)
+            was = os.path.getmtime(stale)
+            self.assertEqual(stationsmod.catalog(stale, auto_refresh=False), self.GOOD)
+            self.assertAlmostEqual(os.path.getmtime(stale), was, places=3,
+                                   msg="refetched a stale cache it was told to keep")
+
+    def test_the_suite_itself_cannot_fetch_a_catalog(self):
+        """The layer that covers the indirect route. No skip guard sits
+        between `spots.at_coord` and `catalog`, so the only place to stop a
+        stale-cache refetch is the fetch. With it refused, `catalog` behaves
+        as it does on a boat with no signal: the stale list is served intact,
+        and an absent one raises the error the skip guards catch."""
+        import tempfile
+        self.assertIs(stationsmod.refresh, _the_suite_does_not_fetch,
+                      "something restored the real refresh and left it there")
+        self._forget_the_memo()
+        stale_days = stationsmod.CATALOG_MAX_AGE_DAYS + 30
+
+        with tempfile.TemporaryDirectory() as d:
+            # auto_refresh left at its default -- this is the path at_coord takes.
+            stale = self._catalog_file(d, "stale.json", self.GOOD, stale_days)
+            was = os.path.getmtime(stale)
+            self.assertEqual(stationsmod.catalog(stale), self.GOOD)
+            self.assertAlmostEqual(os.path.getmtime(stale), was, places=3,
+                                   msg="the suite refetched over a real cache file")
+
+            self._forget_the_memo()
+            missing = os.path.join(d, "absent.json")
+            with self.assertRaises(stationsmod.StationError):
+                stationsmod.catalog(missing)
+            self.assertFalse(os.path.exists(missing))
+
+    def test_every_catalog_call_in_the_suite_declines_to_fetch(self):
+        """The call sites, so the default cannot creep back in one test at a
+        time. `catalog`'s memo means a single offender is enough to write the
+        file, and the other callers would still look clean.
+
+        What is judged is the call that names no path, because that is the one
+        aimed at the real `data/stations.json`. A call carrying a path of its
+        own is pointed at a temp dir and may exercise whatever branch it
+        likes -- the two in the test above do exactly that on purpose."""
+        import ast
+        import pathlib
+        tree = ast.parse(pathlib.Path(__file__).read_text())
+        offenders, seen, judged = [], 0, 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            named = ((isinstance(f, ast.Attribute) and f.attr == "catalog")
+                     or (isinstance(f, ast.Name) and f.id == "catalog"))
+            if not named:
+                continue
+            seen += 1
+            kw = {k.arg: k.value for k in node.keywords}
+            if node.args or "path" in kw:
+                continue                        # its own path, not data/
+            judged += 1
+            flag = kw.get("auto_refresh")
+            if not (isinstance(flag, ast.Constant) and flag.value is False):
+                offenders.append("tests.py:%d" % node.lineno)
+
+        # The floor, in two parts. A rename or a change of import style stops
+        # the walk matching anything, and a suite-wide switch to explicit
+        # paths would leave it matching but judging nothing; either way this
+        # passes having checked nothing, which is the same fault one level up.
+        self.assertGreater(seen, 0, "the walk has stopped finding catalog() calls")
+        self.assertGreater(judged, 0,
+                           "found %d catalog() calls, none of them against the "
+                           "real catalog; nothing was checked" % seen)
+        self.assertEqual(offenders, [],
+                         "these fetch from NOAA and write data/stations.json when "
+                         "the catalog is absent or stale; pass auto_refresh=False: "
                          + "; ".join(offenders))
 
 

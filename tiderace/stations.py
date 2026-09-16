@@ -134,6 +134,15 @@ def catalog(path: str | None = None, auto_refresh: bool = True) -> dict:
                 return cat
         except (OSError, json.JSONDecodeError):
             cat = None
+        # Only a file that would not parse reaches here with auto_refresh
+        # off -- a stale one that parsed was returned above. Refusing to
+        # fetch has to mean refusing to write, or the flag is a suggestion:
+        # a caller that asked not to touch the network had the cache file
+        # rewritten underneath it anyway.
+        if not auto_refresh:
+            raise StationError(
+                f"station catalog at {path} is unreadable — run: "
+                "tiderace stations --refresh")
         # Stale: try to refresh, but a cached list that is a year old still
         # beats no forecast at all if the network is down.
         try:
