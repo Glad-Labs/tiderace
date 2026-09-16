@@ -741,19 +741,21 @@ class Handler(BaseHTTPRequestHandler):
                 # signal, and hotlinking would also tell iNaturalist which
                 # fish Matt looks up.
                 from . import fishpic
-                name = os.path.basename(url.path)
-                # basename() alone is the guard -- it cannot traverse -- but
-                # the extension check keeps this from serving the manifest.
-                if not name.endswith((".jpg", ".png")):
-                    return self._send_json({"error": "not an image"}, 404)
-                path = os.path.join(fishpic.PHOTO_DIR, name)
-                if not os.path.exists(path):
+                # No path is built from the request. `photo_path` takes the
+                # species key out of it, looks that up in the manifest, and
+                # builds the path from the filename the fetch stored -- so the
+                # only reachable files are ones this app wrote, the manifest
+                # beside them is unreachable by construction rather than by an
+                # extension check, and there is no tainted component to reason
+                # about.
+                path = fishpic.photo_path(url.path)
+                if path is None or not os.path.exists(path):
                     return self._send_json({"error": "no photo"}, 404)
                 with open(path, "rb") as fh:
                     blob = fh.read()
                 self.send_response(200)
                 self.send_header("Content-Type",
-                                 "image/png" if name.endswith(".png") else "image/jpeg")
+                                 "image/png" if path.endswith(".png") else "image/jpeg")
                 self.send_header("Content-Length", str(len(blob)))
                 # Immutable by construction: the filename is the species key
                 # and the file only changes when somebody re-runs the fetch.

@@ -8889,17 +8889,59 @@ class ReferencePhotos(unittest.TestCase):
         self.assertIn("d.photo.scientific", fish)
         self.assertIn("d.photo.verified", fish)
 
-    def test_the_photo_route_serves_images_and_nothing_else(self):
-        """The manifest sits in the same directory and holds the taxon ids and
-        attributions. basename() cannot traverse, but it would happily serve
-        manifest.json."""
+    def test_the_photo_route_builds_no_path_from_the_request(self):
+        """Was `test_the_photo_route_serves_images_and_nothing_else`, which
+        pinned a `basename()` guard and an extension check.
+
+        CodeQL flagged that version on PR #3 as uncontrolled data in a path
+        expression. On the narrow point it was a false positive -- basename()
+        cannot traverse -- but "basename cannot traverse" is an argument a
+        reader has to follow and re-verify every time the line moves, and the
+        manifest living in the same directory needed a SECOND guard to stay
+        unreachable. Looking the species key up in the manifest and building
+        the path from the filename stored there removes both: the only
+        reachable files are ones the fetch wrote.
+        """
         import pathlib
         server = strip_py_comments(
             (pathlib.Path(__file__).parent / "tiderace" / "server.py").read_text())
         route = server.split('url.path.startswith("/species-photo/")')[1]
         route = route.split('if url.path == "/api/dossier"')[0]
-        self.assertIn("os.path.basename", route)
-        self.assertIn('.endswith((".jpg", ".png"))', route)
+        self.assertIn("fishpic.photo_path(url.path)", route)
+        self.assertNotIn("os.path.join", route,
+                         "the route is assembling a path out of the request "
+                         "again")
+        self.assertNotIn("PHOTO_DIR", route)
+
+    def test_only_files_the_fetch_wrote_down_are_reachable(self):
+        """The functional half, driven through the real resolver. A traversal
+        is the obvious case; the manifest sharing the directory is the one
+        that actually needed fixing, and a species with no photo must not
+        resolve to a path either."""
+        import unittest.mock as mock
+        from tiderace import fishpic
+        man = {"tautog": {"file": "tautog.jpg"},
+               "bluefin": {"resolved": False}}
+        with mock.patch.object(fishpic, "load", lambda: man):
+            ok = fishpic.photo_path("/species-photo/tautog.jpg")
+            self.assertTrue(ok.endswith("tautog.jpg"))
+            self.assertIn(fishpic.PHOTO_DIR, ok)
+            for bad in ("/species-photo/manifest.json",
+                        "/species-photo/../../../etc/passwd",
+                        "/species-photo/%2e%2e%2fetc%2fpasswd",
+                        "/species-photo/..",
+                        "/species-photo/",
+                        "/species-photo/bluefin.jpg",      # matched, no photo
+                        "/species-photo/tautog.jpg/../../x",
+                        ""):
+                self.assertIsNone(fishpic.photo_path(bad), bad)
+        # And the name that comes back is the manifest's, not the request's:
+        # asking for a key whose stored file differs must serve the stored one.
+        with mock.patch.object(fishpic, "load",
+                               lambda: {"tautog": {"file": "tautog.png"}}):
+            self.assertTrue(
+                fishpic.photo_path("/species-photo/tautog.jpg").endswith(".png"),
+                "the path followed the request instead of the manifest")
 
     def test_hms_binomials_are_not_written_down_twice(self):
         """hms.py transcribed a binomial for every federally managed fish

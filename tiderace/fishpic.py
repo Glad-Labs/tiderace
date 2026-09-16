@@ -236,6 +236,31 @@ def entry(key: str) -> dict:
     return load().get(key) or {}
 
 
+def photo_path(request_path: str) -> str | None:
+    """Absolute path to a photograph THIS APP fetched, or None.
+
+    The filename is never joined onto the photo directory. The species key is
+    taken out of the request, looked up in the manifest, and the stored
+    filename is what builds the path -- so the only files reachable are ones
+    the fetch wrote down, and a request cannot contribute a path component at
+    all.
+
+    `os.path.basename` would in fact stop a traversal on its own, and CodeQL
+    flagging the first version of this was a false positive on that point. It
+    is still the right thing to change: "basename cannot traverse" is an
+    argument a reader has to follow and re-check every time the line moves,
+    where "the path comes out of our own manifest" is a property you can see.
+    The manifest lives in this directory too, which the first version needed a
+    separate extension check to avoid serving; a key lookup cannot reach it.
+    """
+    name = os.path.basename(str(request_path or ""))
+    key = name.rsplit(".", 1)[0]
+    stored = (load().get(key) or {}).get("file")
+    if not stored:
+        return None
+    return os.path.join(PHOTO_DIR, stored)
+
+
 def fetch_all(species_list, refresh: bool = False, log=print) -> dict:
     """Resolve and download a photo for each fish. Returns a small report.
 
