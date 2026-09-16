@@ -3945,12 +3945,22 @@ class ReviewRegressions(unittest.TestCase):
         """Twenty-one spots meant twenty-one round trips describing the same
         40 km of water. eBird answers for a 50 km radius in one request, so a
         spot far enough inside an existing circle reuses it."""
+        # `candidates_for` prospects the soundings and binds each position to
+        # its stations, so it needs both files -- the same pair
+        # ProspectedCandidates guards for the same call. This test guarded
+        # neither: without the charts it raised FileNotFoundError, and without
+        # the catalog it used to fetch one, which is what put a 290 KB
+        # download from NOAA into the real data/stations.json.
+        from tiderace import prospect, stations, structure
+        if not os.path.exists(structure.SOUNDINGS):
+            self.skipTest("soundings not cached — run: tiderace charts")
+        if not os.path.exists(stations.CATALOG_PATH):
+            self.skipTest("no station catalog — run: tiderace stations --refresh")
         calls = []
         real = birds._get
         birds._get = lambda path, **kw: (calls.append(kw), real(path, **kw))[1]
         try:
             birds.forget_regions()
-            from tiderace import prospect
             targets = prospect.candidates_for("striped_bass", marks=False)
             self.assertGreater(len(targets), 10)
             if not birds.prime([(s.lat, s.lon) for s in targets]):
