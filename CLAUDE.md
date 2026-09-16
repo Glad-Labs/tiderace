@@ -28,7 +28,13 @@ python3 -m tiderace evaluate          # does the model beat the free baseline?
 
 Subcommands: `forecast spots at stations log photos bait config scrape review
 regs offshore conditions basemap survey whales reports birds hms history
-evaluate gso charts serve`.
+evaluate gso charts species serve`.
+
+`species <name>` prints the card for one fish -- every band, what each one
+rests on, and the rules -- and is the fastest way to see whether a claim is
+cited or a hand-set prior. `species --photos` fetches a reference photograph
+per fish from iNaturalist; it is the only thing in the project that reaches
+that API for anything but whales, and nothing on a forecast path calls it.
 
 ---
 

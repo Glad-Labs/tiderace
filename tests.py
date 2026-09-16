@@ -5854,10 +5854,26 @@ class SheetStructure(unittest.TestCase):
     def _script(self):
         return strip_comments(self.page)
 
-    def test_there_are_four_views(self):
+    def test_the_views_and_the_grid_that_lays_them_out_agree(self):
+        """Was `test_there_are_four_views`, which counted only the buttons.
+
+        The count lives in two places -- the buttons and the CSS grid that
+        columns them -- and a tab added without the grid gets a squashed row
+        rather than a wrapped one, which is the kind of thing that looks fine
+        in a diff. Measured when a fifth tab was briefly tried here: at five
+        columns the widest label, "Catches", rendered 80px of text in an 80px
+        cell and stretched the grid past 1fr. The card went to the desk page
+        instead, which is where reference material belongs; this assertion is
+        what is left of the attempt and is worth keeping."""
         import re
         views = re.findall(r'data-view="(\w+)"', self.page)
         self.assertEqual(views, ["now", "log", "spots", "trips"])
+        grid = re.search(r"#tabs\{[^}]*grid-template-columns:repeat\((\d+),1fr\)",
+                         self.page)
+        self.assertIsNotNone(grid, "#tabs no longer columns by a repeat() count")
+        self.assertEqual(int(grid.group(1)), len(views),
+                         "the tab row has %d buttons in %s columns"
+                         % (len(views), grid.group(1)))
 
     def test_the_heat_hint_does_not_hard_code_whether_depth_is_scored(self):
         """The page said "Depth is shown, not scored" as a flat statement. Two
@@ -7128,6 +7144,48 @@ class TheDeskPageIsReachable(unittest.TestCase):
         # Up to the next renderer in the object literal.
         end = after.find("\n  async ")
         return after if end < 0 else after[:end]
+
+    def test_every_nav_button_has_a_section_and_a_renderer(self):
+        """Three lists that have to agree and live two hundred lines apart: a
+        nav button with no section switches to nothing, and one with no
+        renderer throws inside `show` and leaves "reading…" on screen forever.
+        Neither failure is visible in a diff that adds only the button."""
+        import re
+        desk = strip_comments(self.desk)
+        nav = re.findall(r'data-s="(\w+)"', desk)
+        sections = re.findall(r'<section id="(\w+)"', desk)
+        renderers = re.findall(r"\n  async (\w+)\(\)", desk)
+        self.assertEqual(sorted(nav), sorted(sections), "nav vs sections")
+        self.assertEqual(sorted(nav), sorted(renderers), "nav vs renderers")
+        self.assertIn("fish", nav)
+
+    def test_the_species_card_reads_the_dossier_and_does_not_rebuild_it(self):
+        """The claims, the bands and the tier all come from the server. A
+        second opinion assembled on the page is a second place for the app to
+        disagree with score.py about what it has a source for."""
+        desk = strip_comments(self.desk)
+        self.assertIn("/api/dossier?species=", desk)
+        self.assertIn('url.path == "/api/dossier"', self.server)
+        fish = desk.split("async fish()")[1]
+        end = fish.find("\n  async ")
+        fish = fish if end < 0 else fish[:end]
+        # `cited` decides a colour and nothing else. The page must not be
+        # deciding what counts as cited.
+        self.assertIn("term.cited", fish)
+        self.assertNotIn("temp_claim", fish)
+        self.assertNotIn("PROFILES", fish)
+        self.assertNotIn("0.85", fish, "the page is applying its own threshold")
+
+    def test_the_card_keeps_the_order_species_py_chose(self):
+        """species.py orders its list "roughly by how often they turn up on a
+        Narragansett Bay boat, because this list becomes a dropdown". An
+        alphabetical sort threw that away and opened the page on albacore."""
+        desk = strip_comments(self.desk)
+        fish = desk.split("async fish()")[1].split("\n  async ")[0]
+        self.assertNotIn("localeCompare", fish,
+                         "the picker re-sorts a list that was already ordered "
+                         "on purpose")
+        self.assertIn("filter(sp => sp.scored)", fish)
 
     def test_every_cli_only_reading_has_an_endpoint(self):
         for path in ("/api/history", "/api/reports", "/api/regs", "/api/hms"):
@@ -8536,6 +8594,395 @@ class RefusalsAreRecorded(unittest.TestCase):
                                          "also lost the log" % key)
         self.assertTrue(speciesmod.resolve("caught a cod"))
         self.assertEqual(speciesmod.resolve("a bluefin tuna"), "bluefin")
+
+
+class SpeciesCard(unittest.TestCase):
+    """Everything the app claims about one fish, and what each claim rests on.
+
+    The research was all there -- temp_claim, depth_claim, bottom_claim,
+    basis_claim, the bands, the rules -- and the app showed the species NAME
+    in a picker and almost nothing else. The tautog temperature claim is 293
+    characters saying its warm edge is the least defensible pair in score.py,
+    and until this card you could only read that by opening the source.
+
+    So these tests are about one thing above all: a cited band and a hand-set
+    prior must not render the same way.
+    """
+
+    def test_a_cited_band_and_a_guess_are_never_shown_the_same(self):
+        from tiderace import dossier
+        d = dossier.build("tautog")
+        terms = {t["term"]: t for t in d["forecast"]["terms"]}
+        # Both halves exist for this fish, which is what makes it the right
+        # one to test: the substrate and the temperature come out of named
+        # documents, the current and light curves come out of nobody.
+        self.assertTrue(terms["bottom"]["cited"])
+        self.assertTrue(terms["temp"]["cited"])
+        self.assertFalse(terms["current"]["cited"])
+        self.assertFalse(terms["light"]["cited"])
+        self.assertIn("[EFH-TOG p.5]", terms["bottom"]["claim"])
+        self.assertIn("least defensible pair", terms["temp"]["claim"])
+        # An uncited term is never silent about being uncited. Silence here
+        # would read as "no caveat", which is the opposite of the truth.
+        for t in d["forecast"]["terms"]:
+            self.assertTrue(t["claim"], "%s says nothing at all" % t["term"])
+            if not t["cited"]:
+                self.assertIn("prior", t["claim"])
+
+    def test_only_the_terms_the_scorer_actually_weights_appear(self):
+        """A card listing every term the scorer knows would report a depth for
+        a tautog, which is precisely what score.py refuses to do and has a
+        document saying why."""
+        from tiderace import dossier, score
+        for key, prof in score.PROFILES.items():
+            terms = {t["term"] for t in dossier.build(key)["forecast"]["terms"]}
+            self.assertEqual(terms, set(prof.weights), key)
+        self.assertNotIn("depth", {t["term"] for t in
+                                   dossier.build("tautog")["forecast"]["terms"]})
+
+    def test_every_loggable_fish_has_a_card_that_builds(self):
+        from tiderace import dossier, species as speciesmod
+        built = 0
+        for sp in speciesmod.loggable():
+            d = dossier.build(sp.key)
+            self.assertEqual(d["key"], sp.key)
+            self.assertTrue(d["name"])
+            # A forecast, or a reason there is none. Exactly one of the two,
+            # because a card with neither is a blank where a finding lives.
+            self.assertEqual(
+                bool(d["forecast"]) + bool(d["unavailable"].get("forecast")), 1,
+                "%s has %s forecast and %s reason"
+                % (sp.key, "a" if d["forecast"] else "no",
+                   "a" if d["unavailable"].get("forecast") else "no"))
+            built += 1
+        self.assertGreater(built, 30, "only %d cards examined" % built)
+
+    def test_a_refusal_is_carried_in_the_scorers_own_words(self):
+        """`score.NOT_PROFILED` holds a sentence per refused species. Somebody
+        looked, and a blank where that reason lives turns a finding back into
+        a gap."""
+        from tiderace import dossier, score
+        self.assertTrue(score.NOT_PROFILED, "nothing is refused, so this "
+                                            "test is asserting against nothing")
+        for key, reason in score.NOT_PROFILED.items():
+            d = dossier.build(key)
+            self.assertIsNone(d["forecast"], key)
+            self.assertEqual(d["unavailable"]["forecast"], reason, key)
+
+    def test_a_winter_fish_does_not_read_as_a_year_round_one(self):
+        """Cod run (11,12,1,2,3,4). Sorting that before formatting gives
+        "Jan–Dec", which is the opposite of the truth about a winter fish."""
+        from tiderace import dossier
+        self.assertEqual(dossier._months((11, 12, 1, 2, 3, 4)), "Nov–Apr")
+        self.assertEqual(dossier._months((6, 7, 8, 9, 10)), "Jun–Oct")
+        # A split run stays split rather than being closed up.
+        self.assertEqual(dossier._months((3, 4, 9, 10)), "Mar–Apr, Sep–Oct")
+        self.assertEqual(dossier._months((7,)), "Jul")
+        cod = dossier.build("cod")["forecast"]["terms"]
+        season = [t for t in cod if t["term"] == "season"][0]
+        self.assertTrue(season["value"].startswith("Nov–Apr"), season["value"])
+
+    def test_a_band_shows_both_pairs_and_not_just_the_plateau(self):
+        """The outer pair is where the term reaches zero and the inner pair is
+        the plateau. Showing one of them is how an envelope gets read as a
+        preference, which is the caution at the top of score.py."""
+        from tiderace import dossier
+        self.assertEqual(dossier._trapezoid_text((38, 47, 58, 68), "°F"),
+                         "38–68°F, best 47–58")
+
+    def test_the_offshore_terms_do_not_all_report_the_same_feature(self):
+        """`features` is the set a fish is tied to; the weights name the terms
+        computed from them. Printing the set against every term made bluefin's
+        thermal break and its structure read identically -- two different
+        measurements wearing one label."""
+        from tiderace import dossier
+        terms = {t["term"]: t["value"]
+                 for t in dossier.build("bluefin")["forecast"]["terms"]}
+        self.assertIn("front", terms)
+        self.assertIn("structure", terms)
+        self.assertNotEqual(terms["front"], terms["structure"])
+        self.assertIn("temperature break", terms["front"])
+        self.assertIn("shelf break", terms["structure"])
+        # A fish tied to no floating structure gets no convergence row rather
+        # than a row reporting somebody else's feature.
+        big = {t["term"] for t in dossier.build("bigeye")["forecast"]["terms"]}
+        self.assertNotIn("convergence", big)
+
+    def test_the_rules_are_the_same_tables_the_legal_strip_reads(self):
+        """Never paraphrased. Two descriptions of one size limit is how they
+        drift, and a wrong size limit is a fine rather than a bad forecast."""
+        from tiderace import dossier, regs
+        d = dossier.build("tautog")
+        self.assertEqual(d["rules"]["recreational"]["min_inches"],
+                         regs.RULES["tautog"].min_inches)
+        self.assertEqual(d["rules"]["commercial"]["limit"],
+                         regs.COMMERCIAL["tautog"].limit)
+        # A fish with no transcribed rule says so rather than showing blanks.
+        cod = dossier.build("cod")
+        self.assertIsNone(cod["rules"]["recreational"])
+        self.assertTrue(cod["rules"]["warning"],
+                        "no rule and no warning reads as 'no restrictions'")
+
+    def test_the_card_invents_no_regulatory_number(self):
+        """The species.py rule, applied to the new surface. Every size, season
+        and bag on a card has to come from regs.py or hms.py, so a number that
+        appears here and nowhere there would be one this app made up."""
+        from tiderace import dossier, regs, species as speciesmod
+        checked = 0
+        for sp in speciesmod.loggable():
+            r = dossier.build(sp.key)["rules"]
+            for label, rule in (("rec", r["recreational"]),
+                                ("com", r["commercial"])):
+                if rule is None:
+                    continue
+                table = (regs.RULES if label == "rec" else regs.COMMERCIAL)
+                self.assertIn(sp.key, table,
+                              "%s carries a %s rule no table holds" % (sp.key, label))
+                self.assertEqual(rule["min_inches"], table[sp.key].min_inches)
+                checked += 1
+        self.assertGreater(checked, 5, "only %d rules examined" % checked)
+
+
+class ReferencePhotos(unittest.TestCase):
+    """A photograph of the wrong animal on a card headed "Tautog" is worse
+    than no photograph, because a card is where somebody goes to check.
+
+    This project has made the mistake once and written it down -- whales.py:
+    "an earlier pass used 47178 for sharks and got mummichogs and gobies,
+    which is exactly the sort of wrong that looks fine in aggregate." It then
+    made it again here: matching "Monkfish" on its common name alone resolved
+    to *Lophiodes naresi*, an Indo-Pacific fish that also answers to
+    "Goosefish", where the document this project read says *Lophius
+    americanus*.
+
+    Hermetic: the suite stays stdlib-only and about a second, so every
+    response here is a stub. `tiderace species --photos` is what talks to
+    iNaturalist, and nothing on a forecast path ever does.
+    """
+
+    def _stub(self, results):
+        from tiderace import fishpic
+        calls = []
+
+        def fake(url, params):
+            calls.append((url, params))
+            return {"results": results}
+        return fishpic, fake, calls
+
+    def test_a_sourced_binomial_beats_a_common_name(self):
+        """The monkfish regression, pinned. Both taxa answer to "Goosefish";
+        only one of them is the fish in NMFS-NE-127."""
+        import unittest.mock as mock
+        from tiderace import fishpic, species
+        self.assertEqual(species.SCIENTIFIC["monkfish"], "Lophius americanus")
+        results = [
+            {"id": 1, "name": "Lophiodes naresi",
+             "preferred_common_name": "Goosefish"},
+            {"id": 2, "name": "Lophius americanus",
+             "preferred_common_name": "Goosefish"},
+        ]
+        _, fake, calls = self._stub(results)
+        with mock.patch.object(fishpic, "_get", fake), \
+                mock.patch.object(fishpic.time, "sleep", lambda *a: None):
+            hit = fishpic.resolve("Monkfish", ("goosefish",),
+                                  species.SCIENTIFIC["monkfish"])
+        self.assertEqual(hit["scientific"], "Lophius americanus")
+        self.assertEqual(hit["verified"], "scientific name")
+        # And without the binomial it takes the first common-name match,
+        # which is the wrong fish. That is the bug, reproduced.
+        _, fake2, _ = self._stub(results)
+        with mock.patch.object(fishpic, "_get", fake2), \
+                mock.patch.object(fishpic.time, "sleep", lambda *a: None):
+            loose = fishpic.resolve("Monkfish", ("goosefish",))
+        self.assertEqual(loose["scientific"], "Lophiodes naresi")
+        self.assertEqual(loose["verified"], "common name")
+
+    def test_a_genus_revision_still_resolves_and_says_so(self):
+        """NMFS-NE-146 calls the longfin squid *Loligo pealeii*; the current
+        combination is *Doryteuthis pealeii*. Matching the epithet finds it,
+        and the record says the genus moved rather than pretending it did
+        not."""
+        import unittest.mock as mock
+        from tiderace import fishpic, species
+        self.assertEqual(species.SCIENTIFIC["squid"], "Loligo pealeii")
+        _, fake, _ = self._stub([{"id": 9, "name": "Doryteuthis pealeii",
+                                  "preferred_common_name": "Longfin Squid"}])
+        with mock.patch.object(fishpic, "_get", fake), \
+                mock.patch.object(fishpic.time, "sleep", lambda *a: None):
+            hit = fishpic.resolve("Longfin Squid", (), "Loligo pealeii")
+        self.assertEqual(hit["scientific"], "Doryteuthis pealeii")
+        self.assertIn("genus revised", hit["verified"])
+
+    def test_a_taxon_whose_own_name_does_not_match_is_refused(self):
+        """iNaturalist's match is against the string we sent, not against the
+        taxon. A result that does not call itself what we asked for is not an
+        answer, and no photo is a fine outcome."""
+        import unittest.mock as mock
+        from tiderace import fishpic
+        _, fake, _ = self._stub([{"id": 3, "name": "Pollachius pollachius",
+                                  "preferred_common_name": "European Pollack"}])
+        with mock.patch.object(fishpic, "_get", fake), \
+                mock.patch.object(fishpic.time, "sleep", lambda *a: None):
+            self.assertIsNone(fishpic.resolve("Longfin Squid", ()))
+
+    def test_only_creative_commons_photos_are_kept(self):
+        """These are somebody's photographs. This repository is AGPL and
+        somebody else may run it, so shipping an all-rights-reserved image
+        would be the same class of mistake as inventing a size limit."""
+        from tiderace import fishpic
+        for code in fishpic.OPEN_LICENCES:
+            got = fishpic._photo_of({"default_photo": {
+                "license_code": code, "medium_url": "http://x/y.jpg",
+                "attribution": "(c) somebody", "id": 1}})
+            self.assertIsNotNone(got, code)
+            self.assertEqual(got["licence"], code)
+        for code in (None, "", "c", "all rights reserved"):
+            self.assertIsNone(fishpic._photo_of({"default_photo": {
+                "license_code": code, "medium_url": "http://x/y.jpg"}}), code)
+        self.assertNotIn(None, fishpic.OPEN_LICENCES)
+
+    def test_a_photo_never_reaches_a_card_without_its_credit(self):
+        """Attribution is the licence's one condition, not decoration."""
+        import unittest.mock as mock
+        from tiderace import dossier, fishpic
+        man = {"tautog": {"file": "tautog.jpg", "scientific": "Tautoga onitis",
+                          "attribution": "(c) somebody, CC BY-NC",
+                          "licence": "cc-by-nc", "verified": "scientific name"}}
+        with mock.patch.object(fishpic, "load", lambda: man), \
+                mock.patch.object(fishpic.os.path, "exists", lambda p: True):
+            d = dossier.build("tautog")
+        self.assertTrue(d["photo"]["credit"])
+        self.assertIn("somebody", d["photo"]["credit"])
+        self.assertIn("cc-by-nc", d["photo"]["credit"])
+        # The binomial travels with it, because a wrong fish has to be
+        # something a person can see rather than something buried in a cache.
+        self.assertEqual(d["photo"]["scientific"], "Tautoga onitis")
+
+    def test_no_photo_says_which_kind_of_no(self):
+        """Three different absences, and a card that rendered them the same
+        would turn "we could not be sure" into "nothing here"."""
+        import unittest.mock as mock
+        from tiderace import dossier, fishpic
+        cases = [
+            ({}, "not fetched yet"),
+            ({"resolved": False}, "no confident match"),
+            ({"resolved": True, "file": None}, "no Creative Commons"),
+        ]
+        for entry, expect in cases:
+            with mock.patch.object(fishpic, "load", lambda e=entry: {"tautog": e}):
+                d = dossier.build("tautog")
+            self.assertIsNone(d["photo"])
+            self.assertIn(expect, d["unavailable"]["photo"], entry)
+
+    def test_the_card_says_why_there_is_no_photo(self):
+        """Nine of thirty-seven have none: five could not be matched with
+        confidence and four have only an all-rights-reserved photograph. A
+        blank where the reason lives reads as "we did not bother"."""
+        import pathlib
+        desk = strip_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "web" / "desk.html").read_text())
+        fish = desk.split("async fish()")[1].split("\n  async ")[0]
+        self.assertIn("unavailable.photo", fish)
+        self.assertIn("no photo —", fish)
+        # And the binomial it matched on rides with the image, because a wrong
+        # fish has to be visible.
+        self.assertIn("d.photo.scientific", fish)
+        self.assertIn("d.photo.verified", fish)
+
+    def test_the_photo_route_builds_no_path_from_the_request(self):
+        """Was `test_the_photo_route_serves_images_and_nothing_else`, which
+        pinned a `basename()` guard and an extension check.
+
+        CodeQL flagged that version on PR #3 as uncontrolled data in a path
+        expression. On the narrow point it was a false positive -- basename()
+        cannot traverse -- but "basename cannot traverse" is an argument a
+        reader has to follow and re-verify every time the line moves, and the
+        manifest living in the same directory needed a SECOND guard to stay
+        unreachable. Looking the species key up in the manifest and building
+        the path from the filename stored there removes both: the only
+        reachable files are ones the fetch wrote.
+        """
+        import pathlib
+        server = strip_py_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "server.py").read_text())
+        route = server.split('url.path.startswith("/species-photo/")')[1]
+        route = route.split('if url.path == "/api/dossier"')[0]
+        self.assertIn("fishpic.photo_path(url.path)", route)
+        self.assertNotIn("os.path.join", route,
+                         "the route is assembling a path out of the request "
+                         "again")
+        self.assertNotIn("PHOTO_DIR", route)
+
+    def test_only_files_the_fetch_wrote_down_are_reachable(self):
+        """The functional half, driven through the real resolver. A traversal
+        is the obvious case; the manifest sharing the directory is the one
+        that actually needed fixing, and a species with no photo must not
+        resolve to a path either."""
+        import unittest.mock as mock
+        from tiderace import fishpic
+        man = {"tautog": {"file": "tautog.jpg"},
+               "bluefin": {"resolved": False}}
+        with mock.patch.object(fishpic, "load", lambda: man):
+            ok = fishpic.photo_path("/species-photo/tautog.jpg")
+            self.assertTrue(ok.endswith("tautog.jpg"))
+            self.assertIn(fishpic.PHOTO_DIR, ok)
+            for bad in ("/species-photo/manifest.json",
+                        "/species-photo/../../../etc/passwd",
+                        "/species-photo/%2e%2e%2fetc%2fpasswd",
+                        "/species-photo/..",
+                        "/species-photo/",
+                        "/species-photo/bluefin.jpg",      # matched, no photo
+                        "/species-photo/tautog.jpg/../../x",
+                        ""):
+                self.assertIsNone(fishpic.photo_path(bad), bad)
+        # And the name that comes back is the manifest's, not the request's:
+        # asking for a key whose stored file differs must serve the stored one.
+        with mock.patch.object(fishpic, "load",
+                               lambda: {"tautog": {"file": "tautog.png"}}):
+            self.assertTrue(
+                fishpic.photo_path("/species-photo/tautog.jpg").endswith(".png"),
+                "the path followed the request instead of the manifest")
+
+    def test_hms_binomials_are_not_written_down_twice(self):
+        """hms.py transcribed a binomial for every federally managed fish
+        when it transcribed their rules. Repeating them in species.py would
+        be a name that can disagree with itself, so `scientific()` reads
+        through to hms rather than duplicating."""
+        from tiderace import hms, species
+        found = 0
+        for key in ("bluefin", "albacore", "swordfish"):
+            self.assertNotIn(key, species.SCIENTIFIC,
+                             "%s is written down in two places" % key)
+            self.assertEqual(species.scientific(key),
+                             hms.status(key)["scientific"])
+            found += 1
+        self.assertEqual(found, 3)
+        # And a fish nothing has a name for gets an empty string, never a
+        # guess, so the lookup falls back to a labelled common-name match.
+        self.assertEqual(species.scientific("spanish_mackerel"), "")
+
+    def test_every_sourced_binomial_looks_like_one(self):
+        """Genus capitalised, epithet not, two words. A typo here sends the
+        lookup somewhere else entirely, and the fallback would then quietly
+        take over."""
+        import re
+        from tiderace import species
+        self.assertGreater(len(species.SCIENTIFIC), 10)
+        for key, name in species.SCIENTIFIC.items():
+            self.assertIsNotNone(species.get(key), "%s is not a species" % key)
+            self.assertRegex(name, r"^[A-Z][a-z]+ [a-z]+$", "%s: %r" % (key, name))
+
+    def test_nothing_on_a_forecast_path_calls_inaturalist(self):
+        """Thirty-seven round trips at a polite one per second. A boat asking
+        for a forecast must never wait on it, and `tiderace species --photos`
+        is the only thing that should reach the network here."""
+        import pathlib
+        root = pathlib.Path(__file__).parent / "tiderace"
+        for name in ("score.py", "prospect.py", "heat.py", "features.py",
+                     "server.py", "survey.py"):
+            src = strip_py_comments((root / name).read_text())
+            self.assertNotIn("fishpic.fetch_all", src, name)
+            self.assertNotIn("fishpic.resolve", src, name)
 
 
 class ProspectedCandidates(unittest.TestCase):

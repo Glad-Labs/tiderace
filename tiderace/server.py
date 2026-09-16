@@ -735,6 +735,45 @@ class Handler(BaseHTTPRequestHandler):
                     "attribution": "© <a href=\"https://protomaps.com\">Protomaps</a> "
                                    "© <a href=\"https://openstreetmap.org\">OpenStreetMap</a>",
                 })
+            if url.path.startswith("/species-photo/"):
+                # Somebody else's photograph, served from the gitignored cache
+                # rather than hotlinked: the app has to work on a boat with no
+                # signal, and hotlinking would also tell iNaturalist which
+                # fish Matt looks up.
+                from . import fishpic
+                # No path is built from the request. `photo_path` takes the
+                # species key out of it, looks that up in the manifest, and
+                # builds the path from the filename the fetch stored -- so the
+                # only reachable files are ones this app wrote, the manifest
+                # beside them is unreachable by construction rather than by an
+                # extension check, and there is no tainted component to reason
+                # about.
+                path = fishpic.photo_path(url.path)
+                if path is None or not os.path.exists(path):
+                    return self._send_json({"error": "no photo"}, 404)
+                with open(path, "rb") as fh:
+                    blob = fh.read()
+                self.send_response(200)
+                self.send_header("Content-Type",
+                                 "image/png" if path.endswith(".png") else "image/jpeg")
+                self.send_header("Content-Length", str(len(blob)))
+                # Immutable by construction: the filename is the species key
+                # and the file only changes when somebody re-runs the fetch.
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.end_headers()
+                return self.wfile.write(blob)
+            if url.path == "/api/dossier":
+                # Everything the app claims about ONE fish. A separate path
+                # rather than /api/species/<key>: this router is a chain of
+                # `if url.path == ...` and `startswith`, and a prefix route
+                # added beside an exact one has silently shadowed an older
+                # route three times in this project already.
+                from . import dossier as dossiermod
+                key = q.get("species", [""])[0]
+                try:
+                    return self._send_json(dossiermod.build(key))
+                except ValueError as exc:
+                    return self._send_json({"error": str(exc)}, 404)
             if url.path == "/api/species":
                 # Two lists, because they answer different questions: what the
                 # forecast can rank, and what the log will accept. Collapsing

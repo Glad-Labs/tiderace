@@ -215,6 +215,69 @@ SPECIES: tuple[Species, ...] = (
 BY_KEY = {s.key: s for s in SPECIES}
 
 
+# ---------------------------------------------------------------- binomials
+#
+# Only where a document this project has actually read prints the name on its
+# own title page or in its own text. Not a complete list, and deliberately so:
+# a binomial typed from memory is the same class of thing as a size limit
+# typed from memory, and this file's whole rule is that it does not do that.
+#
+# The reason they are here at all is a wrong fish. `fishpic.resolve` looks a
+# species up on iNaturalist to find a reference photograph, and matching on
+# the common name alone resolved "Monkfish" to *Lophiodes naresi* -- an
+# Indo-Pacific fish that also carries the common name "Goosefish". It looked
+# entirely fine. It is the same failure `whales.py` records: "an earlier pass
+# used 47178 for sharks and got mummichogs and gobies, which is exactly the
+# sort of wrong that looks fine in aggregate."
+#
+# So where the name is known from a document, the lookup must match THAT and
+# nothing else. Where it is not known, the lookup falls back to a verified
+# common-name match, records which of the two it used, and the card prints the
+# binomial it landed on so a person can see a wrong one.
+#
+# Sources are the NOAA NEFSC Essential Fish Habitat source documents read on
+# 2026-09-16 (title pages), plus the names already carried in score.py and
+# pelagic.py for bands cited there.
+SCIENTIFIC: dict[str, str] = {
+    # EFH source-document title pages, read 2026-09-16.
+    "tautog": "Tautoga onitis",                     # NMFS-NE-118
+    "monkfish": "Lophius americanus",               # NMFS-NE-127 ("Goosefish")
+    "cod": "Gadus morhua",                          # NMFS-NE-124
+    "haddock": "Melanogrammus aeglefinus",          # NMFS-NE-128
+    "pollock": "Pollachius virens",                 # NMFS-NE-131
+    "red_hake": "Urophycis chuss",                  # NMFS-NE-133
+    "winter_flounder": "Pseudopleuronectes americanus",   # NMFS-NE-138
+    "squid": "Loligo pealeii",                      # NMFS-NE-146
+    "scup": "Stenotomus chrysops",                  # NMFS-NE-149
+    "fluke": "Paralichthys dentatus",               # NMFS-NE-151
+    "black_sea_bass": "Centropristis striata",      # NMFS-NE-200
+    "dogfish": "Squalus acanthias",                 # NMFS-NE-203
+    # Already carried elsewhere in this project for a cited band.
+    "menhaden": "Brevoortia tyrannus",              # species notes, [ASMFC-MEN]
+    "striped_searobin": "Prionotus evolans",        # [SEAROBIN]
+    "mahi": "Coryphaena hippurus",                  # pelagic.py, [SAFMC-DW]
+    "mako": "Isurus oxyrinchus",                    # pelagic.py, Vaudo et al.
+    "wahoo": "Acanthocybium solandri",              # pelagic.py, [SAFMC-DW]
+}
+
+
+def scientific(key: str) -> str:
+    """The binomial for a fish, from wherever this project already holds one.
+
+    `hms.py` transcribed one for every federally managed species when it
+    transcribed their rules, so those are not repeated in the table above --
+    a name written twice is a name that can disagree with itself. This is the
+    single lookup; `fishpic` uses it and nothing else does.
+    """
+    if key in SCIENTIFIC:
+        return SCIENTIFIC[key]
+    try:
+        from . import hms
+        return hms.status(key).get("scientific") or ""
+    except Exception:                                             # noqa: BLE001
+        return ""
+
+
 def get(key: str) -> Species | None:
     return BY_KEY.get(key)
 
