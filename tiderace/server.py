@@ -116,8 +116,9 @@ def build_grid(species: str, start: datetime, hours: int = 48,
     #
     # The positions are the system's, not a list: prospect.candidates_for
     # finds structure in the charted soundings and gates it for the species
-    # (fishable depth, the published depth band where one exists, and the
-    # bridges for the two fall-run fish), then appends your marks. An unscored
+    # (fishable depth, the published depth band where one exists, the charted
+    # seabed where the species' source names one, and the bridges for the two
+    # fall-run fish), then appends your marks. An unscored
     # fish gets the ungated structure plus the marks, and `features.build`
     # is passed species=None, which is what skips the bait, bird and
     # thermal-season work that only means something with a profile.
@@ -152,6 +153,9 @@ def build_grid(species: str, start: datetime, hours: int = 48,
         if not times:
             times = [r["time"].isoformat() for r in rows]
 
+        # Resolved once and used twice -- the noun on the card and the
+        # verdict beside it have to be about the same sample.
+        _bottom = charts.bottom_at(spot.lat, spot.lon)
         # No name. The position is what the ranking reports, and `label` is
         # the position formatted once, server-side, so every list and card
         # prints the same string for the same water.
@@ -161,7 +165,16 @@ def build_grid(species: str, start: datetime, hours: int = 48,
             "kind": spot.kind, "notes": spot.notes, "best_stage": spot.best_stage,
             "prior": spot.prior(species) if modelled else None,
             "depth_ft": spot.depth_ft,
-            "bottom": charts.bottom_at(spot.lat, spot.lon),
+            "bottom": _bottom,
+            # What this fish's source makes of that seabed. The card needs
+            # the verdict and not just the noun: "mud" under a tautog is only
+            # alarming if you know a tautog paper says hard bottom, and the
+            # person holding the phone is on a boat, not in score.py. The
+            # phrase is the server's, from `score.bottom_verdict`, so the desk
+            # card and the conditions sheet cannot word it differently.
+            "bottom_verdict": (score.bottom_verdict(
+                (_bottom or {}).get("bottom"), score.PROFILES[species])
+                if modelled else None),
             # Empty, not zero. A spot with no score is not a bad spot.
             "scores": [r["score"] for r in results] if modelled else [None] * len(rows),
             "detail": [{
@@ -194,6 +207,16 @@ def build_grid(species: str, start: datetime, hours: int = 48,
         # biology from wherever the species was studied. The card prints it.
         "basis": (score.PROFILES[species].basis if modelled else None),
         "basis_claim": (score.PROFILES[species].basis_claim if modelled else None),
+        # The sentence behind the verdict, carried the same way `basis_claim`
+        # carries the tier: a verdict on a card with no way to see what it
+        # rests on is the thing this project keeps refusing to ship.
+        "bottom_claim": (score.PROFILES[species].bottom_claim
+                         if modelled and score.PROFILES[species].bottom else None),
+        # The one verdict the card colours, sent as the exact string rather
+        # than left for the page to recognise by regex. A phrase matched by
+        # pattern in one file and written in another is two files that have to
+        # be edited together and only one that fails when they are not.
+        "bottom_mismatch": score.BOTTOM_MISMATCH,
         **_rules(species, start),
         "notes": (score.PROFILES[species].notes if modelled
                   else (speciesmod.get(species).notes or "")),

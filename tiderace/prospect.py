@@ -36,8 +36,9 @@ Two questions instead, which is how the decision is actually made:
               -- coarse, 1 to 6 km, identical everywhere in the box
 
     SPOT      where in it do I put the boat?
-              relief, depth, drop, distance to charted structure
-              -- fine, metres, and the only thing that varies
+              relief, depth, drop, distance to charted structure, and the
+              charted seabed type -- fine, metres to a few hundred metres,
+              and the only thing that varies
 
 The ranking is by structure, because structure is the only input that
 distinguishes one coordinate from its neighbour. The area score decides
@@ -52,6 +53,14 @@ which species' published band the depth falls in, and what that band actually
 claims. Twelve of the fourteen have no band and appear on no bump; see
 `score.PROFILES` for which source was consulted for each and what it said --
 several of those twelve are refusals with a reason, not gaps.
+
+Substrate, 2026-09-16, is the other half of that and behaves differently:
+it does not label, it GATES. The seabed is the only fine-scale input in this
+project that says which *fish* a bump is for rather than how good a bump it
+is, so a candidate whose charted seabed is one this species' source never
+names is dropped rather than ranked low -- see `candidates_for`. Seven of the
+twenty-two profiles carry a cited preference; the rest have no opinion and
+gate on nothing. `score.bottom_fit` is the single place the arithmetic lives.
 """
 
 from __future__ import annotations
@@ -72,7 +81,18 @@ def _area(lat: float, lon: float, species: str, when: datetime,
         spot, res = spots.at_coord(lat, lon, resolution=res)
         rows = features.build(spot, when, 1, 60, species=species)
         row = rows[0] if rows else {}
-        sc = score.score(species, row, exposed=row.get("exposed", False),
+        # `bottom=None` on purpose, and it is the one deliberate blinding in
+        # this module. features.build resolves the charted seabed under the
+        # box's MIDPOINT, and the seabed is the one input here that varies at
+        # the scale of a drift -- 460 m between ENC samples. Letting the
+        # midpoint's substrate into a number this module promises is "one
+        # number for the whole box" would be precisely the fake precision the
+        # header argues against, and it would do it with the sharpest datum
+        # available. None scores `score.BOTTOM_UNKNOWN`, a declared constant,
+        # identical in every box. The seabed reaches the answer per prospect,
+        # below, where it belongs.
+        sc = score.score(species, dict(row, bottom=None),
+                         exposed=row.get("exposed", False),
                          prior=spot.prior(species), best_stage=spot.best_stage)
         out["score"] = sc["score"]
         out["terms"] = sc.get("terms", {})
@@ -162,6 +182,13 @@ def _why(bump: dict, area: dict) -> list[str]:
     elif bump.get("charted_hazard_m") is not None:
         out.append("%.0f m from a charted hazard, so probably already known"
                    % bump["charted_hazard_m"])
+    if bump.get("bottom"):
+        out.append("charted %s%s — the one fine-scale reading here that is not"
+                   " the depth" % (bump["bottom"],
+                   "" if bump.get("bottom_nm") is None
+                   else ", %.2f nm off" % bump["bottom_nm"]))
+    else:
+        out.append("no charted seabed sample within reach of this position")
 
     # Everything below is the area, not the spot, and is labelled that way.
     if area.get("current_speed") is not None:
@@ -268,6 +295,13 @@ def best(bbox, species: str = "striped_bass", n: int = 61,
 
     ranked = []
     for c in out.get("prospects", []):
+        # The substrate gate, on the same terms as `candidates_for`. If the
+        # two disagreed, the map and this endpoint would offer different
+        # coordinates for the same fish in the same box, and only one of them
+        # could be reading the document.
+        if prof.bottom and score.bottom_fit(
+                c.get("bottom"), prof) <= score.BOTTOM_UNLISTED:
+            continue
         fit = None
         if banded:
             hit = [d for d in (c.get("depth_suits") or [])
@@ -337,6 +371,14 @@ def best(bbox, species: str = "striped_bass", n: int = 61,
 #                       index finds are rocks awash -- 27 ft of relief with a
 #                       top at 0.3 ft -- and a chart exists to keep you off
 #                       those, which is exactly why they are so well sounded.
+#   charted seabed      for the seven species whose source names a substrate.
+#                       Before this gate existed the tautog list and the
+#                       striped bass list were the same thirty coordinates,
+#                       ten of them on charted mud or sand, because relief was
+#                       the only thing about the bottom that reached the
+#                       answer. A candidate the chart says is sand is not a
+#                       tautog candidate. A candidate the chart says NOTHING
+#                       about still is -- see score.BOTTOM_UNKNOWN.
 #   published band      fluke and black sea bass carry a cited depth band
 #                       (score.PROFILES). A bump outside it is not a candidate
 #                       for THAT fish. Twelve species have no band and get no
@@ -394,6 +436,15 @@ def _describe(b: dict) -> str:
         bits.append("no charted rock, wreck or obstruction within 100 m")
     elif b.get("charted_hazard_m") is not None:
         bits.append("%.0f m from a charted hazard" % b["charted_hazard_m"])
+    if b.get("bottom"):
+        bits.append("charted %s%s" % (b["bottom"],
+                    "" if b.get("bottom_nm") is None
+                    else " %.2f nm off" % b["bottom_nm"]))
+    else:
+        # Said out loud rather than left blank. A candidate with no seabed
+        # sample near it passed the gate on the absence of evidence, and the
+        # card should not let that read as "clean rock".
+        bits.append("no charted seabed sample within reach")
     bits.append("from %d soundings about %.0f m apart" % (b.get("neighbours", 0),
                                                           b.get("spacing_m") or 0))
     return ". ".join(bits) + "."
@@ -423,6 +474,26 @@ def candidates_for(species: str | None, limit: int = CANDIDATE_LIMIT,
             # Inside the published band or nothing: a fluke candidate at 9 ft
             # would be the scorer contradicting the paper it cites.
             bumps = inband
+        if prof is not None and prof.bottom:
+            # Same argument, one tier coarser. A tautog candidate on charted
+            # sand is the scorer contradicting [EFH-TOG p.5], which says hard
+            # substrate is required -- so it is not a candidate for THIS fish,
+            # however good the bump is.
+            #
+            # The gate is UNLISTED and not some new threshold: a substrate the
+            # profile names at all survives, even named low, and only a
+            # substrate the document never names is dropped. An UNCHARTED
+            # candidate survives too, and that is the important half -- 27% of
+            # the ENC seabed points carry no type, `bottom_at` gives up beyond
+            # 0.35 nm, and dropping those would delete every candidate in the
+            # unsurveyed parts of the bay on the strength of no evidence.
+            #
+            # This runs BEFORE the truncation to `limit`, which is the whole
+            # point: it does not merely reorder the top thirty by relief, it
+            # promotes hard-bottom bumps from further down the list of 120.
+            bumps = [b for b in bumps
+                     if score.bottom_fit(b.get("bottom"), prof)
+                     > score.BOTTOM_UNLISTED]
         bumps = bumps[:limit]
         out = []
         for b in bumps:

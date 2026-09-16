@@ -48,6 +48,15 @@ what distinguishes one coordinate from its neighbour. Only two of the fourteen
 scored species have a depth band at all, so an empty `depth_suits` means
 nothing published reaches this depth rather than nothing lives here.
 
+And since 2026-09-16 every candidate reports `bottom`: the nearest charted ENC
+seabed type, with the distance to it. Relief says a fish could hold here; the
+seabed says WHICH fish, and without it this module was handing a tautog and a
+fluke the same list -- ten of the thirty tautog candidates were on charted mud
+or sand the day it was measured. It is a label like `depth_suits` and it does
+not reorder anything here; what reads it is `score.bottom_fit`, which weights
+it, and `prospect.candidates_for`, which gates on it. None is a real answer
+and means "nobody charted it", never "it is sand".
+
 The point of the list is that it is falsifiable. Go, drift it, log what
 happens. That is the loop the whole project is short of.
 """
@@ -250,6 +259,18 @@ def depth_suits(depth_ft) -> list[dict]:
     return out
 
 
+def _bottom_at(lat: float, lon: float):
+    """Nearest charted seabed sample, or None. Imported late for the same
+    reason `depth_suits` imports `score` late: `charts` is about fetching and
+    this module is about arithmetic over what was fetched, and a top-level
+    import would make the cycle real."""
+    try:
+        from . import charts
+        return charts.bottom_at(lat, lon)
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def annotate(cands: list[dict]) -> list[dict]:
     """How close each candidate sits to something already on the chart.
 
@@ -279,6 +300,21 @@ def annotate(cands: list[dict]) -> list[dict]:
         # band. This says nothing about the relief above it -- a bump is
         # structure, and structure is the thing this module measures.
         c["depth_suits"] = depth_suits(c.get("depth_ft"))
+        # And what the bump is MADE of, which is the other half of the
+        # question and was missing until 2026-09-16. Relief says a fish could
+        # hold here; the seabed says whether the fish that holds on relief is
+        # the one being asked about. A tautog wants the rock, a fluke wants
+        # the sand beside it, and until this line the two were sent to the
+        # same thirty coordinates.
+        #
+        # Absent stays absent. 27% of the ENC seabed points carry no type, and
+        # `bottom_at` returns None beyond 0.35 nm as well; None means "nobody
+        # charted it", which `score.bottom_fit` scores as UNKNOWN and the
+        # candidate gate keeps. Defaulting it to anything would invent a
+        # seabed for a quarter of the bay.
+        b = _bottom_at(c["lat"], c["lon"])
+        c["bottom"] = (b or {}).get("bottom")
+        c["bottom_nm"] = (b or {}).get("distance_nm")
     return cands
 
 

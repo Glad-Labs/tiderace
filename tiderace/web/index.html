@@ -422,6 +422,14 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 .srow .v{flex:1; font:600 19px/1.15 var(--display); color:var(--ink);
          font-variant-numeric:tabular-nums}
 .srow .v small{font:11px/1 var(--mono); color:var(--muted); font-weight:400}
+/* The sub on its own line, full width. `flex-basis:100%` on a flex child and
+   not `display:block`, because .srow is a flex row and a block child would
+   simply become a fourth column with nothing left to occupy. */
+.srow.wide{flex-wrap:wrap}
+.srow.wide .sub{
+  flex-basis:100%; font:11px/1.4 var(--mono); color:var(--muted);
+  margin-top:3px;
+}
 /* A value the slider cannot move, shown while the slider is away from now. */
 /* The marine forecast is a paragraph, not a number, so it does not get the
    big tabular treatment the readings do. */
@@ -540,6 +548,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
   .srow .k{font-size:14px; width:36%}
   .srow .v{font-size:22px}
   .srow .v small{font-size:13px}
+  .srow.wide .sub{font-size:13px}
   .sgroup{font-size:12px; letter-spacing:.18em; padding:16px 16px 6px}
   .srule{font-size:14px; line-height:1.6}
   .sdim{font-size:13px; line-height:1.65}
@@ -1409,10 +1418,40 @@ function sparkline(scores){
   </svg>`;
 }
 
+/* The seabed, and the verdict on it.
+ *
+ * The row used to render only when a sample existed, so a position with no
+ * charted seabed showed no bottom line at all — and an absent line reads as
+ * "nothing to say here" when it means "nobody surveyed this". That is the
+ * same failure as the blank legal strip, which is why `paintLegal` prints its
+ * not-modelled banner rather than going quiet.
+ *
+ * `bottom_fit` is the server's, from score.bottom_fit, so the phone never
+ * does this arithmetic and cannot disagree with the gate that chose the
+ * position in the first place. null means the profile cites no substrate. */
+function bottomLine(sp){
+  const dim = t => `<span style="color:var(--muted)">${t}</span>`;
+  const v = sp.bottom_verdict || '';
+  // The one verdict worth a colour. Everything else is context; this is the
+  // app saying the ground under the boat is wrong for the fish in the picker.
+  // Compared to the server's own string, not matched by pattern: a phrase
+  // recognised here and written in score.py is two files that must be edited
+  // together, and only one of them fails when they are not.
+  const tail = v && (v === GRID.bottom_mismatch
+    ? ` <span style="color:var(--crit)">· ${tesc(v)}</span>`
+    : dim(' · ' + v));
+  if (!sp.bottom || !sp.bottom.bottom)
+    return dim('not charted within reach') + tail;
+  const b = sp.bottom;
+  return tesc(b.bottom) + (b.quality ? ' (' + tesc(b.quality) + ')' : '')
+       + dim(' · ' + b.distance_nm + ' nm') + tail;
+}
+
 function renderDetail(){
   if (!SEL){ $('#detail').innerHTML =
     `<p class="ph">Spot</p><p class="empty">The positions on the map are prospected from the
-     charted soundings for this fish — structure, gated for its depth — and ranked by the
+     charted soundings for this fish — structure, gated for its depth and for the
+     charted seabed its source names — and ranked by the
      water at the slider time. The brightest, biggest dot is the best of them and the
      numbers on the dots are the places in the list below; the colour fades as the
      positions rate worse. Pick one to see its conditions, its 48-hour curve, and to
@@ -1443,8 +1482,7 @@ function renderDetail(){
         <dt>moon</dt><dd>${d.moon_phase||'—'} ${d.moon_illum!=null?'('+Math.round(d.moon_illum*100)+'%)':''}</dd>
         <dt>tide</dt><dd>${d.next_tide||'—'}</dd>`}
         ${d.bait_note ? `<dt>bait</dt><dd style="color:#5FE3C0">${d.bait_note}</dd>` : ''}
-        ${sp.bottom ? `<dt>bottom</dt><dd>${sp.bottom.bottom}${sp.bottom.quality?' ('+sp.bottom.quality+')':''}
-           <span style="color:var(--muted)">· ${sp.bottom.distance_nm} nm</span></dd>` : ''}
+        ${GRID.offshore ? '' : `<dt>bottom</dt><dd>${bottomLine(sp)}</dd>`}
       </dl>
       <div class="why">${d.why||''}</div>
     </div>
@@ -3246,17 +3284,46 @@ window.surveyURL = (lat, lon) =>
   const esc = t => String(t == null ? '' : t)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
-  function row(k, v, res, sub, fixed){
+  /* `wide` puts the sub-text on its own full-width line instead of squeezing
+     it into the value column.
+
+     Measured 16 September 2026, because "it looks cramped" is not a reason
+     and the first two attempts at this were both wrong. The value column is
+     `flex:1` beside a 34% label and a resolution chip, which leaves it 134 px
+     on a 375 px phone and the sub-text 122 px. The seabed row's sub is
+     "0.17 nm · source does not name it" -- 33 characters of 11px mono, four
+     wrapped lines, a 322 px row against a 164 px next-tallest. Shortening the
+     wording twice got it to 243 px and was treating the symptom: the column
+     is the constraint, not the phrase. Wrapping the row gives the sub the
+     full width and the row comes back to the height of its neighbours. */
+  function row(k, v, res, sub, fixed, wide){
     // `fixed` marks a value that does not move with the slider -- an
     // observation, or something that simply is what it is. Without it a
     // reading taken now sits in a panel headed tomorrow and looks forecast.
-    return `<div class="srow${fixed && window.surveyAtTime ? ' fixed' : ''}">` +
+    const wrapped = wide && sub;
+    return `<div class="srow${fixed && window.surveyAtTime ? ' fixed' : ''}` +
+           `${wrapped ? ' wide' : ''}">` +
            `<div class="k">${esc(k)}</div>` +
-           `<div class="v">${esc(v)}${sub ? ` <small>${esc(sub)}</small>` : ''}` +
+           `<div class="v">${esc(v)}${sub && !wrapped ? ` <small>${esc(sub)}</small>` : ''}` +
            (fixed && window.surveyAtTime ? ' <small class="nowonly">now</small>' : '') +
-           `</div>` + resChip(res) + `</div>`;
+           `</div>` + resChip(res) +
+           (wrapped ? `<div class="sub">${esc(sub)}</div>` : '') + `</div>`;
   }
   const group = t => `<div class="sgroup">${esc(t)}</div>`;
+
+  /* Which fish the sheet is talking about. A `function` declaration and not a
+     const arrow on purpose: this file has twice taken the whole script down by
+     calling a const arrow from above its declaration, and `render` runs from a
+     fetch callback whose ordering is not obvious from reading downwards. A
+     hoisted function has no temporal dead zone to fall into.
+
+     GRID first because that is the forecast actually loaded; the picker is the
+     fallback for the moment before one is. */
+  function SPECIES(){
+    if (typeof GRID !== 'undefined' && GRID && GRID.species) return GRID.species;
+    const el = document.getElementById('species');
+    return el ? el.value : '';
+  }
 
   function render(d){
     const L = d.layers || {};
@@ -3294,9 +3361,25 @@ window.surveyURL = (lat, lon) =>
     // gave "[object Object]" on the phone. The distance matters: a rock
     // sounding a fifth of a mile away is a different claim from one underfoot.
     const bt = val('bottom');
+    // The row renders even with no sample, because an absent bottom line reads
+    // as "nothing to say about the ground here" when it means "nobody
+    // surveyed it" -- and the verdict beside the noun is the half that says
+    // whether this ground is for THIS fish.
+    //
+    // The survey carries a verdict for every fish that has one rather than
+    // for the one asked about, because `surveyURL` deliberately has no
+    // species in it: the dock bundle prefetches one URL per position and a
+    // tap on the water has to hit that key byte for byte. So the species is
+    // chosen here, from the picker, out of what the server already sent.
+    const fits = val('bottom_fit') || {};
+    const bnote = (fits[SPECIES()] || {}).verdict
+               || 'no substrate cited for this fish';
     if (bt && bt.bottom)
       h += row('bottom', bt.bottom, res('bottom'),
-               bt.distance_nm != null ? `nearest, ${bt.distance_nm} nm` : '');
+               (bt.distance_nm != null ? `${bt.distance_nm} nm · ` : '') + bnote,
+               false, true);
+    else
+      h += row('bottom', 'not charted here', res('bottom'), bnote, false, true);
     const st = val('structure') || {};
     const stk = Object.keys(st);
     if (stk.length)
