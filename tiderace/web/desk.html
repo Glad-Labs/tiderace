@@ -99,6 +99,47 @@ h2{font:600 13px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
   margin-right:6px;
 }
 .tag.hi{color:var(--good)} .tag.lo{color:var(--warn)}
+/* The species cards. The one visual job that matters is telling a cited band
+   from a hand-set prior at a glance: half of what this app knows about a
+   tautog comes out of a document with a page number and half is somebody's
+   judgement, and rendering the two identically would be the same failure as a
+   blank legal strip. */
+#fish .pick{
+  display:flex; flex-wrap:wrap; gap:6px; margin:0 0 16px;
+}
+#fish .pick button{
+  background:var(--panel); border:1px solid var(--hair); border-radius:999px;
+  color:var(--ink-2); font:12px/1 var(--mono); padding:8px 11px; cursor:pointer;
+}
+#fish .pick button.on{color:var(--ink); border-color:var(--accent)}
+#fish .pick button.un{color:var(--muted)}
+#fish h3{margin:0; font:700 25px/1.15 var(--display)}
+#fish .alias{margin:5px 0 0; font:12px/1.5 var(--mono); color:var(--muted)}
+#fish .term{border-top:1px solid rgba(39,64,72,.55); padding:11px 0 0; margin:11px 0 0}
+#fish .term:first-of-type{border-top:none}
+#fish .term summary{list-style:none; cursor:pointer;
+                    display:flex; align-items:baseline; gap:9px}
+#fish .term summary::-webkit-details-marker{display:none}
+#fish .tname{font:600 14px/1.3 var(--display); flex:none}
+#fish .twt{font:11px/1 var(--mono); color:var(--muted); flex:none;
+           font-variant-numeric:tabular-nums}
+#fish .tmark{margin-left:auto; font:10px/1 var(--mono); letter-spacing:.08em;
+             text-transform:uppercase; flex:none}
+#fish .tmark.cited{color:var(--good)}
+#fish .tmark.prior{color:var(--warn)}
+#fish .tval{margin:5px 0 0; font:12px/1.5 var(--mono); color:var(--ink-2)}
+#fish .tclaim{margin:8px 0 2px; font:12px/1.65 var(--mono); color:var(--muted);
+              border-left:2px solid var(--hair); padding-left:10px}
+/* Thin, because it is a weight and not a measurement. A fat bar beside an
+   unfitted prior would be the most confident thing on the page. */
+#fish .wbar{height:3px; border-radius:2px; background:var(--hair); margin:6px 0 0}
+#fish .wbar i{display:block; height:3px; border-radius:2px; background:var(--accent)}
+#fish .rule{display:flex; gap:12px; padding:9px 0;
+            border-top:1px solid rgba(39,64,72,.55); font:13px/1.5 var(--mono)}
+#fish .rule b{flex:none; width:104px; color:var(--muted); font-weight:400}
+#fish img.photo{width:100%; border-radius:10px; display:block; margin:0 0 9px;
+                background:var(--panel-2)}
+#fish .credit{margin:0 0 13px; font:10px/1.5 var(--mono); color:var(--muted)}
 .bar{height:7px; border-radius:4px; background:var(--hair); margin:10px 0}
 .bar i{display:block; height:100%; border-radius:4px; background:var(--accent)}
 a{color:var(--depth)}
@@ -117,6 +158,7 @@ a{color:var(--depth)}
   <button data-s="confirm">Confirm</button>
   <button data-s="regs">Regs</button>
   <button data-s="hms">HMS</button>
+  <button data-s="fish">Fish</button>
   <button data-s="sources">Sources</button>
 </nav>
 
@@ -126,6 +168,7 @@ a{color:var(--depth)}
   <section id="confirm"><div class="empty">reading…</div></section>
   <section id="regs"><div class="empty">reading…</div></section>
   <section id="hms"><div class="empty">reading…</div></section>
+  <section id="fish"><div class="empty">reading…</div></section>
   <section id="sources"><div class="empty">reading…</div></section>
 </main>
 
@@ -382,6 +425,127 @@ const RENDER = {
          the app mirrored it, and the link goes to the page it came from — check
          the one you are about to act on. When it says a rule is not modelled
          that is a fact about this app, not permission to keep the fish.</div>`;
+  },
+
+  /* The species cards.
+
+     Everything here already existed -- temp_claim, depth_claim, bottom_claim,
+     basis_claim, the bands, the rules -- and none of it reached the app. The
+     tautog temperature claim is 293 characters saying its warm edge is the
+     least defensible pair in score.py, and until this view you could read
+     that only by opening the source.
+
+     The desk and not the map, because this is reference material: nothing
+     here changes with the tide and none of it is something you do with a rod
+     in your hand. Same reason the log history and the HMS rules live here.
+
+     Claims are long, so each term is a <details>. The list of terms is the
+     glance; the sentence is there when you want to argue with it. `cited` vs
+     `prior` renders without a tap, because that is the one distinction the
+     whole page exists to make. */
+  async fish(){
+    const meta = await get('/api/species');
+    // A stable partition, not a sort. species.py orders this list "roughly by
+    // how often they turn up on a Narragansett Bay boat, because this list
+    // becomes a dropdown and the fish you catch weekly should not be below
+    // the one you catch once a decade" -- and an alphabetical sort threw that
+    // away and opened the page on albacore. Unscored fish go to the end;
+    // everything else keeps the order it arrived in.
+    const list = meta.loggable.filter(sp => sp.scored)
+                 .concat(meta.loggable.filter(sp => !sp.scored));
+    const pick = list.map(sp =>
+      `<button data-fish="${esc(sp.key)}"${sp.scored ? '' : ' class="un"'}>` +
+      `${esc(sp.name)}</button>`).join('');
+    $('#fish').innerHTML = `<h2>Every fish, and what the app claims about it</h2>
+      <div class="pick">${pick}</div><div id="fishcard"></div>`;
+    const buttons = [...document.querySelectorAll('#fish .pick button')];
+    const CARDS = {};
+    async function open(key){
+      buttons.forEach(b => b.classList.toggle('on', b.dataset.fish === key));
+      if (!CARDS[key]) CARDS[key] = await get('/api/dossier?species=' + encodeURIComponent(key));
+      $('#fishcard').innerHTML = card(CARDS[key]);
+    }
+    buttons.forEach(b => b.onclick = () => open(b.dataset.fish).catch(e =>
+      $('#fishcard').innerHTML = `<div class="empty">Could not load: ${esc(e.message)}</div>`));
+    await open(list[0].key);
+
+    function card(d){
+      const t = d.tiers || {};
+      const tag = (on, yes, no) =>
+        `<span class="tag ${on ? 'hi' : 'lo'}">${esc(on ? yes : no)}</span>`;
+      let h = '<div class="card">';
+      if (d.photo && d.photo.url){
+        h += `<img class="photo" src="${esc(d.photo.url)}" alt="${esc(d.name)}">`;
+        // Somebody else's photograph under a Creative Commons licence. The
+        // credit is a condition of using it, not decoration, so it renders
+        // with the image or the image does not render at all.
+        h += `<p class="credit">${esc(d.photo.credit || '')}</p>`;
+      }
+      h += `<h3>${esc(d.name)}</h3>`;
+      if ((d.aliases || []).length)
+        h += `<p class="alias">also called ${esc(d.aliases.join(', '))}</p>`;
+      // Spaces between them: .tag is inline-block with a right margin, and
+      // with no whitespace in the template they rendered as one run-on word.
+      h += '<p style="margin:12px 0 0">'
+         + tag(t.scored, 'forecast', 'no forecast') + ' '
+         + tag(t.regulated, 'rules transcribed', 'rules not modelled') + ' '
+         + `<span class="tag">${esc(d.hms ? 'federal · HMS' : d.group)}</span></p>`;
+      if (d.notes) h += `<p class="dim" style="margin:12px 0 0">${esc(d.notes)}</p>`;
+      h += '</div>';
+
+      const f = d.forecast;
+      if (f){
+        h += `<h2 style="margin-top:20px">What the forecast weights</h2>`;
+        h += `<div class="card"><p class="dim" style="margin:0 0 4px">`
+           + `${esc(f.scorer)} scorer · evidence: ${esc(f.basis)}`
+           + `${f.unvalidated ? ' · unvalidated here' : ''}</p>`;
+        // Bars are drawn against the heaviest term rather than against 1.0,
+        // so a fish whose largest weight is 0.26 does not render as a row of
+        // stubs that all look the same.
+        const top = Math.max(...f.terms.map(x => x.weight), 0.01);
+        for (const term of f.terms){
+          h += `<details class="term"><summary>`
+             + `<span class="tname">${esc(term.label)}</span>`
+             + `<span class="twt">${term.weight.toFixed(2)}</span>`
+             + `<span class="tmark ${term.cited ? 'cited' : 'prior'}">`
+             + `${term.cited ? 'cited' : 'prior'}</span></summary>`
+             + `<div class="wbar"><i style="width:${Math.round(term.weight / top * 100)}%"></i></div>`
+             + `<p class="tval">${esc(term.value)}</p>`
+             + (term.claim ? `<p class="tclaim">${esc(term.claim)}</p>` : '')
+             + `</details>`;
+        }
+        if (f.basis_claim) h += `<p class="tclaim">${esc(f.basis_claim)}</p>`;
+        h += `<p class="tclaim">${esc(f.weights_note)}</p></div>`;
+      } else if (d.unavailable && d.unavailable.forecast){
+        h += `<h2 style="margin-top:20px">No forecast</h2>`;
+        // The refusal in the scorer's own words. Somebody looked, and that is
+        // a stronger answer than a blank.
+        h += `<div class="card"><p class="tclaim" style="margin:0">`
+           + `${esc(d.unavailable.forecast)}</p></div>`;
+      }
+
+      const r = d.rules || {};
+      h += `<h2 style="margin-top:20px">Rules</h2><div class="card">`;
+      if (r.warning) h += `<p class="tclaim" style="margin-top:0">${esc(r.warning)}</p>`;
+      let any = false;
+      for (const [label, rule] of [['recreational', r.recreational],
+                                   ['commercial', r.commercial]]){
+        if (!rule) continue;
+        any = true;
+        const bits = [];
+        if (rule.min_inches) bits.push('min ' + rule.min_inches + '"');
+        if (rule.max_inches) bits.push('max ' + rule.max_inches + '"');
+        if (rule.bag) bits.push(rule.bag);
+        if (rule.limit) bits.push(rule.limit);
+        (rule.open_periods || []).forEach(p => bits.push('open ' + p));
+        if (rule.note) bits.push(rule.note);
+        h += `<div class="rule"><b>${esc(label)}</b><span>${esc(bits.join(' · '))}</span></div>`;
+      }
+      if (!any && !r.warning)
+        h += `<p class="tclaim" style="margin-top:0">No rule transcribed for this fish.</p>`;
+      if (r.note) h += `<p class="tclaim">${esc(r.note)}</p>`;
+      return h + '</div>';
+    }
   },
 
   async sources(){

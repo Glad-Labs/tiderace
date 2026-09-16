@@ -735,6 +735,18 @@ class Handler(BaseHTTPRequestHandler):
                     "attribution": "© <a href=\"https://protomaps.com\">Protomaps</a> "
                                    "© <a href=\"https://openstreetmap.org\">OpenStreetMap</a>",
                 })
+            if url.path == "/api/dossier":
+                # Everything the app claims about ONE fish. A separate path
+                # rather than /api/species/<key>: this router is a chain of
+                # `if url.path == ...` and `startswith`, and a prefix route
+                # added beside an exact one has silently shadowed an older
+                # route three times in this project already.
+                from . import dossier as dossiermod
+                key = q.get("species", [""])[0]
+                try:
+                    return self._send_json(dossiermod.build(key))
+                except ValueError as exc:
+                    return self._send_json({"error": str(exc)}, 404)
             if url.path == "/api/species":
                 # Two lists, because they answer different questions: what the
                 # forecast can rank, and what the log will accept. Collapsing

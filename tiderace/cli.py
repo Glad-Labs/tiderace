@@ -241,6 +241,12 @@ def run(argv=None) -> int:
     ch = sub.add_parser("charts", help="download NOAA chart features (rocks, wrecks, bottom)")
     ch.add_argument("--bbox", help="xmin,ymin,xmax,ymax (default: Narragansett Bay)")
 
+    sc = sub.add_parser("species", help="the card for one fish — bands, rules, "
+                                        "and what each claim rests on")
+    sc.add_argument("name", nargs="?", help="species key or anything you'd call it")
+    sc.add_argument("--all", action="store_true",
+                    help="list every loggable fish and which tiers it reaches")
+
     sv = sub.add_parser("serve", help="run the local map UI")
     sv.add_argument("--port", type=int, default=8765)
     sv.add_argument("--host", default="127.0.0.1")
@@ -251,6 +257,8 @@ def run(argv=None) -> int:
     ap.add_argument("--list-spots", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
+    if args.cmd == "species":
+        return _cmd_species(args)
     if args.cmd == "spots":
         return _cmd_spots(args)
     if args.cmd == "amend":
@@ -358,6 +366,149 @@ def _cmd_amend(args) -> int:
         print("    (already said that; nothing changed)")
     print(f"  backup at {catchlog.LOG_PATH}.bak")
     return 0
+
+
+def _cmd_species(args) -> int:
+    """Everything the app claims about one fish, and what each claim rests on.
+
+    The point of the layout is the CITED column. Half of what this app knows
+    about a tautog comes out of a document with a page number and half is
+    somebody's judgement, and until this command existed both halves rendered
+    as the same confident tuple in the same source file.
+    """
+    from . import dossier, species as speciesmod
+    if args.all or not args.name:
+        print()
+        print(f"  {'KEY':<22}{'NAME':<28}{'GROUP':<11}TIERS")
+        print("  " + "─" * 92)
+        for sp in speciesmod.loggable():
+            tiers = " · ".join(t for t, on in (("scored", sp.scored),
+                                               ("regulated", sp.regulated),
+                                               ("HMS", sp.hms)) if on) or "loggable only"
+            print(f"  {sp.key:<22}{sp.name[:26]:<28}{sp.group:<11}{tiers}")
+        print()
+        print("  tiderace species <name>   for one fish")
+        print()
+        return 0
+
+    key = speciesmod.resolve(args.name) or args.name
+    try:
+        d = dossier.build(key)
+    except ValueError:
+        print(f"\n  no fish called {args.name!r}. `tiderace species --all` lists them.\n")
+        return 1
+
+    w = 92
+    print()
+    print(f"  {d['name'].upper()}   —   {d['group']}")
+    if d["aliases"]:
+        print(f"  also called: {', '.join(d['aliases'])}")
+    tiers = d["tiers"]
+    print("  " + " · ".join(
+        ("forecast" if tiers["scored"] else "no forecast",
+         "rules transcribed" if tiers["regulated"] else "rules NOT modelled",
+         "federal (HMS)" if d["hms"] else "state waters")))
+    if d["notes"]:
+        print()
+        for line in _wrap(d["notes"], w - 4):
+            print(f"  {line}")
+
+    f = d["forecast"]
+    if f:
+        print()
+        print(f"  WHAT THE FORECAST WEIGHTS   ({f['scorer']} scorer, "
+              f"evidence: {f['basis']})")
+        print("  " + "─" * w)
+        # Two spaces of gap, not zero. At width 44 the value ran straight
+        # into the CITED column and printed "gryes" -- the tail of "gravel"
+        # welded to the word "yes".
+        print(f"  {'':<20}{'WT':>5}  {'':<56}  CITED")
+        for t in f["terms"]:
+            mark = "yes" if t["cited"] else "—"
+            print(f"  {t['label']:<20}{t['weight']:>5.2f}  {t['value'][:56]:<56}  {mark}")
+        print()
+        # The cited claims in full. They are long on purpose: a band with a
+        # caveat that got truncated is a band without a caveat.
+        for t in f["terms"]:
+            if not t["cited"] or not t["claim"]:
+                continue
+            print(f"  {t['label']} — cited")
+            for line in _wrap(t["claim"], w - 6):
+                print(f"      {line}")
+            print()
+        # The uncited ones named together and explained once. Printed per
+        # term, this was the same paragraph four times over, and a caveat
+        # repeated four times is a caveat nobody reads.
+        priors = [t["label"] for t in f["terms"] if not t["cited"]]
+        if priors:
+            print("  %s — hand-set priors" % ", ".join(priors))
+            for line in _wrap(
+                    "Nothing published says what this fish wants of these in "
+                    "this water, and no catch log has tested them. They are "
+                    "somebody's judgement, written where changing one is a "
+                    "diff that has to be justified.", w - 6):
+                print(f"      {line}")
+            print()
+        if f.get("basis_claim"):
+            print("  Evidence tier")
+            for line in _wrap(f["basis_claim"], w - 6):
+                print(f"      {line}")
+            print()
+        for line in _wrap(f["weights_note"], w - 6):
+            print(f"      {line}")
+    else:
+        print()
+        print("  NO FORECAST")
+        print("  " + "─" * w)
+        for line in _wrap(d["unavailable"]["forecast"], w - 6):
+            print(f"      {line}")
+
+    r = d["rules"]
+    print()
+    print("  RULES")
+    print("  " + "─" * w)
+    if r["warning"]:
+        for line in _wrap(r["warning"], w - 6):
+            print(f"      {line}")
+    for label, rule in (("recreational", r["recreational"]),
+                        ("commercial", r["commercial"])):
+        if not rule:
+            continue
+        bits = []
+        if rule.get("min_inches"):
+            bits.append(f"min {rule['min_inches']}\"")
+        if rule.get("max_inches"):
+            bits.append(f"max {rule['max_inches']}\"")
+        if rule.get("bag"):
+            bits.append(rule["bag"])
+        if rule.get("limit"):
+            bits.append(rule["limit"])
+        print(f"      {label:<14}{' · '.join(bits)}")
+        for per in rule.get("open_periods", []):
+            print(f"      {'':<14}open {per}")
+        if rule.get("note"):
+            for line in _wrap(rule["note"], w - 20):
+                print(f"      {'':<14}{line}")
+    if r.get("note"):
+        for line in _wrap(r["note"], w - 6):
+            print(f"      {line}")
+    print()
+    return 0
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    """Wrap without importing textwrap for one call. Long claims are the whole
+    point of this command, so they must not be truncated to fit a column."""
+    words, lines, cur = (text or "").split(), [], ""
+    for word in words:
+        if cur and len(cur) + 1 + len(word) > width:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = f"{cur} {word}".strip()
+    if cur:
+        lines.append(cur)
+    return lines
 
 
 def _cmd_spots(args) -> int:

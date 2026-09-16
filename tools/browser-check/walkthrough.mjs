@@ -192,10 +192,10 @@ async function walk(url) {
 
   await page.screenshot({ path: 'walkthrough-map.png' });
 
-  // --- the desk, and all five of its tabs --------------------------------
+  // --- the desk, and all six of its tabs ---------------------------------
   await page.goto(url.replace(/\/$/, '') + '/desk', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2500);
-  for (const s of ['history', 'reports', 'regs', 'hms', 'sources']) {
+  for (const s of ['history', 'reports', 'regs', 'hms', 'fish', 'sources']) {
     await page.click(`nav button[data-s=${s}]`);
     await page.waitForTimeout(2200);
     const txt = await page.evaluate(id =>
@@ -203,6 +203,38 @@ async function walk(url) {
     step(`desk tab: ${s}`, txt.length > 40 && !/could not load/i.test(txt),
          `${txt.length} chars`);
   }
+  // The species card's whole reason for existing is telling a cited band from
+  // a hand-set prior, so a card that renders both without that distinction
+  // would pass the length check above and be worth nothing. Tautog is the
+  // right fish to check: its substrate and temperature come out of named
+  // documents and its current and light curves come out of nobody.
+  {
+    await page.click('nav button[data-s=fish]');
+    await page.waitForTimeout(1600);
+    const card = await page.evaluate(async () => {
+      const b = [...document.querySelectorAll('#fish .pick button')]
+        .find(x => /Tautog/.test(x.textContent));
+      if (!b) return null;
+      b.click();
+      await new Promise(r => setTimeout(r, 1200));
+      const marks = [...document.querySelectorAll('#fishcard .tmark')]
+        .map(m => m.textContent.trim().toLowerCase());
+      return {
+        fish: document.querySelectorAll('#fish .pick button').length,
+        cited: marks.filter(m => m === 'cited').length,
+        prior: marks.filter(m => m === 'prior').length,
+        claim: (document.querySelector('#fishcard .tclaim') || {}).textContent || '',
+      };
+    });
+    step('desk fish: every loggable fish is pickable',
+         card && card.fish > 30, card ? `${card.fish} fish` : 'no picker');
+    step('desk fish: cited bands and hand-set priors are told apart',
+         card && card.cited > 0 && card.prior > 0,
+         card ? `${card.cited} cited, ${card.prior} prior` : 'no card');
+    step('desk fish: the claim names its document',
+         card && /\[/.test(card.claim), (card && card.claim.slice(0, 60)) || '');
+  }
+
   // Regs replaced Review, and the point of the swap was the link: a rule you
   // cannot check against its notice is the thing Matt said he did not want.
   // A tab that renders but links nowhere would pass the length check above.

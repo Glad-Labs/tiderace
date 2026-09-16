@@ -838,6 +838,10 @@ body.sheet-peek #here{
    scroll past what you need while the drift goes by.
    One view at a time, and the tabs are the biggest control in the app. */
 #tabs{
+  /* The count here and the number of buttons in the markup have to agree: a
+     tab added without this line gets a squashed row rather than a wrapped
+     one, which is the kind of thing that looks fine in a diff. A test pins
+     the two together. */
   flex:none; display:grid; grid-template-columns:repeat(4,1fr);
   gap:0; border-bottom:1px solid var(--hair); background:var(--panel);
 }
