@@ -3261,6 +3261,239 @@ class AppliedOnArrivalConfirmedAfter(unittest.TestCase):
         self.assertIn("decision not in extract.DECISIONS", route)
         self.assertIn("extract.decide(rid, decision)", route)
 
+class OneParagraphIsOneSighting(unittest.TestCase):
+    """The desk's in-force list showed "loaded squid", "loaded bunker",
+    "loaded bunker" for Newport Harbor on 17 September 2026 -- one
+    coastalanglermag column, one writer, one harbour, three rows -- and the
+    bait log held four.
+
+    `extract.item_id` keyed an observation partly on the first eighty
+    characters of the extractor's quote, so the same paragraph read on two
+    passes and quoted two ways ("Newport Harbor is loaded with bait--squid,
+    peanut and full-grown bunker" / "Newport Harbor... remains chockablock
+    full of all kinds of feed") hashed to two ids. The dedupe saw nothing to
+    dedupe, `_apply_bait` wrote the row again, and the copies then
+    corroborated each other in `bait.bait_at` at CORROBORATION apiece -- the
+    manufacturing-confidence-from-correlated-evidence failure that module
+    warns about for birds and whales, arriving through the front door.
+
+    Measured on Matt's log that day, striped bass at Newport Harbor: bait
+    signal 0.825 off 8 "observations" where the deduped log gives 0.762 off
+    4. `reports.catch_reports` had already solved this for catch reports by
+    grouping on the observation and using attribution, not the quote, as the
+    identity; this is the same treatment for bait.
+    """
+
+    URL = "https://example.test/ri-report"
+    AT = "at:41.48260,-71.32561"
+    LAT, LON = 41.48260, -71.32561
+    WHEN = datetime(2026, 9, 17, 12, 0)
+
+    QUOTES = ("Newport Harbor is loaded with bait—squid, peanut and full-grown bunker",
+              "Newport Harbor... remains chockablock full of all kinds of feed, "
+              "including... peanut and full-size bunker")
+
+    def _row(self, **kw):
+        row = {"kind": "bait", "status": "pending", "bait": "bunker",
+               "abundance": "loaded", "place": "Newport Harbor",
+               "matched_spot": self.AT, "observed_on": "2026-09-17",
+               "confidence": "high", "attributed_to": "Sam Toland",
+               "source_url": self.URL, "quote": self.QUOTES[0],
+               "queued_at": "2026-09-17T07:24:07"}
+        row.update(kw)
+        return row
+
+    def _sighting(self, witness, **kw):
+        row = {"bait": "bunker", "lat": self.LAT, "lon": self.LON,
+               "when": "2026-09-17", "abundance": "loaded", "source": "report",
+               "confidence": "high", "witness": witness, "spot": self.AT,
+               "notes": "Newport Harbor — %s" % self.URL}
+        row.update(kw)
+        return row
+
+    def _paths(self, d):
+        return os.path.join(d, "review_queue.jsonl"), os.path.join(d, "bait_log.jsonl")
+
+    # ---------------------------------------------------------------- identity
+
+    def test_the_quote_is_not_part_of_the_observation(self):
+        self.assertEqual(extract.item_id(self._row(quote=self.QUOTES[0])),
+                         extract.item_id(self._row(quote=self.QUOTES[1])),
+                         "one paragraph quoted two ways is one observation")
+
+    def test_what_does_make_it_a_different_observation_still_does(self):
+        base = extract.item_id(self._row())
+        for field, value in (("bait", "squid"), ("place", "Brenton Reef"),
+                             ("observed_on", "2026-09-16"), ("kind", "catch_report"),
+                             ("source_url", "https://example.test/elsewhere")):
+            self.assertNotEqual(base, extract.item_id(self._row(**{field: value})),
+                                "%s should split the observation" % field)
+
+    def test_two_shops_in_one_column_are_two_observations(self):
+        # The reason attribution is in the identity at all, and the reason
+        # dropping the quote is not the same as dropping everything but the
+        # article: hookedfisherman.com carried Snug Harbor Marina and The
+        # Saltwater Edge both reporting sand eels at the Harbor of Refuge on
+        # 9 September 2026, and that is two people who looked at the water.
+        self.assertNotEqual(extract.item_id(self._row(attributed_to="Snug Harbor Marina")),
+                            extract.item_id(self._row(attributed_to="The Saltwater Edge")))
+
+    def test_the_same_shop_named_two_ways_is_one_observation(self):
+        # Also in that column, on the same day: "Saltwater Edge" and
+        # "Saltwater Edge Blog". A raw attribution string would call those two.
+        self.assertEqual(extract.item_id(self._row(attributed_to="Saltwater Edge")),
+                         extract.item_id(self._row(attributed_to="Saltwater Edge Blog")))
+        self.assertEqual(extract.item_id(self._row(attributed_to="Dave at Ocean State Tackle")),
+                         extract.item_id(self._row(attributed_to="Ocean State Tackle")))
+
+    def test_the_bait_log_and_the_witness_count_agree_on_who_said_it(self):
+        # One definition. Two copies of the normaliser drift, and then the id
+        # a sighting is deduped under and the identity a witness is counted
+        # under stop being the same notion of "who said this".
+        self.assertIs(reports._norm_name, extract._norm_name)
+
+    # ------------------------------------------------------------ the log
+
+    def test_one_article_read_twice_writes_one_sighting(self):
+        with tempfile.TemporaryDirectory() as d:
+            q, b = self._paths(d)
+            for quote in self.QUOTES:
+                extract._queue(self._row(quote=quote), path=q)
+            c = extract.reconcile_queue(q, apply_bait=True, bait_path=b)
+            self.assertEqual((c["applied"], c["duplicate"]), (1, 1))
+            log = bait.load(b)
+            self.assertEqual(len(log), 1, "two quotes of one paragraph, one sighting")
+            self.assertEqual(log[0]["witness"], "samtoland",
+                             "the log has to say who said it or it cannot tell "
+                             "two witnesses from two copies")
+
+    def test_an_uncredited_copy_is_not_a_second_witness(self):
+        # The article speaking does not corroborate the article's own named
+        # source, and which phrasing a pass happened to produce first is not a
+        # fact about the water -- so this holds in both orders.
+        for order in (("Sam Toland", ""), ("", "Sam Toland")):
+            with tempfile.TemporaryDirectory() as d:
+                q, b = self._paths(d)
+                for who, quote in zip(order, self.QUOTES):
+                    extract._queue(self._row(attributed_to=who, quote=quote), path=q)
+                c = extract.reconcile_queue(q, apply_bait=True, bait_path=b)
+                self.assertEqual((c["applied"], c["duplicate"]), (1, 1), str(order))
+                self.assertEqual(len(bait.load(b)), 1, str(order))
+
+    def test_the_desk_drops_an_uncredited_copy_of_a_credited_row(self):
+        # What a re-run with better extraction produces: the same paragraph,
+        # credited this time. It is not a second row on the desk.
+        with tempfile.TemporaryDirectory() as d:
+            q, _ = self._paths(d)
+            extract._queue(self._row(attributed_to="Sam Toland", quote=self.QUOTES[0]), path=q)
+            extract._queue(self._row(attributed_to="", quote=self.QUOTES[1]), path=q)
+            rows = extract.awaiting(q)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["attributed_to"], "Sam Toland")
+
+    def test_two_shops_in_one_column_both_reach_the_log(self):
+        with tempfile.TemporaryDirectory() as d:
+            q, b = self._paths(d)
+            for who in ("Snug Harbor Marina", "The Saltwater Edge"):
+                extract._queue(self._row(attributed_to=who), path=q)
+            c = extract.reconcile_queue(q, apply_bait=True, bait_path=b)
+            self.assertEqual((c["applied"], c["duplicate"]), (2, 0))
+            self.assertEqual(sorted(r["witness"] for r in bait.load(b)),
+                             ["saltwateredge", "snugharbor"])
+
+    def test_the_desk_lists_the_observation_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            q, b = self._paths(d)
+            for quote in self.QUOTES:
+                extract._queue(self._row(quote=quote), path=q)
+                extract._queue(self._row(bait="squid", quote=quote), path=q)
+            rows = extract.awaiting(q)
+            self.assertEqual(sorted(r["bait"] for r in rows), ["bunker", "squid"],
+                             "two sentences about two baits is two rows, not four")
+            self.assertEqual(len({r["id"] for r in rows}), 2)
+
+    def test_a_retraction_still_takes_the_whole_observation_back_out(self):
+        with tempfile.TemporaryDirectory() as d:
+            q, b = self._paths(d)
+            for quote in self.QUOTES:
+                extract._queue(self._row(quote=quote), path=q)
+            extract.reconcile_queue(q, apply_bait=True, bait_path=b)
+            rid = extract.awaiting(q)[0]["id"]
+            out = extract.decide(rid, "retracted", path=q, bait_path=b)
+            self.assertEqual(out["rows"], 2, "both copies carry the one decision")
+            self.assertEqual(bait.load(b), [])
+
+    def test_disagreeing_with_one_shop_is_not_disagreeing_with_the_other(self):
+        with tempfile.TemporaryDirectory() as d:
+            q, b = self._paths(d)
+            for who in ("Snug Harbor Marina", "The Saltwater Edge"):
+                extract._queue(self._row(attributed_to=who), path=q)
+            extract.reconcile_queue(q, apply_bait=True, bait_path=b)
+            snug = next(r for r in extract.awaiting(q)
+                        if r["attributed_to"] == "Snug Harbor Marina")
+            out = extract.decide(snug["id"], "retracted", path=q, bait_path=b)
+            self.assertEqual(out["sightings_removed"], 1)
+            self.assertEqual([r["witness"] for r in bait.load(b)], ["saltwateredge"])
+
+    def test_a_sighting_from_before_the_field_existed_can_still_be_retracted(self):
+        # Nineteen rows in Matt's log on 17 September 2026 predate `witness`.
+        # A row that does not say who said it cannot be told apart, so it
+        # matches; refusing to retract them would be worse than over-reaching.
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            b = os.path.join(d, "bait_log.jsonl")
+            legacy = self._sighting("")
+            del legacy["witness"]              # written before the field existed
+            with open(b, "w") as fh:
+                fh.write(json.dumps(legacy) + "\n")
+            self.assertNotIn("witness", bait.load(b)[0])
+            self.assertEqual(bait.retract(self.URL, "2026-09-17", "bunker",
+                                          path=b, spot=self.AT,
+                                          witness="samtoland"), 1)
+
+    def test_the_desk_says_who_said_it(self):
+        """Once the credit is what tells two rows apart, the page has to
+        print it. Without it the desk draws "decent sand eels · Harbor of
+        Refuge · 2026-09-09 · hookedfisherman.com" twice -- Snug Harbor
+        Marina and The Saltwater Edge, genuinely two witnesses -- and it
+        reads as exactly the duplication this change removed.
+        """
+        import pathlib
+        desk = strip_comments((pathlib.Path(__file__).parent / "tiderace" / "web"
+                               / "desk.html").read_text())
+        row = desk.split("const list = rows.map(r =>")[1].split("</div>`).join('')")[0]
+        self.assertIn("r.attributed_to", row)
+
+    # --------------------------------------------------------- the scoring
+
+    def test_copies_of_one_sentence_do_not_corroborate(self):
+        one = bait.bait_at(self.LAT, self.LON, self.WHEN, "striped_bass",
+                           [self._sighting("samtoland")])
+        three = bait.bait_at(self.LAT, self.LON, self.WHEN, "striped_bass",
+                             [self._sighting("samtoland") for _ in range(3)])
+        self.assertEqual(three["signal"], one["signal"],
+                         "three copies of one sentence are one observation")
+        self.assertEqual((one["observations"], three["observations"]), (1, 1))
+
+    def test_two_people_who_looked_still_corroborate(self):
+        one = bait.bait_at(self.LAT, self.LON, self.WHEN, "striped_bass",
+                           [self._sighting("snugharbor")])
+        two = bait.bait_at(self.LAT, self.LON, self.WHEN, "striped_bass",
+                           [self._sighting("snugharbor"), self._sighting("saltwateredge")])
+        self.assertGreater(two["signal"], one["signal"])
+        self.assertEqual(two["observations"], 2)
+
+    def test_a_sighting_of_its_own_is_untouched(self):
+        # The collapse must not eat anything the log legitimately holds twice:
+        # same bait, same water, different day, different place, different eyes.
+        rows = [self._sighting("samtoland"),
+                self._sighting("samtoland", when="2026-09-16"),
+                self._sighting("samtoland", lat=self.LAT + 0.01),
+                dict(self._sighting("samtoland"), source="own", witness="",
+                     notes="stood there and watched them")]
+        self.assertEqual(len(bait.independent(rows)), 4)
+
+
 class RankedDotsOnTheMap(unittest.TestCase):
     """Matt, 9 September 2026: "it would be great to have the recommended
     spots color coded by quality, like make the best spot very noticeable and

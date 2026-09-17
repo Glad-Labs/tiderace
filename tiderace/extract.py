@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 
@@ -359,7 +360,7 @@ def extract_report(url: str, force: bool = False,
     # takes the sighting back out. The same article read twice must not
     # write the same sighting twice: an observation already applied under
     # its id is a duplicate, not fresh corroboration.
-    seen = {item_id(r) for r in load_queue() if r.get("status") == "applied"}
+    seen = _Applied(r for r in load_queue() if r.get("status") == "applied")
     applied = 0
     for b in out.get("bait", []):
         b.update(source_url=doc["url"], fetched_at=doc["fetched_at"],
@@ -367,11 +368,11 @@ def extract_report(url: str, force: bool = False,
                  status="pending")
         spot = _match_spot(b.get("place", ""))
         b["matched_spot"] = spot.key if spot else None
-        if item_id(b) in seen:
+        if seen.covers(b):
             b["status"] = "duplicate"
         elif apply_bait and spot and b.get("confidence") in ("high", "medium"):
             _apply_bait(b, spot)
-            seen.add(item_id(b))
+            seen.add(b)
             applied += 1
         _queue(b)
 
@@ -509,14 +510,99 @@ def pending(kind: str | None = None, path: str = REVIEW_PATH) -> list[dict]:
 DECISIONS = ("confirmed", "retracted")
 
 
+# What an observation IS: one article, one thing, one place, one day. The
+# quote is deliberately not part of it -- see item_id.
+_IDENTITY = ("kind", "source_url", "species_key", "bait", "place", "observed_on")
+
+
+def _observation(r: dict) -> tuple:
+    return tuple(str(r.get(k) or "") for k in _IDENTITY)
+
+
+_NOISE = {"the", "at", "in", "of", "inc", "llc", "co", "and", "bait", "tackle",
+          "marina", "outfitters", "outfitter", "shop", "store", "charters",
+          "guide", "guides", "capt", "captain", "mr", "ms"}
+
+
+def _norm_name(name: str) -> str:
+    """Collapse a credited source to a stable identity.
+
+    Reports name the same shop several ways across a season -- "Ocean State
+    Tackle", "Ocean State Tackle in Providence", "Dave at Ocean State". Keeping
+    the first two significant words absorbs the trailing town and the dropped
+    suffix, which is what actually varies. Two words rather than one because
+    "Watch Hill" and "Watch anything else" should not merge.
+
+    This lives here rather than in reports.py, where it was written, because
+    both paths now key on it and two copies of a normaliser is how the bait
+    log and the witness count start disagreeing about who said something.
+    """
+    raw = (name or "").lower()
+    # "Dave at Ocean State Tackle" -- the person moves jobs, the shop is the
+    # stable identity, and the article writes it both ways across a season.
+    if " at " in raw:
+        raw = raw.rsplit(" at ", 1)[1]
+    words = re.findall(r"[a-z0-9]+", raw)
+    keep = [w for w in words if w not in _NOISE]
+    return "".join(keep[:2])
+
+
 def item_id(r: dict) -> str:
     """One observation, however many times an article was read. Stable
     across re-scrapes so a decision made on Tuesday still covers Friday's
-    copy of the same sentence."""
-    key = "|".join(str(r.get(k) or "") for k in
-                   ("kind", "source_url", "species_key", "bait", "place",
-                    "observed_on")) + "|" + (r.get("quote") or "")[:80]
+    copy of the same sentence.
+
+    The quote is NOT part of the identity, and that is the whole point. It
+    was, until 17 September 2026, and the consequence was three "loaded
+    bunker in Newport Harbor" rows in the bait log from one writer's one
+    paragraph: the extractor quoted him as "loaded with bait-squid, peanut
+    and full-grown bunker" on one pass and "remains chockablock full of all
+    kinds of feed" on the next, two different eighty-character prefixes, two
+    different ids, and the dedupe below saw nothing to dedupe. Those copies
+    then corroborated each other in `bait.bait_at`, which is exactly the
+    manufacturing-confidence-from-correlated-evidence failure that module
+    warns about for birds and whales. A quote is how a claim is *phrased*;
+    two phrasings of one sentence are not two observations.
+
+    What does split an observation is the witness, for the reason
+    `reports.catch_reports` splits on it: one column quotes Ocean State
+    Tackle in one paragraph and The Saltwater Edge in the next, and that IS
+    two people who looked at the water. Normalised, so "Saltwater Edge" and
+    "Saltwater Edge Blog" stay one of them.
+    """
+    key = "|".join(_observation(r)) + "|" + _norm_name(r.get("attributed_to"))
     return hashlib.sha1(key.encode()).hexdigest()[:12]
+
+
+class _Applied:
+    """Which observations are already in the bait log, and on whose word.
+
+    Nearly just a set of ids, except for one asymmetry: a row that credits
+    nobody is the article speaking, and the article does not corroborate its
+    own named source. So an uncredited row is covered by any witness on that
+    observation, and a credited row is covered by an uncredited one -- in
+    both directions, because the queue is append-only and which phrasing an
+    extraction pass happened to produce first is not a fact about the water.
+    `reports.catch_reports` states the same rule as "unattributed rows are
+    dropped only when an attributed row covers the same observation".
+    """
+
+    def __init__(self, rows=()):
+        self.ids: set[str] = set()
+        self.by_observation: dict[tuple, set[str]] = {}
+        for r in rows:
+            self.add(r)
+
+    def add(self, r: dict) -> None:
+        self.ids.add(item_id(r))
+        self.by_observation.setdefault(_observation(r), set()).add(
+            _norm_name(r.get("attributed_to")))
+
+    def covers(self, r: dict) -> bool:
+        if item_id(r) in self.ids:
+            return True
+        who = self.by_observation.get(_observation(r))
+        return bool(who) and ("" in who or not _norm_name(r.get("attributed_to")))
 
 
 class _Placed:
@@ -537,14 +623,28 @@ def _spot_from_key(key: str | None):
     return _Placed(str(key), lat, lon)
 
 
-def _apply_bait(b: dict, spot) -> None:
+def _apply_bait(b: dict, spot, path: str | None = None) -> None:
+    """Write one queued sighting into the bait log. The only place that does.
+
+    `reconcile_queue` used to carry a second copy of this for the case where
+    a caller names the log (the tests do), and the two drifted the first time
+    one of them changed: the `witness` field below reached the log on the
+    path the tests exercise and not on the path the app actually runs.
+
+    `witness` rides along so the log can say whether two rows are two people
+    looking at the water or one paragraph read twice. Without it the only
+    honest reading of two identical lines is that they are the same
+    observation, and a column quoting two shops loses one of them.
+    """
     baitmod.record(baitmod.Sighting(
         bait=b["bait"].lower(), lat=spot.lat, lon=spot.lon,
         when=(b.get("observed_on") or date.today().isoformat()),
         abundance=b.get("abundance", "scattered"),
         spot=spot.key, source="report",
         confidence=b.get("confidence", "medium"),
-        notes=f"{b.get('place','')} — {b.get('source_url', '')}"))
+        witness=_norm_name(b.get("attributed_to")),
+        notes=f"{b.get('place','')} — {b.get('source_url', '')}"),
+        **({"path": path} if path else {}))
     b["status"] = "applied"
     b["applied_at"] = datetime.now().isoformat(timespec="seconds")
 
@@ -578,7 +678,7 @@ def reconcile_queue(path: str = REVIEW_PATH, apply_bait: bool = True,
     rows = load_queue(path)
     counts = {"superseded": 0, "on_file": 0, "applied": 0, "duplicate": 0,
               "left_pending": 0}
-    seen = {item_id(r) for r in rows if r.get("status") == "applied"}
+    seen = _Applied(r for r in rows if r.get("status") == "applied")
     for r in rows:
         st = r.get("status")
         if r.get("kind") == "regulation" and st == "pending":
@@ -586,25 +686,13 @@ def reconcile_queue(path: str = REVIEW_PATH, apply_bait: bool = True,
         elif r.get("kind") == "catch_report" and st == "pending":
             r["status"] = "on_file"; counts["on_file"] += 1
         elif r.get("kind") == "bait" and st == "pending":
-            rid = item_id(r)
             spot = _spot_from_key(r.get("matched_spot")) or (
                 _match_spot(r.get("place", "")) if r.get("matched_spot") else None)
-            if rid in seen:
+            if seen.covers(r):
                 r["status"] = "duplicate"; counts["duplicate"] += 1
             elif apply_bait and spot and r.get("confidence") in ("high", "medium"):
-                if bait_path:
-                    baitmod.record(baitmod.Sighting(
-                        bait=r["bait"].lower(), lat=spot.lat, lon=spot.lon,
-                        when=(r.get("observed_on") or date.today().isoformat()),
-                        abundance=r.get("abundance", "scattered"), spot=spot.key,
-                        source="report", confidence=r.get("confidence", "medium"),
-                        notes=f"{r.get('place','')} — {r.get('source_url', '')}"),
-                        path=bait_path)
-                    r["status"] = "applied"
-                    r["applied_at"] = datetime.now().isoformat(timespec="seconds")
-                else:
-                    _apply_bait(r, spot)
-                seen.add(rid); counts["applied"] += 1
+                _apply_bait(r, spot, path=bait_path)
+                seen.add(r); counts["applied"] += 1
             else:
                 counts["left_pending"] += 1
     _rewrite(rows, path)
@@ -614,12 +702,19 @@ def reconcile_queue(path: str = REVIEW_PATH, apply_bait: bool = True,
 def awaiting(path: str = REVIEW_PATH, limit: int = 200) -> list[dict]:
     """What is in force and has not been looked at: applied bait, catch
     reports on file, and bait that could not be placed. One row per
-    observation, newest first, with its id."""
+    observation and witness, newest first, with its id.
+
+    A row crediting nobody is dropped when a named source covers the same
+    observation -- that is what a re-run with better extraction produces, and
+    it is the rule `reports.catch_reports` already applies to the same rows.
+    """
+    live = [r for r in load_queue(path)
+            if r.get("kind") != "regulation"
+            and r.get("status") in ("applied", "on_file", "pending")]
+    credited = {_observation(r) for r in live if _norm_name(r.get("attributed_to"))}
     latest: dict[str, dict] = {}
-    for r in load_queue(path):
-        if r.get("kind") == "regulation":
-            continue
-        if r.get("status") not in ("applied", "on_file", "pending"):
+    for r in live:
+        if not _norm_name(r.get("attributed_to")) and _observation(r) in credited:
             continue
         rid = item_id(r)
         if str(r.get("queued_at", "")) >= str(latest.get(rid, {}).get("queued_at", "")):
@@ -647,6 +742,7 @@ def decide(rid: str, decision: str, path: str = REVIEW_PATH,
             removed += baitmod.retract(r.get("source_url", ""),
                                        r.get("observed_on") or "", r.get("bait", ""),
                                        spot=r.get("matched_spot"),
+                                       witness=_norm_name(r.get("attributed_to")),
                                        **({"path": bait_path} if bait_path else {}))
         r["status"] = decision
         r["decided_at"] = datetime.now().isoformat(timespec="seconds")

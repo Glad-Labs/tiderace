@@ -252,7 +252,7 @@ const RENDER = {
          <span class="k">${what(r)}${r.place ? ' · ' + esc(r.place) : ''}
            ${r.matched_spot ? '<span class="dim">→ ' + esc(r.matched_spot) + '</span>' : ''}<br>
            <span class="dim">${esc(r.observed_on || '')} · ${esc((r.source_url || '').replace(/^https?:\/\/(www\.)?/, '').split('/')[0])}
-           · ${esc(r.confidence || '')}</span><br>
+           · ${esc(r.confidence || '')}${r.attributed_to ? ' · ' + esc(r.attributed_to) : ''}</span><br>
            <span class="dim">“${esc((r.quote || '').slice(0, 140))}”</span></span>
          <span class="v" style="white-space:nowrap">${state(r)}
            <button class="ok" data-d="confirmed">confirm</button>
