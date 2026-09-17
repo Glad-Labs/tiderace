@@ -4006,18 +4006,84 @@ class ReviewRegressions(unittest.TestCase):
             self.skipTest("no station catalog — run: tiderace stations --refresh")
         calls = []
         real = birds._get
-        birds._get = lambda path, **kw: (calls.append(kw), real(path, **kw))[1]
+        # Counted, not passed through. `prime` used to bail out before any
+        # fetch because one circle never covered the candidates, so calling
+        # the real `_get` cost nothing; now that it succeeds, passing through
+        # would make this the suite's one live eBird request. What is under
+        # test is how many times it is called, never what comes back.
+        birds._get = lambda path, **kw: (calls.append(kw), [])[1]
         try:
             birds.forget_regions()
             targets = prospect.candidates_for("striped_bass", marks=False)
             self.assertGreater(len(targets), 10)
-            if not birds.prime([(s.lat, s.lon) for s in targets]):
-                self.skipTest("spots too spread out for one circle")
+            # Asserted, not skipped. This was a skip, and from the day the
+            # curated spot list was replaced by bay-wide prospecting it was
+            # taken every run: the centroid stranded the Watch Hill
+            # candidates 47.5 km out against a 43.5 km margin, so everything
+            # below this line stopped being checked and said nothing about
+            # it. From the covering centre the same positions sit 34.4 km
+            # out, 9.1 km inside the margin, and the narrowest of any
+            # forecast species is 4.6 km. If that stops being true it is
+            # news, not a reason to go quiet.
+            self.assertTrue(birds.prime([(s.lat, s.lon) for s in targets]),
+                            "one circle no longer covers the candidates; "
+                            "birds._covering_centre or REGION_KM has moved")
             before = len(calls)
             for sp in targets:
                 birds.sightings_near(sp.lat, sp.lon)
             self.assertEqual(len(calls) - before, 0, "priming should have covered them")
             self.assertLessEqual(len(calls), 1)
+        finally:
+            birds._get = real
+            birds.forget_regions()
+
+    def test_the_query_centre_follows_the_furthest_spot_not_the_crowd(self):
+        """`prime` centred on the centroid, which is the average position and
+        not the one that covers. Ten marks in a huddle and one off on its own
+        pull a centroid into the huddle, where the loner is the full spread
+        away; the covering centre sits between them, at half of it.
+
+        This is the shape the prospected candidates actually have -- most of
+        them up the bay, a handful off Watch Hill -- and it is why one eBird
+        circle stopped covering them.
+        """
+        huddle = [(41.50 + 0.001 * i, -71.35 + 0.001 * i) for i in range(10)]
+        loner = (41.10, -71.90)
+        pts = huddle + [loner]
+
+        clat = sum(p[0] for p in pts) / len(pts)
+        clon = sum(p[1] for p in pts) / len(pts)
+        centroid_worst = max(birds._km(clat, clon, a, b) for a, b in pts)
+
+        mlat, mlon = birds._covering_centre(pts)
+        covering_worst = max(birds._km(mlat, mlon, a, b) for a, b in pts)
+
+        spread = birds._km(huddle[0][0], huddle[0][1], *loner)
+        # The covering circle cannot beat half the spread, and should not be
+        # far off it; the centroid sits out near the whole spread.
+        self.assertGreater(centroid_worst, 0.8 * spread)
+        self.assertLess(covering_worst, 0.55 * spread)
+        self.assertGreaterEqual(covering_worst, 0.5 * spread - 0.01)
+        self.assertLess(covering_worst, centroid_worst)
+
+    def test_a_set_that_truly_cannot_fit_is_still_refused(self):
+        """The centre-finder makes `prime` succeed more often, and the thing
+        that must not come with that is succeeding wrongly. It cannot: the
+        decision is a measurement of the centre actually chosen, not a
+        property claimed of it, so a worse centre costs a query that was
+        available and never claims a circle that does not cover.
+
+        Narragansett and Monterey do not share a circle, and no centre
+        between them helps -- `prime` returns before any fetch.
+        """
+        calls = []
+        real = birds._get
+        birds._get = lambda path, **kw: (calls.append(kw), real(path, **kw))[1]
+        try:
+            birds.forget_regions()
+            self.assertFalse(birds.prime([(41.44, -71.42), (36.62, -121.90)]))
+            self.assertEqual(calls, [], "refused, then fetched anyway")
+            self.assertFalse(birds.prime([]))
         finally:
             birds._get = real
             birds.forget_regions()
