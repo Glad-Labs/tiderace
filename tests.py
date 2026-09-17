@@ -3987,7 +3987,34 @@ class Reports(unittest.TestCase):
                             return_value=self._rows(specs)):
             return reports.catch_reports()
 
+    def test_the_newest_observations_come_back_first(self):
+        """Both callers that show reports truncate, and neither sorts:
+        `/api/reports` sends `rows[:120]` and the desk renders
+        `.slice(0, 40)` of those. The queue is append-only, so its own order
+        is oldest-first, and the cut was keeping the oldest forty.
+
+        Found on 17 September 2026 from the boat -- "the reports haven't
+        updated since end of August". They had. 240 observations were on
+        file, that morning's scrape among them, and the desk was showing
+        forty dated 27-31 August because the window froze on the day the
+        queue passed 120 and every scrape since had landed in the tail
+        nobody sends. Nothing was stale except the slice.
+        """
+        rows = self._load([
+            (self.URL, "tautog", "2026-08-27", "a"),
+            (self.URL, "scup", "2026-09-17", "b"),        # today, read last
+            (self.URL, "bluefish", "2026-08-31", "c"),
+            (self.URL2, "fluke", "2026-09-14", "d"),
+        ])
+        days = [str(r["day"]) for r in rows]
+        self.assertEqual(days, sorted(days, reverse=True), days)
+        self.assertEqual(days[0], "2026-09-17", "the newest must survive a cut")
+
+        # The shape the bug actually took: truncate the way the callers do.
+        self.assertEqual([r["species"] for r in rows[:2]], ["scup", "fluke"])
+
     def test_one_article_is_one_witness(self):
+
         # The invariant that matters. A weekly report naming a species in six
         # places is ONE observation, not six -- counting rows would manufacture
         # a consensus out of a single writer's week.
