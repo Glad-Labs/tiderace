@@ -416,10 +416,8 @@ def load() -> dict:
     return cache.read_json(CACHE, default={}) or {}
 
 
-def get(key: str) -> dict | None:
-    """What the card should show for this fish, or None if nothing is cached
-    or the last look found nothing. The caller says which -- `entry()` keeps
-    the reason.
+def has_content(entry: dict) -> bool:
+    """Is there anything in this cache entry worth showing?
 
     Summary OR sections, not sections alone. The scup article puts all of it
     in the lead -- how big they get, how long they live, where they spawn,
@@ -428,9 +426,24 @@ def get(key: str) -> dict | None:
     paragraphs away and the card said "not fetched yet" about a fish that had
     been fetched, which is the wrong kind of absence for the second time in
     one file.
+
+    **One function because that fix was applied in one of the two places that
+    needed it.** `get` learned the rule and `fetch_all`'s cache check did not,
+    so scup was served correctly and re-fetched on every single run --
+    "1 read · 36 already cached", for ever, three round trips to answer a
+    question already on disk. The bug was not the predicate, it was that the
+    predicate was written twice; so now it is written once and both callers
+    ask it.
     """
+    return bool(entry.get("sections") or entry.get("summary"))
+
+
+def get(key: str) -> dict | None:
+    """What the card should show for this fish, or None if nothing is cached
+    or the last look found nothing. The caller says which -- `entry()` keeps
+    the reason."""
     e = load().get(key) or {}
-    return e if (e.get("sections") or e.get("summary")) else None
+    return e if has_content(e) else None
 
 
 def entry(key: str) -> dict:
@@ -451,7 +464,7 @@ def fetch_all(species_list, refresh: bool = False, log=print) -> dict:
               "failed": [], "refused_sections": 0, "dropped_paragraphs": 0}
 
     for sp in species_list:
-        if have.get(sp.key, {}).get("sections") and not refresh:
+        if has_content(have.get(sp.key) or {}) and not refresh:
             report["kept"] += 1
             continue
         binomial = speciesmod.scientific(sp.key)
