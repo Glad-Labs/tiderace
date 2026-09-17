@@ -271,6 +271,7 @@ def build(key: str, when: date | None = None) -> dict:
                   "regulated": sp.regulated},
         "forecast": None,
         "photo": None,
+        "about": None,
         "unavailable": {},
     }
 
@@ -285,10 +286,18 @@ def build(key: str, when: date | None = None) -> dict:
         out["photo"] = fishpic.get(key)
         e = fishpic.entry(key)
         if out["photo"] is None:
+            # Four different absences, and they are not interchangeable. The
+            # third one is new: a lookup that could not be carried out is a
+            # fact about the network, and reading it out as "we could not
+            # identify this fish" is what five species were told for a week.
             out["unavailable"]["photo"] = (
+                "the last lookup failed (%s) — run `tiderace species "
+                "--photos` again" % e["error"]
+                if e.get("error") and not e.get("file") else
                 "no Creative Commons photograph on this taxon"
                 if e.get("resolved") and not e.get("file") else
-                "no confident match on iNaturalist for this fish"
+                "no freely licensed photograph on Wikimedia Commons or "
+                "iNaturalist for this fish"
                 if e.get("resolved") is False else
                 "not fetched yet — run `tiderace species --photos`")
         else:
@@ -298,6 +307,51 @@ def build(key: str, when: date | None = None) -> dict:
         # forecast path never touches this module, so a failure here can cost
         # an image and nothing else.
         out["unavailable"]["photo"] = "photo lookup unavailable"
+
+    # ---- what the fish is, as an animal --------------------------------
+    #
+    # Wikipedia, and kept deliberately apart from everything above it. The
+    # bands decide a forecast and the rules decide whether a fish is a fine;
+    # this decides nothing at all, which is exactly why a tertiary source is
+    # allowed to supply it. `wiki` refuses whole sections about fishing and
+    # drops any surviving paragraph that reads like a rule, and the card
+    # carries the article and the revision so the sentence has an address.
+    try:
+        from . import wiki
+        w = wiki.get(key)
+        if w:
+            out["about"] = {
+                "summary": w.get("summary") or [],
+                "sections": w.get("sections") or [],
+                "title": w.get("title"), "url": w.get("url"),
+                "permalink": w.get("permalink"), "revid": w.get("revid"),
+                "revised_on": w.get("revised_on"),
+                "read_on": w.get("checked_on"),
+                "taxon": w.get("taxon"), "verified": w.get("verified"),
+                "licence": wiki.LICENCE, "licence_url": wiki.LICENCE_URL,
+                # Said out loud rather than left to look like the whole
+                # article. A filtered source that does not admit it was
+                # filtered is the more misleading of the two.
+                "refused": w.get("refused") or [],
+                "note": ("Encyclopedia background, not a rule and not a band. "
+                         "Nothing here feeds the forecast, and sections about "
+                         "fishing are refused outright — check the RIDEM "
+                         "table for anything you intend to keep."),
+            }
+        else:
+            e = wiki.entry(key)
+            out["unavailable"]["about"] = (
+                "no verified Wikipedia article for %s" % e.get("binomial")
+                if e.get("found") is False else
+                # Read, and nothing in it survived the filter. Different from
+                # "not fetched", and saying the wrong one of those sends a
+                # person to run a command that will change nothing.
+                "the article was read and none of it was natural history "
+                "this app will show"
+                if e.get("found") else
+                "not fetched yet — run `tiderace species --info`")
+    except Exception:                                             # noqa: BLE001
+        out["unavailable"]["about"] = "species background unavailable"
 
     if key in score.PROFILES:
         p = score.PROFILES[key]

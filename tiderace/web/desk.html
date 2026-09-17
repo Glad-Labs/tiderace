@@ -140,6 +140,22 @@ h2{font:600 13px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
 #fish img.photo{width:100%; border-radius:10px; display:block; margin:0 0 9px;
                 background:var(--panel-2)}
 #fish .credit{margin:0 0 13px; font:10px/1.5 var(--mono); color:var(--muted)}
+/* Natural history. Body text rather than mono, because these are paragraphs a
+   person reads rather than readings they scan, and 12px mono for four hundred
+   words is punishing. Everything else on this page stays mono on purpose.
+   `--display` is the body stack this page already uses; a new --sans token
+   would be a third font for no reason, and an undefined one resolves to
+   nothing and silently drops the whole declaration. */
+#fish .about p{margin:0 0 10px; font:13px/1.65 var(--display); color:var(--ink-2)}
+#fish .about p:last-child{margin-bottom:0}
+#fish details.sec{border-top:1px solid rgba(39,64,72,.55); padding:11px 0 0;
+                  margin:11px 0 0}
+#fish details.sec summary{list-style:none; cursor:pointer; color:var(--depth);
+                          font:12px/1.5 var(--mono); letter-spacing:.02em}
+#fish details.sec summary::-webkit-details-marker{display:none}
+#fish details.sec[open] summary{color:var(--muted); margin-bottom:8px}
+#fish details.sec .about{padding-left:10px;
+                         border-left:2px solid var(--hair)}
 .bar{height:7px; border-radius:4px; background:var(--hair); margin:10px 0}
 .bar i{display:block; height:100%; border-radius:4px; background:var(--accent)}
 a{color:var(--depth)}
@@ -479,8 +495,15 @@ const RENDER = {
         // Somebody else's photograph under a Creative Commons licence. The
         // credit is a condition of using it, not decoration, so it renders
         // with the image or the image does not render at all.
-        h += `<p class="credit">${esc(d.photo.credit || '')} · `
-           + `${esc(d.photo.scientific || '')}`
+        // The credit links to the file it came from where the source gave us
+        // one. Attribution that cannot be followed back is half an
+        // attribution, and the two sources have different front doors.
+        const cr = esc(d.photo.credit || '');
+        h += `<p class="credit">`
+           + (d.photo.credit_url
+              ? `<a href="${esc(d.photo.credit_url)}" target="_blank" `
+                + `rel="noopener">${cr}</a>` : cr)
+           + ` · ${esc(d.photo.scientific || '')}`
            + `${d.photo.verified ? ' — matched by ' + esc(d.photo.verified) : ''}</p>`;
       } else if (d.unavailable && d.unavailable.photo){
         // Said rather than left blank. "No confident match on iNaturalist" is
@@ -500,6 +523,43 @@ const RENDER = {
          + `<span class="tag">${esc(d.hms ? 'federal · HMS' : d.group)}</span></p>`;
       if (d.notes) h += `<p class="dim" style="margin:12px 0 0">${esc(d.notes)}</p>`;
       h += '</div>';
+
+      /* What the fish is, before what the forecast weights. Somebody who has
+         one in their hands is asking "what is this and where does it live",
+         not "what is the weight on bottom type" -- that is the night-before
+         question and it keeps.
+
+         The summary is open and the sections are <details>, same as the terms
+         below: the glance is free and the four hundred words are one tap
+         away. The licence line is a condition of using the text, not a
+         footer, so it renders with the text or the text does not render. */
+      const ab = d.about;
+      if (ab){
+        h += `<h2 style="margin-top:20px">What it is</h2><div class="card">`;
+        h += `<div class="about">`
+           + (ab.summary || []).map(p => `<p>${esc(p)}</p>`).join('')
+           + `</div>`;
+        for (const sec of (ab.sections || [])){
+          h += `<details class="sec"><summary>${esc(sec.heading)}</summary>`
+             + `<div class="about">`
+             + sec.paragraphs.map(p => `<p>${esc(p)}</p>`).join('')
+             + `</div></details>`;
+        }
+        /* Said out loud. This is a tertiary source that has been filtered,
+           and a filtered source that does not admit it was filtered is the
+           more misleading of the two. */
+        h += `<p class="tclaim">${esc(ab.note)}</p>`;
+        h += `<p class="credit">${esc(ab.licence)} · `
+           + `<a href="${esc(ab.permalink)}" target="_blank" rel="noopener">`
+           + `${esc(ab.title)}, revision ${esc(String(ab.revid))}</a>`
+           + ` · read ${esc(ab.read_on || '')}`
+           + ` · matched by ${esc(ab.verified || '')} on ${esc(ab.taxon || '')}`
+           + `</p></div>`;
+      } else if (d.unavailable && d.unavailable.about){
+        h += `<h2 style="margin-top:20px">What it is</h2>`
+           + `<div class="card"><p class="tclaim" style="margin:0">`
+           + `${esc(d.unavailable.about)}</p></div>`;
+      }
 
       const f = d.forecast;
       if (f){

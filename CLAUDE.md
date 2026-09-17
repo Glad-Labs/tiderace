@@ -31,10 +31,12 @@ regs offshore conditions basemap survey whales reports birds hms history
 evaluate gso charts species serve`.
 
 `species <name>` prints the card for one fish -- every band, what each one
-rests on, and the rules -- and is the fastest way to see whether a claim is
-cited or a hand-set prior. `species --photos` fetches a reference photograph
-per fish from iNaturalist; it is the only thing in the project that reaches
-that API for anything but whales, and nothing on a forecast path calls it.
+rests on, the natural history, and the rules -- and is the fastest way to see
+whether a claim is cited or a hand-set prior. `species --photos` fetches a
+reference photograph per fish and `species --info` the natural history; both
+reach the network, both are slow on purpose, and nothing on a forecast path
+calls either. They are the only things in the project that touch iNaturalist
+for anything but whales, or Wikipedia at all.
 
 ---
 
@@ -227,6 +229,57 @@ is not modelled, that is a fact about the app, not permission to keep the fish.
 A test asserts `species.py` carries no size/season/bag numbers. **A search
 result is not a source.** Regulations work belongs in the sibling `fishreg`
 repo, which plays amendment streams forward to compute current state.
+
+### A binomial is the only key; a common name is not
+
+Every one of the 37 species now carries a scientific name from a document
+(`species.SCIENTIFIC`, plus two that read through to `hms.py`), and every
+lookup -- iNaturalist for a photograph, Wikipedia for natural history -- goes
+through it. There is no common-name fallback anywhere, and there must not be
+one: on 17 September 2026 the alias lists this project already had resolved
+"False Albacore" to an Indo-Pacific kawakawa, "grey trout" to a lake trout,
+"sea mullet" to a mullet, and "Weakfish" to a genus. Four plausible wrong
+animals, from names Matt actually says. The fifteen missing names came from
+NOAA's MRIP species-code table, each with its ITIS TSN, cross-checked against
+WoRMS -- which flagged two the 2008 table had superseded and where the
+project's own values were already right.
+
+### Wikipedia is background, never a band and never a rule
+
+`wiki.py` reads natural history -- what the fish looks like, where it lives,
+what it eats, when it spawns. The licence for reading a tertiary source at all
+is that **nothing computes on it**: no scorer, no prospector and no regulation
+path imports it, and a test asserts that. The day something does, the licence
+is gone.
+
+Sections about fishing are refused by a default-deny allowlist, because the
+striped bass article carries one headed "Current fishing regulations" and a
+size limit nobody read out of a RIDEM notice has no business on the same card
+as the legal strip. A second net drops any surviving paragraph that reads like
+a rule. Both refusals are counted and shown; a filtered source that does not
+admit it was filtered is the more misleading of the two.
+
+### A reference photograph answers "what does this look like"
+
+Wikipedia's taxobox image first, iNaturalist second. Matt, 17 September 2026:
+"the tautog fish image looks incorrect" -- then, "maybe the tautog image is
+correct, just different than what I'm used to seeing." Both true. It was a
+real *Tautoga onitis* and a pale juvenile in the weed, which is not the fish
+anyone recognises. iNaturalist's `default_photo` is the observation people
+liked best; a taxobox image is the one an editor chose to show what the
+species looks like. Different questions, and only the second is ours. Getting
+that order right filled all nine of the gaps as well.
+
+### Three kinds of no, not two
+
+A lookup that could not be carried out is a fact about the network. Until
+17 September 2026 `fishpic` recorded it as `resolved: False`, which the card
+reads out as "no confident match for this fish" -- five species carried that
+verdict and three of them resolve on the first try. "Nobody looked", "looked
+and could not be sure" and "tried to look and could not reach the server" are
+three different facts and the card says which. The same trap caught a fourth
+time the same day: gating the card on sections alone made scup, whose article
+is all lead and no section, report "not fetched yet" after being fetched.
 
 ### There is no list of spots
 

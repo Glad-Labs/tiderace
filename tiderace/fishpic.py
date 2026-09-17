@@ -1,9 +1,31 @@
-"""A reference photograph of each fish, from iNaturalist, with its licence.
+"""A reference photograph of each fish, with its licence.
 
 Matt asked for "an image of the fish for reference" on the species card. The
 whole difficulty is one word in that sentence: *the* fish. A photograph of the
 wrong animal on a card headed "Tautog" is worse than no photograph, because a
 card is where somebody goes to check.
+
+**Two sources, and the order between them is the point.** Matt, 17 September
+2026, about the tautog card: "the tautog fish image looks incorrect" -- then,
+looking again, "maybe the tautog image is correct, just different than what
+I'm used to seeing." He had it exactly right, and the second sentence is the
+more useful bug report. The photograph was a genuine *Tautoga onitis*: a pale
+mottled juvenile lying in the weed, which is a fish almost nobody who fishes
+for tog would pick out of a line-up. It was the right species and the wrong
+picture, and no amount of taxonomic care would have caught it, because the
+taxonomy was never wrong.
+
+The cause is that iNaturalist's `default_photo` answers a different question
+from the one a reference card asks. It is the observation photograph the
+community liked best -- which rewards a good photograph, and an unusual
+animal is often a better photograph than a typical one. A Wikipedia taxobox
+image is chosen by editors *to show what the species looks like*. That is our
+question, so that is the source that goes first, and iNaturalist is the
+fallback for the fish Commons has nothing free for.
+
+For the tautog the difference is a juvenile in the weed against an adult held
+up at the rail: same species, and only one of them settles an argument on a
+boat.
 
 This project has made that mistake once already and written it down.
 `whales.py`: "An earlier pass used 47178 for sharks and got mummichogs and
@@ -42,6 +64,23 @@ next to every other regenerable cache, and 3.8 MB of blobs are already in this
 project's pushed history from one careless `git add -A`.
 """
 
+# A note on what a failed lookup means, because this file got it wrong once.
+#
+# Until 17 September 2026 every network error in `resolve` came back as None,
+# and `fetch_all` wrote that down as `resolved: False` -- which the card
+# renders as "no confident match on iNaturalist for this fish". Five species
+# carried that verdict: bluefin, albacore, swordfish, spanish mackerel and
+# white marlin. Three of them resolve perfectly well by their binomial and
+# always did; what had actually happened was a transient failure mid-run.
+#
+# So the app was making a claim about a fish out of a fact about the network,
+# and then showing that claim to a person as a reason. That is the same class
+# of mistake as a silent fallback, and this project's rule is to fail loud:
+# `LookupFailed` now travels separately, is recorded as an error with its
+# date, and the card says the lookup failed rather than that the fish could
+# not be identified. "Nobody looked", "looked and could not be sure" and
+# "tried to look and could not reach the server" are three different facts.
+
 from __future__ import annotations
 
 import json
@@ -77,6 +116,15 @@ OPEN_LICENCES = ("cc0", "cc-by", "cc-by-nc", "cc-by-sa", "cc-by-nc-sa",
 PAUSE = 1.1
 
 
+class LookupFailed(Exception):
+    """The lookup could not be carried out -- not that it came back empty.
+
+    Kept apart from a `None` return because the two end up on the card as
+    different sentences, and conflating them is what put "no confident match"
+    under three fish whose binomials resolve on the first try.
+    """
+
+
 def _norm(s: str) -> str:
     """Names compared with case, punctuation and spacing taken out, so
     "False Albacore" matches "false albacore" and "Little Tunny (False
@@ -104,8 +152,8 @@ def _by_scientific(binomial: str) -> dict | None:
     try:
         data = _get(TAXA, {"q": binomial, "rank": "species",
                            "is_active": "true", "per_page": 5})
-    except (urllib.error.URLError, OSError, ValueError):
-        return None
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise LookupFailed("iNaturalist: %s" % exc) from exc
     want = _norm(binomial)
     for t in data.get("results", []):
         names = {_norm(t.get("name"))}
@@ -165,8 +213,8 @@ def resolve(name: str, aliases=(), binomial: str = "") -> dict | None:
         try:
             data = _get(TAXA, {"q": query, "rank": "species",
                                "is_active": "true", "per_page": 10})
-        except (urllib.error.URLError, OSError, ValueError):
-            return None
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise LookupFailed("iNaturalist: %s" % exc) from exc
         for t in data.get("results", []):
             if t.get("iconic_taxon_name") and \
                     t["iconic_taxon_name"] not in CLASSES + ("Animalia",):
@@ -210,25 +258,36 @@ def load() -> dict:
     return cache.read_json(MANIFEST, default={}) or {}
 
 
+SOURCE_NAME = {"wikipedia": "Wikimedia Commons", "inaturalist": "iNaturalist"}
+
+
 def get(key: str) -> dict | None:
     """What the card should show for this fish, or None.
 
-    None covers three different situations and the caller is expected to say
-    which: nothing has been fetched yet, no confident taxon match was found,
-    or the only photograph is all-rights-reserved. `entry()` gives the reason.
+    None covers four different situations and the caller is expected to say
+    which: nothing has been fetched yet, no freely licensed photograph was
+    found on either source, the lookup itself failed, or the file is gone.
+    `entry()` gives the reason.
     """
     e = load().get(key) or {}
     if not e.get("file"):
         return None
     if not os.path.exists(os.path.join(PHOTO_DIR, e["file"])):
         return None
+    # Which of the two sources it came from is part of the credit, not a
+    # detail: they carry different licences and a reader checking one has to
+    # know which door to knock on. Entries written before there were two
+    # sources have no `source` and are iNaturalist by construction.
+    where = SOURCE_NAME.get(e.get("source") or "inaturalist", "unknown")
     return {
         "url": "/species-photo/" + e["file"],
         "scientific": e.get("scientific"),
+        "source": e.get("source") or "inaturalist",
+        "credit_url": e.get("credit_url") or "",
         # A condition of use, not decoration. `dossier` will not emit a photo
         # without it and the page renders it beneath the image.
-        "credit": "%s · iNaturalist (%s)" % (e.get("attribution") or "unknown",
-                                             e.get("licence") or "?"),
+        "credit": "%s · %s (%s)" % (e.get("attribution") or "unknown", where,
+                                    e.get("licence") or "?"),
     }
 
 
@@ -261,18 +320,83 @@ def photo_path(request_path: str) -> str | None:
     return os.path.join(PHOTO_DIR, stored)
 
 
-def fetch_all(species_list, refresh: bool = False, log=print) -> dict:
-    """Resolve and download a photo for each fish. Returns a small report.
+def _from_wikipedia(sp, binomial: str) -> dict | None:
+    """The taxobox image, and the article it came off, or None.
 
-    Deliberately not called by the server or by any forecast path: this makes
-    thirty-seven network round trips at a polite one per second, and a boat
+    First because an editor picked it to show what the species looks like.
+    The verification is `wiki.article`'s: the Wikidata item has to say species
+    and has to say this binomial, so the fish on the card is the fish in the
+    document, not whatever the name happens to redirect to today.
+    """
+    from . import wiki
+    art = wiki.article(binomial)
+    if art and art.get("error"):
+        # Loud, not a quiet fall-through to the second-choice source. A
+        # reader who sees an iNaturalist photo has no way to tell whether
+        # Commons had nothing or whether the network hiccupped.
+        raise LookupFailed(art["error"])
+    if not art:
+        return None
+    time.sleep(wiki.PAUSE)
+    img = wiki.image(art["title"])
+    if img and img.get("error"):
+        raise LookupFailed(img["error"])
+    if not img:
+        return None
+    return {"source": "wikipedia", "taxon_id": None,
+            "scientific": art["taxon"], "common": art["title"],
+            "matched_on": binomial, "verified": art["verified"],
+            "url": img["url"], "licence": img["licence"],
+            "attribution": img["attribution"],
+            "credit_url": img["credit_url"],
+            "photo_id": img["file"]}
+
+
+def _from_inaturalist(sp, binomial: str) -> dict | None:
+    """The taxon's own default photo, when Commons has nothing free.
+
+    Unchanged, and still the route that has to be most careful: this is the
+    one that will fall back to a common-name match, and a common name is not
+    a key. Raises `LookupFailed` rather than returning None when it is the
+    network that failed.
+    """
+    hit = resolve(sp.name, sp.aliases, binomial)
+    time.sleep(PAUSE)
+    if not hit:
+        return None
+    try:
+        full = _get(TAXA + "/" + str(hit["taxon_id"]), {})
+        taxon = (full.get("results") or [{}])[0]
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise LookupFailed("iNaturalist taxon: %s" % exc) from exc
+    time.sleep(PAUSE)
+    photo = _photo_of(taxon)
+    if not photo:
+        return None
+    return dict(hit, source="inaturalist", url=photo["url"],
+                licence=photo["licence"], attribution=photo["attribution"],
+                credit_url="https://www.inaturalist.org/photos/%s"
+                           % photo["photo_id"],
+                photo_id=photo["photo_id"])
+
+
+def fetch_all(species_list, refresh: bool = False, log=print) -> dict:
+    """Find and download a reference photograph for each fish. A small report.
+
+    Wikipedia's taxobox image first, iNaturalist's default photo second. Both
+    routes go through the binomial `species.scientific` holds from a document;
+    neither is allowed to guess from a common name alone.
+
+    Deliberately not called by the server or by any forecast path: this is
+    thirty-seven fish and a couple of hundred polite round trips, and a boat
     asking for a card should never wait on it. `tiderace species --photos` is
     the only caller.
     """
+    from . import species as speciesmod
     os.makedirs(PHOTO_DIR, exist_ok=True)
     man = load()
     report = {"matched": 0, "downloaded": 0, "no_match": [], "no_licence": [],
-              "kept": 0}
+              "kept": 0, "failed": [], "by_source": {}}
 
     for sp in species_list:
         have = man.get(sp.key) or {}
@@ -281,58 +405,61 @@ def fetch_all(species_list, refresh: bool = False, log=print) -> dict:
             report["kept"] += 1
             continue
 
-        from . import species as speciesmod
-        hit = resolve(sp.name, sp.aliases, speciesmod.scientific(sp.key))
-        time.sleep(PAUSE)
+        binomial = speciesmod.scientific(sp.key)
+        hit = None
+        try:
+            hit = _from_wikipedia(sp, binomial) if binomial else None
+            if not hit:
+                hit = _from_inaturalist(sp, binomial)
+        except LookupFailed as exc:
+            # The network, not the fish. Recorded as an error with its date
+            # and WITHOUT `resolved`, so the card says the lookup failed
+            # rather than that this fish could not be identified -- which is
+            # what three perfectly identifiable tuna were told for a week.
+            man[sp.key] = dict(have, error=str(exc),
+                               checked_on=time.strftime("%Y-%m-%d"))
+            report["failed"].append(sp.key)
+            log("  %-22s lookup failed: %s" % (sp.key, exc))
+            continue
+
         if not hit:
-            # Recorded, not silently skipped. "Nobody looked" and "looked and
-            # could not be sure" are different facts and the card says which.
-            man[sp.key] = {"resolved": False,
+            # "Nobody looked", "looked and could not be sure" and "looked and
+            # everything found is all-rights-reserved" are different facts and
+            # the card says which.
+            man[sp.key] = {"resolved": False, "binomial": binomial,
                            "checked_on": time.strftime("%Y-%m-%d")}
             report["no_match"].append(sp.key)
-            log("  %-22s no confident match" % sp.key)
+            log("  %-22s no freely licensed photograph on either source"
+                % sp.key)
             continue
         report["matched"] += 1
 
-        try:
-            full = _get(TAXA + "/" + str(hit["taxon_id"]), {})
-            taxon = (full.get("results") or [{}])[0]
-        except (urllib.error.URLError, OSError, ValueError):
-            taxon = {}
-        time.sleep(PAUSE)
-        photo = _photo_of(taxon)
-        if not photo:
-            man[sp.key] = dict(hit, resolved=True, file=None,
-                               checked_on=time.strftime("%Y-%m-%d"),
-                               why="no Creative Commons photo on this taxon")
-            report["no_licence"].append(sp.key)
-            log("  %-22s %-28s photo is all rights reserved"
-                % (sp.key, hit["scientific"]))
-            continue
-
-        ext = ".jpg" if ".png" not in photo["url"].lower() else ".png"
+        ext = ".png" if ".png" in hit["url"].lower() else ".jpg"
         fname = sp.key + ext
         try:
-            req = urllib.request.Request(photo["url"],
+            req = urllib.request.Request(hit["url"],
                                          headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=30) as fh:
                 blob = fh.read()
-        except (urllib.error.URLError, OSError):
+        except (urllib.error.URLError, OSError) as exc:
+            man[sp.key] = dict(have, error="download: %s" % exc,
+                               checked_on=time.strftime("%Y-%m-%d"))
+            report["failed"].append(sp.key)
             log("  %-22s download failed" % sp.key)
             continue
         # Through `cache`, not hand-rolled. It already owns atomic writes and
         # a test walks this package looking for anybody who decided to do it
         # themselves -- which is how this line was written the first time.
         cache.write_bytes(os.path.join(PHOTO_DIR, fname), blob)
-        man[sp.key] = dict(hit, resolved=True, file=fname,
-                           licence=photo["licence"],
-                           attribution=photo["attribution"],
-                           photo_id=photo["photo_id"],
-                           bytes=len(blob),
+        man[sp.key] = dict(hit, resolved=True, file=fname, bytes=len(blob),
                            checked_on=time.strftime("%Y-%m-%d"))
+        man[sp.key].pop("url", None)      # the local copy is what we serve
         report["downloaded"] += 1
-        log("  %-22s %-28s %s  %d KB"
-            % (sp.key, hit["scientific"], photo["licence"], len(blob) // 1024))
+        report["by_source"][hit["source"]] = \
+            report["by_source"].get(hit["source"], 0) + 1
+        log("  %-22s %-26s %-11s %-9s %4d KB"
+            % (sp.key, hit["scientific"][:26], hit["source"],
+               hit["licence"][:9], len(blob) // 1024))
         time.sleep(PAUSE)
 
     cache.write_json(MANIFEST, man)
