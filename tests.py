@@ -9731,6 +9731,63 @@ class SpeciesBackground(unittest.TestCase):
                       d["unavailable"]["about"])
         self.assertNotIn("not fetched", d["unavailable"]["about"])
 
+    def test_a_lead_only_article_is_not_refetched_every_run(self):
+        """The other half of the scup fix, and the reason it needed a second
+        commit.
+
+        `get` learned that a lead-only article counts and `fetch_all`'s cache
+        check did not, so scup was rendered correctly and re-read from
+        Wikipedia on every single run -- "1 read · 36 already cached", three
+        round trips to answer a question already on disk. The bug was not the
+        predicate; it was that the predicate existed twice. So the test is
+        that the two callers cannot disagree.
+        """
+        import unittest.mock as mock
+        from tiderace import species, wiki
+        lead_only = {"summary": ["The scup is a fish."], "sections": [],
+                     "found": True, "checked_on": "2026-09-17"}
+        # The card shows it...
+        with mock.patch.object(wiki, "load", lambda: {"scup": lead_only}):
+            self.assertIsNotNone(wiki.get("scup"))
+        # ...and the fetch leaves it alone.
+        looked = []
+        with mock.patch.object(wiki, "load", lambda: {"scup": lead_only}), \
+                mock.patch.object(wiki, "article",
+                                  lambda b: looked.append(b) or None), \
+                mock.patch.object(wiki.cache, "write_json", lambda *a: None), \
+                mock.patch.object(wiki.time, "sleep", lambda *a: None):
+            rep = wiki.fetch_all([species.BY_KEY["scup"]], log=lambda *a: None)
+        self.assertEqual(looked, [], "a cached article was fetched again")
+        self.assertEqual(rep["kept"], 1)
+        self.assertEqual(rep["read"], 0)
+        # --refresh still means refresh, or there would be no way to update.
+        with mock.patch.object(wiki, "load", lambda: {"scup": lead_only}), \
+                mock.patch.object(wiki, "article",
+                                  lambda b: looked.append(b) or None), \
+                mock.patch.object(wiki.cache, "write_json", lambda *a: None), \
+                mock.patch.object(wiki.time, "sleep", lambda *a: None):
+            wiki.fetch_all([species.BY_KEY["scup"]], refresh=True,
+                           log=lambda *a: None)
+        self.assertEqual(looked, ["Stenotomus chrysops"])
+
+    def test_the_cache_check_and_the_card_ask_the_same_question(self):
+        """Written once, asked twice. If these two ever diverge again the
+        symptom is silent -- a fish that renders perfectly and quietly hits
+        the network for ever."""
+        import inspect
+        from tiderace import wiki
+        src = strip_py_comments(inspect.getsource(wiki))
+        # Exactly one place decides what "we have something" means.
+        self.assertEqual(src.count('get("sections") or'), 1, src.count("x"))
+        for fn in (wiki.get, wiki.fetch_all):
+            self.assertIn("has_content", strip_py_comments(inspect.getsource(fn)),
+                          fn.__name__)
+        for entry, want in (({"sections": [{"heading": "x"}]}, True),
+                            ({"summary": ["x"]}, True),
+                            ({"summary": [], "sections": []}, False),
+                            ({}, False)):
+            self.assertIs(wiki.has_content(entry), want, entry)
+
     def test_nothing_that_decides_anything_imports_wiki(self):
         """The licence for reading a tertiary source at all is that nothing
         computes on it. A band decides a forecast and a rule decides whether a
