@@ -315,6 +315,42 @@ def sightings_near(lat: float, lon: float, days_back: int = 3) -> list[dict]:
     return found
 
 
+def _covering_centre(pts: list[tuple[float, float]]) -> tuple[float, float]:
+    """The centre of the smallest circle containing every point.
+
+    Not the centroid. A centroid minimises the *average* distance, and what a
+    covering circle depends on is the *worst* one -- so the centroid is pulled
+    wherever the points are densest and strands whatever is out on its own.
+    Measured 17 September 2026 on the prospected candidates: the mass of them
+    is up the bay, the centroid follows, and the handful off Watch Hill end up
+    47.5 km away against a 43.5 km margin. The tightest circle round the same
+    points has a radius of 34.6 km. Nothing was too spread out; the centre was
+    in the wrong place.
+
+    Badoiu-Clarkson: step toward whichever point is currently furthest, by a
+    fraction that decays as 1/i. On the max-of-distances -- convex, so it has
+    no local minimum to be trapped in -- this converges on the true centre.
+    The caller measures the result rather than trusting it, so an imperfect
+    centre can only ever cost a query that was available, never claim a
+    circle that does not cover.
+
+    Distances are worked in a local km plane on the same scaling as `_km`,
+    because a degree of longitude is not a degree of latitude at 41 N.
+    """
+    clat = sum(p[0] for p in pts) / len(pts)
+    clon = sum(p[1] for p in pts) / len(pts)
+    kx = 111.32 * math.cos(math.radians(clat))
+    ky = 110.57
+    plane = [((b - clon) * kx, (a - clat) * ky) for a, b in pts]
+
+    cx = cy = 0.0
+    for i in range(1, 201):
+        fx, fy = max(plane, key=lambda q: math.hypot(q[0] - cx, q[1] - cy))
+        cx += (fx - cx) / i
+        cy += (fy - cy) / i
+    return clat + cy / ky, clon + cx / kx
+
+
 def prime(points, days_back: int = 3) -> bool:
     """Fetch one query covering a whole set of spots, before any is asked.
 
@@ -325,8 +361,7 @@ def prime(points, days_back: int = 3) -> bool:
     pts = [(float(a), float(b)) for a, b in points]
     if not pts:
         return False
-    clat = sum(p[0] for p in pts) / len(pts)
-    clon = sum(p[1] for p in pts) / len(pts)
+    clat, clon = _covering_centre(pts)
     if max(_km(clat, clon, a, b) for a, b in pts) > region_reuse_km():
         return False              # too spread out; each opens its own circle
     sightings_near(clat, clon, days_back)
