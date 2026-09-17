@@ -10,9 +10,15 @@ station catalog it was untrue for as long as that sentence has been there.
 
 from __future__ import annotations
 
+import atexit
 import os
 import re
+import shutil
+import tempfile
 import unittest
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import date, datetime, timedelta
 
 from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, gso, hms,
@@ -24,6 +30,7 @@ from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, 
 STALE_REC = regs.STALE_AFTER_DAYS
 from tiderace.features import _local_tz, _wind_against_tide
 from tiderace.sources import current_at
+from tiderace import sources as sourcesmod
 from tiderace import stations as stationsmod
 
 
@@ -54,6 +61,57 @@ def _the_suite_does_not_fetch(path: str | None = None) -> dict:
 
 
 stationsmod.refresh = _the_suite_does_not_fetch
+
+
+# ... and it does not reach the network at all, which is the other half of
+# the same sentence and was the other half untrue.
+#
+# The station catalog was one route out and not the only one. A full run with
+# urlopen and socket.connect hooked, 17 September 2026, also found NOAA CO-OPS
+# being asked for water temperature once per candidate water-level station:
+# stations.resolve -> reports_temp -> sources.latest_water_temp -> _coops ->
+# _fetch. That cache holds thirty minutes, so on any machine the suite is run
+# on twice in a day it is a live request, every run, several per run.
+#
+# Nothing here needs it. Checked by refusing every sources._fetch outright and
+# running the whole suite: 664 tests, no failures, the same three skips.
+# `reports_temp` already answers False when the probe fails and `resolve`
+# carries "no nearby station reports water temperature" instead -- what the
+# app does on the water with no signal. The tests touching that path were
+# never reading a real temperature. They were only paying for one.
+#
+# So the refusal sits at urlopen rather than on that one path: a module that
+# grows a fetch later is caught by the same net without anyone remembering to
+# extend this. URLError is what a dropped connection raises, so the code under
+# test takes the offline branch it was built to take rather than an exception
+# it has never seen -- and the suite exercises those branches for free.
+# Loopback is left alone: one test points a backend at a dead local port on
+# purpose and needs the refusal to come from the port.
+_real_urlopen = urllib.request.urlopen
+
+
+def _the_suite_does_not_reach_the_network(req, *args, **kw):
+    url = req.full_url if hasattr(req, "full_url") else str(req)
+    if (urllib.parse.urlsplit(url).hostname or "") in ("127.0.0.1", "::1", "localhost"):
+        return _real_urlopen(req, *args, **kw)
+    raise urllib.error.URLError(
+        "the suite does not reach the network (%s)" % url[:80])
+
+
+urllib.request.urlopen = _the_suite_does_not_reach_the_network
+
+
+# The cache is the same question one layer down. `sources._fetch` serves a
+# cached body without asking anybody when it is inside the thirty-minute TTL,
+# so with the network refused the suite still answers from whatever the last
+# real run happened to leave on the disk -- real water temperatures on the
+# machine that has them, nothing on the machine that does not. Same suite,
+# two behaviours, and the difference is invisible. Pointing it at an empty
+# directory makes every machine the machine without them, which is the one
+# the tests were written against and the state a fresh clone is always in.
+_SOURCE_CACHE = tempfile.mkdtemp(prefix="tiderace-tests-")
+atexit.register(shutil.rmtree, _SOURCE_CACHE, True)
+sourcesmod.CACHE_DIR = _SOURCE_CACHE
 
 
 class Astro(unittest.TestCase):
@@ -9423,6 +9481,70 @@ class ZoomedChromeStaysOnTheGlass(unittest.TestCase):
                          "vh/vw on a zoomed element must be divided by "
                          "var(--ui, 1) or it is scaled twice: "
                          + "; ".join(offenders))
+
+
+class TheSuiteDoesNotReachTheNetwork(unittest.TestCase):
+    """"No network" is the second line of this file and was not true.
+
+    The station catalog was one way out and got its own guard. The other was
+    quieter: `stations.resolve` asks whether each candidate water-level
+    station reports water temperature, and asks NOAA to find out -- resolve
+    -> reports_temp -> sources.latest_water_temp -> _coops -> _fetch. That
+    cache holds thirty minutes, so it is a live request on any machine the
+    suite runs on twice in a day. Sixteen connections to
+    api.tidesandcurrents.noaa.gov in one run, measured 17 September 2026 with
+    the socket layer hooked; none of them needed.
+
+    A suite that fails when a government website is slow trains you to ignore
+    it -- which is this file's own argument, and it had been running against
+    that website all along.
+    """
+
+    NOAA = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=water_temperature"
+
+    def test_a_remote_host_is_refused(self):
+        self.assertIs(urllib.request.urlopen, _the_suite_does_not_reach_the_network,
+                      "something restored the real urlopen and left it there")
+        with self.assertRaises(urllib.error.URLError) as caught:
+            urllib.request.urlopen(self.NOAA)
+        self.assertIn("does not reach the network", str(caught.exception))
+        # Through a Request object too, which is how sources and birds call it.
+        req = urllib.request.Request(self.NOAA, headers={"User-Agent": "x"})
+        with self.assertRaises(urllib.error.URLError):
+            urllib.request.urlopen(req)
+
+    def test_a_dead_local_port_still_answers_for_itself(self):
+        """Loopback is left through. One test points a backend at a dead local
+        port and the refusal has to come from the port -- otherwise it passes
+        for the wrong reason and stops testing the backend at all."""
+        with self.assertRaises(Exception) as caught:
+            urllib.request.urlopen("http://127.0.0.1:1/ping", timeout=2)
+        self.assertNotIn("does not reach the network", str(caught.exception))
+
+    def test_the_water_temperature_probe_answers_without_asking(self):
+        """The path that was reaching out, and what it does now instead.
+
+        Both layers already had the offline branch: `water_temp` swallows
+        SourceError and `reports_temp` answers False, so `resolve` carries
+        "no nearby station reports water temperature" and the term defaults.
+        That is what the app does on the water with no signal, and nothing in
+        the suite was reading a real temperature -- it was only paying for one.
+        """
+        from tiderace import sources, stations
+        self.assertEqual(sources.CACHE_DIR, _SOURCE_CACHE,
+                         "the suite is reading the real source cache again")
+        self.assertEqual(sources.water_temp("8452660"), [])
+        self.assertIsNone(sources.latest_water_temp("8452660"))
+        with self.assertRaises(sources.SourceError):
+            sources._fetch(self.NOAA, ttl=0)
+
+        # reports_temp memoises, so a run that already probed would answer
+        # from the cache and prove nothing.
+        before = dict(stations._TEMP_CACHE)
+        stations._TEMP_CACHE.clear()
+        self.addCleanup(stations._TEMP_CACHE.update, before)
+        self.addCleanup(stations._TEMP_CACHE.clear)
+        self.assertFalse(stations.reports_temp("8452660"))
 
 
 class TestsDoNotWriteToTheRealData(unittest.TestCase):
