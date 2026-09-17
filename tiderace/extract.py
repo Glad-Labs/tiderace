@@ -611,10 +611,77 @@ def reconcile_queue(path: str = REVIEW_PATH, apply_bait: bool = True,
     return counts
 
 
-def awaiting(path: str = REVIEW_PATH, limit: int = 200) -> list[dict]:
-    """What is in force and has not been looked at: applied bait, catch
-    reports on file, and bait that could not be placed. One row per
-    observation, newest first, with its id."""
+# --------------------------------------------------------------- still true?
+# Conditions do not last. A bunker school seen three weeks ago is not a fact
+# about today, and a list that shows it beside this morning's sighting is
+# claiming otherwise. Each of the two kinds ages differently and the desk has
+# to say which, so the ageing rule lives here rather than in the page:
+#
+#   bait          decays continuously (bait.HALF_LIFE_DAYS) and is skipped
+#                 outright past bait.MAX_AGE_DAYS -- from then on retracting
+#                 it changes no number anywhere.
+#   catch report  stops describing "now" after reports.FRESH_DAYS, which is
+#                 what `corroborate` asks. It does NOT stop counting: the
+#                 season curve in `weekly_presence` is built from the whole
+#                 year and is the only thing that can ever check `peak_months`.
+#                 So an old report is demoted, never discarded.
+#
+# An undated report is inert on arrival -- `reports.catch_reports` drops it
+# rather than stamping it with today, so it has never counted for anything.
+
+STANDINGS = ("live", "season", "inert")
+
+
+def standing(r: dict, on: datetime | None = None) -> dict:
+    """What this row is still doing to the forecast, right now.
+
+    `state` is one of STANDINGS: "live" means retracting it would change a
+    number today, "season" means it only feeds the year-long presence curve,
+    "inert" means nothing anywhere reads it and the buttons are decoration.
+    """
+    from . import reports as reportsmod
+
+    kind, status = r.get("kind"), r.get("status")
+    if kind == "bait":
+        if status != "applied":
+            return {"state": "inert", "age_days": None, "strength": 0.0,
+                    "note": "never placed"}
+        st = baitmod.strength(
+            str(r.get("observed_on") or r.get("applied_at")
+                or r.get("queued_at") or ""), at=on)
+        aged = {"age_days": st["age_days"], "strength": st["strength"]}
+        if st["live"]:
+            return {"state": "live", "note": "in the bait log", **aged}
+        return {"state": "inert", **aged,
+                "note": "too old to score"}
+
+    if kind == "catch_report":
+        day = reportsmod._parse_day(r.get("observed_on"))
+        if not day:
+            return {"state": "inert", "age_days": None, "strength": 0.0,
+                    "note": "undated, never counted"}
+        age = ((on or datetime.now()).date() - day).days
+        if age <= reportsmod.FRESH_DAYS:
+            return {"state": "live", "age_days": float(age), "strength": 1.0,
+                    "note": "counting as a witness"}
+        return {"state": "season", "age_days": float(age), "strength": 1.0,
+                "note": "season curve only"}
+
+    return {"state": "inert", "age_days": None, "strength": 0.0,
+            "note": "nothing reads it"}
+
+
+def awaiting(path: str = REVIEW_PATH, limit: int = 200,
+             states: tuple[str, ...] | None = None,
+             on: datetime | None = None) -> list[dict]:
+    """What is in force, one row per observation, with its id and what it is
+    still doing to the forecast.
+
+    Ordered by that standing and not by date: the rows that could still change
+    a number today come first, then the season evidence, then the rows nothing
+    reads. `states` filters to some of STANDINGS -- the desk asks for the live
+    ones, because a list that grows forever is a list nobody opens.
+    """
     latest: dict[str, dict] = {}
     for r in load_queue(path):
         if r.get("kind") == "regulation":
@@ -624,9 +691,19 @@ def awaiting(path: str = REVIEW_PATH, limit: int = 200) -> list[dict]:
         rid = item_id(r)
         if str(r.get("queued_at", "")) >= str(latest.get(rid, {}).get("queued_at", "")):
             latest[rid] = dict(r, id=rid)
-    rows = sorted(latest.values(),
-                  key=lambda r: (str(r.get("observed_on") or ""), str(r.get("queued_at", ""))),
-                  reverse=True)
+    rows = []
+    for r in latest.values():
+        st = standing(r, on=on)
+        if states and st["state"] not in states:
+            continue
+        rows.append(dict(r, standing=st))
+    # Two passes rather than one compound key: sorting is stable, so the date
+    # order survives inside each group. One reversed key cannot do both, and
+    # reversing the compound would rank `inert` above `live`.
+    rank = {s: i for i, s in enumerate(STANDINGS)}
+    rows.sort(key=lambda r: (str(r.get("observed_on") or ""),
+                             str(r.get("queued_at", ""))), reverse=True)
+    rows.sort(key=lambda r: rank.get(r["standing"]["state"], 9))
     return rows[:limit]
 
 

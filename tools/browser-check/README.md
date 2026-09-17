@@ -6,6 +6,7 @@ actually renders, which is the only way to check anything about markers,
 labels or the panel covering them.
 
     node tools/browser-check/preflight.mjs   # REQUIRED before any UI commit
+    node tools/browser-check/desk.mjs        # the desk page, which preflight does not cover
     node tools/browser-check/check.mjs       # just the panel-overlap check
 
 `preflight` is the one to run. Thirty checks across both viewports and both
@@ -17,6 +18,16 @@ otherwise falls back to a sibling checkout — edit `CANDIDATES` in check.mjs if
 yours lives elsewhere.
 
     npm i -D playwright && npx playwright install chromium
+
+`desk.mjs` covers `/desk`, which `preflight` does not touch at all -- the desk
+shipped unlooked-at until 17 September 2026, when its in-force list was
+rewritten with all 671 unit tests green and not one of them able to see the
+page. It found two things in its first run: the note column was `white-space:
+nowrap` prose 345 px wide, taking a 375 px phone to 538 px of sideways scroll,
+and the check's own precondition (`#confirm .empty`) was satisfied by the
+"reading…" placeholder the section ships with, so every count in the first
+draft measured an empty page and passed. Wait for `#confirm h2`, which only
+exists once the fetch has rendered.
 
 ## Why this exists
 

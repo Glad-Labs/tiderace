@@ -950,22 +950,36 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(img["bytes"])
                 return
             if url.path == "/api/confirm":
-                # What was applied on arrival and not yet looked at. Matt,
-                # 15 Sep 2026: "I'd rather just confirm them after they're
-                # applied." Each row carries the id a decision is posted with.
+                # What the reports put into the model, and what each row is
+                # still doing to it. Matt, 15 Sep 2026: "I'd rather just
+                # confirm them after they're applied" -- so nothing here is
+                # waiting on him, and the page says so. `state` picks which
+                # standing to list; the counts always describe all of it.
                 from . import extract
+                want = q.get("state", ["live"])[0]
+                states = None if want == "all" else (want,)
+                if states and want not in extract.STANDINGS:
+                    return self._send_json(
+                        {"error": "state must be one of %s, or all"
+                                  % ", ".join(extract.STANDINGS)}, 400)
                 try:
-                    rows = extract.awaiting(limit=5000)
+                    every = extract.awaiting(limit=5000)
                 except (OSError, ValueError) as exc:
                     return self._send_json({"error": str(exc)}, 500)
-                # Counted before the page is cut, so the numbers are the
-                # truth and the list is the first three hundred of it.
+                # Counted over everything before the list is filtered and cut,
+                # so the numbers are the truth and the rows are a view of it.
                 counts: dict[str, int] = {}
-                for r in rows:
+                standing: dict[str, int] = {s: 0 for s in extract.STANDINGS}
+                for r in every:
                     k = "%s/%s" % (r.get("kind"), r.get("status"))
                     counts[k] = counts.get(k, 0) + 1
+                    st = r["standing"]["state"]
+                    standing[st] = standing.get(st, 0) + 1
+                rows = [r for r in every
+                        if not states or r["standing"]["state"] in states]
                 return self._send_json({"rows": rows[:300], "total": len(rows),
-                                        "counts": counts,
+                                        "counts": counts, "standing": standing,
+                                        "state": want, "held": len(every),
                                         "decisions": list(extract.DECISIONS)})
             if url.path == "/api/place":
                 # A place said in prose, resolved to a public coordinate.
