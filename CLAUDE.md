@@ -23,6 +23,7 @@ running and cannot read a file. If the app is up but everything 404s, check
 python3 -m tiderace serve             # the app (systemd user unit, port 8765)
 python3 tests.py                      # the suite, no runner needed
 node tools/browser-check/preflight.mjs  # LOOK AT IT — required before commit
+node tools/browser-check/desk.mjs       # the desk page; preflight covers only the map
 python3 -m tiderace evaluate          # does the model beat the free baseline?
 ```
 
@@ -217,11 +218,40 @@ confirm them after they're applied." A placed, high- or medium-confidence
 bait sighting from a report goes into the bait log the moment it is read
 (the timer runs `scrape --apply-bait`), a catch report counts as a witness
 the moment it is read, and `extract.reconcile_queue` brings the queue up to
-that rule after every scrape. The desk's Confirm tab and `tiderace review
---confirm/--retract ID` are the review: a retraction takes the sighting back
-out of the log and the report off the witness list. Regulations never queue;
-the overlay applies them itself. The one thing this does not do is guess a
-place: a sighting with no coordinate stays pending and unused.
+that rule after every scrape. Regulations never queue; the overlay applies
+them itself. The one thing this does not do is guess a place: a sighting with
+no coordinate stays pending and unused.
+
+**The review is a retraction, not an inbox.** There is no confirm button on
+the desk, because nothing in the package reads `status="confirmed"` —
+`reports.catch_reports` skips only retracted rows and the bait log is keyed by
+the sighting, not the queue — so offering one asks for work that changes no
+number. `tiderace review --confirm ID` still records that you looked. Only
+`--retract` does anything: the sighting leaves the bait log and the report
+leaves the witness list. Matt, 17 September 2026, on being shown 375 rows
+headed "375 waiting", none of them ever actioned: *"why not just log
+everything? I don't have time to verify every claim."* That heading was the
+shape the regulation queue died of, and the tab is now **In force**.
+
+**Conditions expire, and the list says how.** `extract.standing` gives every
+row one of three states, and both the desk and the CLI list the live ones by
+default:
+
+- **live** — bait inside `bait.MAX_AGE_DAYS` (derived from `HALF_LIFE_DAYS`
+  and `WEIGHT_FLOOR`, ≈26.6 days, never typed), or a report inside
+  `reports.FRESH_DAYS`. Retracting one changes a number today.
+- **season** — a report past 10 days. It has stopped describing *now*, and it
+  has **not** stopped counting: `weekly_presence` is built from the whole year
+  and is the only thing that can ever check the hand-set `peak_months`.
+  Demoted, never discarded.
+- **inert** — bait with no coordinate (never applied), an undated report
+  (`catch_reports` drops it rather than stamping it with today), or bait too
+  old to clear the weight floor. Read by nothing; the button is decoration.
+
+Bait decays continuously at a four-day half life, so it ages out on its own: a
+sighting is worth 50% at four days, 18% at ten, 2.6% at three weeks, and is
+skipped outright past the ceiling. Nothing prunes the queue file — the ageing
+is in what the list *shows*, not in what is kept.
 
 A wrong size limit is not a bad forecast, it is a fine — and under Matt's
 father's commercial licence it is worse than a fine. When the app says a rule
@@ -357,7 +387,10 @@ scarcest thing in the project and the only irreplaceable one.
 ## Look at it before you commit
 
 **Any change that touches the UI runs `node tools/browser-check/preflight.mjs`
-before it is committed, and the run is reported.** Not after Matt finds it. This
+before it is committed, and the run is reported.** `preflight` covers the map
+page only; a change to `desk.html` runs `desk.mjs` as well, which exists
+because the desk was rewritten once with 671 green tests and no way for any of
+them to see the page. Not after Matt finds it. This
 is a standing instruction from him, given on 2 September 2026, and it exists
 because of what that day looked like:
 

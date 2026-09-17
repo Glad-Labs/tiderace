@@ -44,7 +44,10 @@ data/gso/
 # Local settings, including whose licence you fish under.
 data/config.json
 
-# Extraction review queue — claims awaiting human approval, not facts.
+# Extraction queue. Not "claims awaiting approval": since 15 September 2026
+# reports and bait are applied on arrival and reviewed after, so this holds
+# observations that are already in force, each carrying the article it came
+# from and a coordinate where one was resolved.
 data/review_queue.jsonl
 
 # Editable-install metadata

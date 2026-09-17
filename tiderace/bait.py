@@ -37,6 +37,18 @@ HALF_LIFE_DAYS = 4.0     # a sighting is worth half as much four days on
 SIGMA_NM = 1.2           # spatial falloff
 MAX_NM = 3.5             # beyond this, ignore entirely
 
+# Below this a sighting contributes nothing and `bait_at` skips it. It was an
+# unnamed 0.01 inside the loop until the desk needed to answer "can this row
+# still move a forecast?" -- a question you cannot ask a literal.
+WEIGHT_FLOOR = 0.01
+
+# The age past which no sighting can clear WEIGHT_FLOOR however good it is.
+# Every other term in the weight -- distance, confidence, relevance, source
+# trust -- is at most 1.0, so time alone decides the ceiling: at 26.6 days
+# even a `loaded` first-hand sighting standing on the mark is skipped. This is
+# derived, never typed: change HALF_LIFE_DAYS and this follows.
+MAX_AGE_DAYS = HALF_LIFE_DAYS * math.log2(1.0 / WEIGHT_FLOOR)
+
 ABUNDANCE = {"none": 0.0, "trace": 0.2, "scattered": 0.45,
              "decent": 0.75, "loaded": 1.0}
 
@@ -162,6 +174,26 @@ CORROBORATION = 0.10
 MAX_CORROBORATION = 2
 
 
+def strength(when: str, at: datetime | None = None) -> dict:
+    """How much of a sighting's time value is left, and whether any remains.
+
+    The time term of the weight on its own, so the desk can say what a row is
+    still doing rather than only when it was seen. `live` is the best case: a
+    row that is False here cannot matter to any position, at any distance, for
+    any fish. A row that is True here still has to survive distance and
+    relevance before it means anything -- this is a ceiling, not a promise.
+    """
+    try:
+        seen = datetime.fromisoformat(str(when))
+    except (TypeError, ValueError):
+        return {"age_days": None, "strength": 0.0, "live": False}
+    age = ((at or datetime.now()) - seen).total_seconds() / 86400.0
+    age = max(0.0, age)
+    return {"age_days": round(age, 1),
+            "strength": round(0.5 ** (age / HALF_LIFE_DAYS), 4),
+            "live": age <= MAX_AGE_DAYS}
+
+
 def bait_at(lat: float, lon: float, when: datetime, species: str,
             sightings: list[dict] | None = None,
             exclude_sources: set[str] | None = None) -> dict:
@@ -221,7 +253,7 @@ def bait_at(lat: float, lon: float, when: datetime, species: str,
 
         trust = SOURCE_TRUST.get(r.get("source", "own"), 0.7)
         weight = decay * near * conf * relevance * trust
-        if weight < 0.01:
+        if weight < WEIGHT_FLOOR:
             continue
 
         amount = ABUNDANCE.get(r.get("abundance", "decent"), 0.5)

@@ -3261,6 +3261,192 @@ class AppliedOnArrivalConfirmedAfter(unittest.TestCase):
         self.assertIn("decision not in extract.DECISIONS", route)
         self.assertIn("extract.decide(rid, decision)", route)
 
+class ConditionsDoNotLast(unittest.TestCase):
+    """Matt, 17 September 2026: "confirm that these things age out since
+    those conditions don't last forever."
+
+    They do, unevenly, and the list did not. Measured against the live queue
+    that day: 375 observations, of which 157 could still move a forecast, 134
+    only fed the season curve, and 84 were read by nothing at all -- 56 bait
+    sightings with no coordinate, 28 undated reports. The desk listed all 375
+    under the heading "375 waiting" with a confirm button beside each, which
+    is the shape the regulation queue died of.
+    """
+
+    def test_a_sighting_past_the_age_ceiling_cannot_score_at_any_distance(self):
+        """The ceiling is behaviour, not arithmetic: past it `bait_at` finds
+        no observations at all, standing on the mark, for the fish that wants
+        that bait most, at the best confidence there is."""
+        from tiderace import bait
+        now = datetime(2026, 9, 17, 12, 0)
+
+        def seen(days_ago):
+            return [{"bait": "bunker", "lat": 41.49, "lon": -71.32,
+                     "when": (now - timedelta(days=days_ago)).isoformat(),
+                     "abundance": "loaded", "confidence": "high", "source": "own"}]
+
+        fresh = bait.bait_at(41.49, -71.32, now, "striped_bass",
+                             sightings=seen(1))
+        self.assertGreater(fresh["signal"], 0.0)
+        self.assertEqual(fresh["observations"], 1)
+
+        # Just inside: still counted, and worth very little.
+        inside = bait.bait_at(41.49, -71.32, now, "striped_bass",
+                              sightings=seen(bait.MAX_AGE_DAYS - 1))
+        self.assertEqual(inside["observations"], 1)
+        self.assertLess(inside["signal"], 0.02)
+
+        # Just outside: gone entirely, and `known` says so rather than
+        # reporting a confident zero.
+        past = bait.bait_at(41.49, -71.32, now, "striped_bass",
+                            sightings=seen(bait.MAX_AGE_DAYS + 1))
+        self.assertEqual(past["observations"], 0)
+        self.assertEqual(past["signal"], 0.0)
+        self.assertFalse(past["known"])
+
+    def test_the_age_ceiling_is_derived_from_the_half_life_and_never_typed(self):
+        """A second literal would drift from HALF_LIFE_DAYS the first time
+        anyone tuned it, and the desk would go on showing rows the scorer had
+        stopped reading."""
+        import math
+        import pathlib
+        from tiderace import bait
+        self.assertAlmostEqual(
+            bait.MAX_AGE_DAYS,
+            bait.HALF_LIFE_DAYS * math.log2(1.0 / bait.WEIGHT_FLOOR), places=9)
+        src = strip_py_comments(
+            pathlib.Path(__file__).parent.joinpath("tiderace", "bait.py").read_text())
+        self.assertIn("MAX_AGE_DAYS = HALF_LIFE_DAYS", src)
+        self.assertNotIn("weight < 0.01", src, "the floor is named, or it is two numbers")
+
+    def test_standing_separates_what_moves_a_forecast_from_what_does_not(self):
+        from tiderace import extract, reports
+        # Midnight, because `observed_on` is a date: a row written "1 day ago"
+        # and read at noon is a day and a half old, and the first draft of this
+        # test asserted 84% against the 77% that is actually correct.
+        now = datetime(2026, 9, 17)
+
+        def bait_row(days_ago, status="applied"):
+            return {"kind": "bait", "status": status, "bait": "bunker",
+                    "observed_on": (now - timedelta(days=days_ago)).date().isoformat()}
+
+        def report_row(days_ago):
+            return {"kind": "catch_report", "status": "on_file", "species_key": "fluke",
+                    "observed_on": (now - timedelta(days=days_ago)).date().isoformat()}
+
+        live = extract.standing(bait_row(1), on=now)
+        self.assertEqual(live["state"], "live")
+        self.assertGreater(live["strength"], 0.8)
+
+        # Four days is the half-life; the number a person reads must be the
+        # number the scorer uses.
+        half = extract.standing(bait_row(4), on=now)
+        self.assertAlmostEqual(half["strength"], 0.5, places=2)
+
+        self.assertEqual(extract.standing(bait_row(40), on=now)["state"], "inert")
+        self.assertEqual(
+            extract.standing(bait_row(1, status="pending"), on=now)["state"], "inert",
+            "bait with no coordinate was never applied and is read by nothing")
+
+        self.assertEqual(extract.standing(report_row(3), on=now)["state"], "live")
+        self.assertEqual(
+            extract.standing(report_row(reports.FRESH_DAYS + 1), on=now)["state"], "season",
+            "an old report stops describing now but stays in the season curve")
+        self.assertEqual(
+            extract.standing({"kind": "catch_report", "status": "on_file"}, on=now)["state"],
+            "inert", "catch_reports() drops undated rows, so they never counted")
+
+    def test_an_old_report_is_demoted_but_still_counts_as_a_witness(self):
+        """The demotion has to be honest in both directions. `season` must not
+        quietly mean `ignored`: weekly_presence is the only thing that can ever
+        check the hand-set peak_months, and it is built from the whole year."""
+        import json
+        import os
+        import tempfile
+        from tiderace import extract, reports
+        with tempfile.TemporaryDirectory() as d:
+            q = os.path.join(d, "queue.jsonl")
+            old = {"kind": "catch_report", "status": "on_file", "species_key": "tautog",
+                   "species": "tautog", "place": "Newport", "observed_on": "2026-07-26",
+                   "source_url": "https://example.com/a", "attributed_to": "Ocean State Tackle",
+                   "quote": "tog in the harbour", "queued_at": "2026-07-27T00:00:00"}
+            with open(q, "w") as fh:
+                fh.write(json.dumps(old) + "\n")
+            row = extract.awaiting(q, on=datetime(2026, 9, 17))[0]
+            self.assertEqual(row["standing"]["state"], "season")
+            self.assertEqual(len(reports.catch_reports(q)), 1,
+                             "demoted, not dropped")
+            self.assertEqual(reports.weekly_presence("tautog", reports.catch_reports(q)),
+                             {30: 1}, "still one witness in its week")
+
+    def test_awaiting_puts_the_live_ones_first_and_filters_to_one_standing(self):
+        import json
+        import os
+        import tempfile
+        from tiderace import extract
+        now = datetime(2026, 9, 17, 12, 0)
+        with tempfile.TemporaryDirectory() as d:
+            q = os.path.join(d, "queue.jsonl")
+            rows = [
+                {"kind": "bait", "status": "pending", "bait": "squid", "place": "nowhere",
+                 "observed_on": "2026-09-16", "queued_at": "2026-09-16T00:00:00"},
+                {"kind": "catch_report", "status": "on_file", "species_key": "scup",
+                 "species": "scup", "observed_on": "2026-07-01", "queued_at": "2026-07-02T00:00:00"},
+                {"kind": "bait", "status": "applied", "bait": "bunker", "place": "Newport",
+                 "observed_on": "2026-09-16", "queued_at": "2026-09-16T00:00:00"},
+            ]
+            with open(q, "w") as fh:
+                for r in rows:
+                    fh.write(json.dumps(r) + "\n")
+
+            got = extract.awaiting(q, on=now)
+            self.assertEqual([r["standing"]["state"] for r in got],
+                             ["live", "season", "inert"],
+                             "ordered by what it is still doing, not by date")
+
+            live = extract.awaiting(q, on=now, states=("live",))
+            self.assertEqual([r["bait"] for r in live], ["bunker"])
+            self.assertEqual(extract.awaiting(q, on=now, states=("inert",))[0]["bait"], "squid")
+
+    def test_the_desk_lists_the_live_ones_and_offers_no_confirm_button(self):
+        """Nothing in the package reads status="confirmed" -- `catch_reports`
+        skips only retracted rows and the bait log is keyed by the sighting,
+        not the queue -- so a confirm button asks for work that changes no
+        number. The retraction is the one action with teeth."""
+        import pathlib
+        root = pathlib.Path(__file__).parent
+        desk = strip_comments((root / "tiderace" / "web" / "desk.html").read_text())
+        self.assertIn("/api/confirm?state=", desk)
+        self.assertIn("CONFIRM_STATE: 'live'", desk)
+        self.assertIn('data-d="retracted"', desk)
+        self.assertNotIn('data-d="confirmed"', desk,
+                         "nothing reads a confirmation; the desk must not ask for one")
+        self.assertNotIn("waiting</h2>", desk,
+                         "nothing is waiting on him; the heading must not say so")
+
+        pkg = root / "tiderace"
+        readers = [p.name for p in pkg.glob("*.py")
+                   if '"confirmed"' in strip_py_comments(p.read_text())
+                   and p.name not in ("extract.py", "cli.py")]
+        self.assertEqual(readers, [],
+                         "if something starts reading a confirmation, the desk "
+                         "should offer one again: %s" % readers)
+
+    def test_the_endpoint_counts_everything_and_lists_one_standing(self):
+        import pathlib
+        root = pathlib.Path(__file__).parent
+        srv = (root / "tiderace" / "server.py").read_text()
+        route = srv.split('if url.path == "/api/confirm":')[1].split('if url.path ==')[0]
+        route = strip_py_comments(route)
+        self.assertIn('q.get("state", ["live"])', route, "the default view is what is live")
+        self.assertIn("extract.awaiting(limit=5000)", route)
+        # Counted over everything, filtered afterwards: counting the cut list
+        # would report the size of the page rather than the size of the truth.
+        self.assertLess(route.index("standing[st] = standing.get(st, 0) + 1"),
+                        route.index('if not states or r["standing"]["state"] in states'),
+                        "the counts must be taken before the list is filtered")
+
+
 class RankedDotsOnTheMap(unittest.TestCase):
     """Matt, 9 September 2026: "it would be great to have the recommended
     spots color coded by quality, like make the best spot very noticeable and
