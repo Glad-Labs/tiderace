@@ -1059,26 +1059,74 @@ class Packaging(unittest.TestCase):
         self.assertTrue(os.path.isfile(w), "launcher missing")
         self.assertTrue(os.access(w, os.X_OK), "launcher is not executable")
 
-    def test_wrapper_runs_from_a_foreign_directory(self):
-        # The subprocess is a fresh interpreter, so the suite's no-fetch guard
-        # does not reach it and neither does any in-process hook watching for
-        # writes. `spots` goes prospect.candidates_for -> spots.at_coord ->
-        # stations.resolve -> stations.catalog, which on a stale or absent
-        # catalog fetches from NOAA and writes the real data/stations.json --
-        # correct for the CLI, not for a test. Confirmed on 16 September 2026
-        # by aging data/stations.json and running the wrapper by hand: the
-        # mtime came back as now. TIDERACE_STATIONS is the redirection
-        # stations.py already provides; the copy means it finds a fresh
-        # catalog there and has no reason to fetch at all.
+    def _wrapper(self, *args, cwd, seed_catalog=True):
+        """The launcher, from `cwd`, with the station catalog redirected.
+
+        The subprocess is a fresh interpreter, so the suite's no-fetch guard
+        does not reach it and neither does any in-process hook watching for
+        writes. Anything that reaches stations.catalog with a stale or absent
+        catalog fetches from NOAA and writes the real data/stations.json --
+        correct for the CLI, not for a test. Confirmed on 16 September 2026 by
+        aging data/stations.json and running the wrapper by hand: the mtime
+        came back as now. TIDERACE_STATIONS is the redirection stations.py
+        already provides; the copy means it finds a fresh catalog there and
+        has no reason to fetch at all.
+        """
         import shutil
-        import subprocess, tempfile
+        import subprocess
+        env = dict(os.environ, TIDERACE_STATIONS=os.path.join(cwd, "stations.json"))
+        if seed_catalog and os.path.exists(stationsmod.CATALOG_PATH):
+            shutil.copyfile(stationsmod.CATALOG_PATH, env["TIDERACE_STATIONS"])
+        return subprocess.run([os.path.join(self.ROOT, "tiderace-cli"), *args],
+                              cwd=cwd, capture_output=True, text=True, timeout=90,
+                              env=env)
+
+    def test_wrapper_runs_from_a_foreign_directory(self):
+        """The claim in the class docstring, and it must not need any data.
+
+        This used to be the `spots` run below, which wants the charted
+        soundings, so on a checkout without them the one test of this class's
+        whole point did not fail for a packaging reason -- it failed for want
+        of a 31 MB download. Guarding it would have been worse: a skip deletes
+        the check in exactly the place a packaging fault shows up first, which
+        is a fresh clone.
+
+        `--help` needs nothing on disk. Reaching argparse at all means
+        cli.py -- and features, fetch, gso, pelagic, regs, score and spots,
+        which it imports at import time -- resolved from a foreign cwd, which
+        is the whole of what the launcher is for. Verified 17 September 2026
+        that it touches no catalog: run with none on disk it creates none.
+        """
+        import tempfile
         with tempfile.TemporaryDirectory() as d:
-            env = dict(os.environ, TIDERACE_STATIONS=os.path.join(d, "stations.json"))
-            if os.path.exists(stationsmod.CATALOG_PATH):
-                shutil.copyfile(stationsmod.CATALOG_PATH, env["TIDERACE_STATIONS"])
-            r = subprocess.run([os.path.join(self.ROOT, "tiderace-cli"), "spots"],
-                               cwd=d, capture_output=True, text=True, timeout=90,
-                               env=env)
+            # No catalog seeded, so the redirected path starts empty: if
+            # --help creates one it went to NOAA to do it.
+            r = self._wrapper("--help", cwd=d, seed_catalog=False)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("usage: tiderace", r.stdout)
+            # The subcommand list is argparse's, built after those imports
+            # ran. A bash-only failure would still print a usage line.
+            for sub in ("forecast", "spots", "stations", "serve"):
+                self.assertIn(sub, r.stdout, sub + " missing from the subcommands")
+            self.assertFalse(os.path.exists(os.path.join(d, "stations.json")),
+                             "--help fetched a station catalog")
+
+    def test_the_wrapper_prospects_spots_from_a_foreign_directory(self):
+        """The same launcher doing real work, which is the half that needs
+        data: `spots` goes prospect.candidates_for -> spots.at_coord ->
+        stations.resolve -> stations.catalog, over the charted soundings.
+
+        It also pins that the curated spot list is gone -- the positions are
+        prospected, and the landmark names are not there to be printed.
+        """
+        import tempfile
+        from tiderace import stations, structure
+        if not os.path.exists(structure.SOUNDINGS):
+            self.skipTest("soundings not cached — run: tiderace charts")
+        if not os.path.exists(stations.CATALOG_PATH):
+            self.skipTest("no station catalog — run: tiderace stations --refresh")
+        with tempfile.TemporaryDirectory() as d:
+            r = self._wrapper("spots", cwd=d)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("prospected from the charted soundings", r.stdout)
             self.assertRegex(r.stdout, r"41\.\d{4}, -71\.\d{4}\s+\d+ ft\s+structure")
