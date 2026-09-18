@@ -390,7 +390,9 @@ scarcest thing in the project and the only irreplaceable one.
 before it is committed, and the run is reported.** `preflight` covers the map
 page only; a change to `desk.html` runs `desk.mjs` as well, which exists
 because the desk was rewritten once with 671 green tests and no way for any of
-them to see the page. Not after Matt finds it. This
+them to see the page. `desk.mjs` walks all seven tabs since 18 September 2026 —
+before that it checked the Confirm tab and nothing else, which is the same gap
+one level down. Not after Matt finds it. This
 is a standing instruction from him, given on 2 September 2026, and it exists
 because of what that day looked like:
 
