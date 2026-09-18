@@ -7,6 +7,7 @@ labels or the panel covering them.
 
     node tools/browser-check/preflight.mjs   # REQUIRED before any UI commit
     node tools/browser-check/desk.mjs        # the desk page, which preflight does not cover
+    node tools/browser-check/walkthrough.mjs # drive both pages the way a person does
     node tools/browser-check/check.mjs       # just the panel-overlap check
 
 `preflight` is the one to run. Thirty checks across both viewports and both
@@ -58,6 +59,36 @@ the ones to preserve:
   summary line, so a run that had found six real failures printed nothing
   and looked like a crash. Each tab is trapped; a tab that throws fails
   itself and the run still reports.
+
+`walkthrough.mjs` is the other half of `preflight`: preflight checks invariants
+that must hold of any build, and the walkthrough opens every screen, presses
+every control and switches every mode, watching for a screen that renders
+nothing or a console that fills up. It takes a URL and defaults to
+`http://localhost:8765`, so pointing it at a server of your own is
+`node tools/browser-check/walkthrough.mjs http://localhost:8799`.
+
+One thing it learned the hard way, and it is the `.credit` bullet above for the
+third time:
+
+* **The species card puts two different kinds of thing in one class, and
+  `querySelector` takes the first.** Both of its Fish checks measured the
+  wrong element for it. `the claim names its document` asserted a bracketed
+  citation against the first `.tclaim` -- which is the Wikipedia
+  natural-history note, rendered above the bands and sharing their class, so
+  the check read the encyclopedia disclaimer and never looked at a band. It
+  takes the claim of a band marked `cited` now, every one of them, and
+  reports the count so a selector matching nothing fails instead of passing
+  on an empty set. The photo check had the same shape one class over and the
+  fix is the one desk.mjs already uses: the credit is the paragraph
+  immediately after the image. Anything looser finds the natural-history
+  licence line and vouches for an image it has nothing to do with.
+
+  Its other half was a *stale* expectation rather than a misaimed one: it
+  asserted the provider was `iNaturalist`, and the photo order changed to
+  Wikipedia's taxobox first on 17 September 2026, so it failed on a correctly
+  credited Wikimedia image. What the licence actually requires is somebody, a
+  source and a licence -- which is what it asks for now, and which is why the
+  test is desk.mjs's regex rather than a second opinion about the same rule.
 
 ## Why this exists
 
