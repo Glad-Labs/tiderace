@@ -120,11 +120,18 @@ def retract(source_url: str, observed_on: str, bait: str,
         (witness is None or not r.get("witness") or r.get("witness") == witness))]
     if len(keep) == len(rows):
         return 0
+    _rewrite(keep, path)
+    return len(rows) - len(keep)
+
+
+def _rewrite(rows: list[dict], path: str) -> None:
+    """Replace the log with these rows, atomically. The server and the CLI
+    run concurrently against this file, so it is never half-written."""
     d = os.path.dirname(os.path.abspath(path)) or "."
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".bait-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:
-            for r in keep:
+            for r in rows:
                 fh.write(json.dumps(r) + "\n")
         os.replace(tmp, path)
     except BaseException:
@@ -133,7 +140,6 @@ def retract(source_url: str, observed_on: str, bait: str,
         except OSError:
             pass
         raise
-    return len(rows) - len(keep)
 
 
 def load(path: str = BAIT_PATH) -> list[dict]:
@@ -182,6 +188,33 @@ def independent(rows: list[dict]) -> list[dict]:
         seen.add(key)
         out.append(r)
     return out
+
+
+def dedupe(path: str = BAIT_PATH) -> dict:
+    """Collapse copies out of the log itself, keeping the first of each.
+
+    `independent` already stops a duplicate counting, so this changes no
+    forecast -- it is housekeeping for a file that was written wrong. Eight
+    of the twenty-one lines on 18 September 2026 were copies, put there by
+    the quote-keyed dedupe in `extract.item_id` before it was fixed: one
+    coastalanglermag paragraph quoted two ways, read on two passes.
+
+    It keeps the FIRST of each group rather than the newest, because the
+    rows are identical apart from `logged_at` and the earliest is the one
+    that was actually the observation being recorded.
+
+    What this costs, and it is worth saying out loud: lines written before
+    `witness` existed cannot say who said them, so a column quoting two
+    shops about the same bait on the same day collapses to one. That is an
+    under-count of corroboration, which is the safe direction, and it is
+    exactly what `independent` has already been doing to those rows.
+    """
+    rows = load(path)
+    keep = independent(rows)
+    if len(keep) == len(rows):
+        return {"rows": len(rows), "kept": len(keep), "removed": 0}
+    _rewrite(keep, path)
+    return {"rows": len(rows), "kept": len(keep), "removed": len(rows) - len(keep)}
 
 
 def _nm(lat1, lon1, lat2, lon2) -> float:

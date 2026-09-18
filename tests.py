@@ -3483,6 +3483,45 @@ class OneParagraphIsOneSighting(unittest.TestCase):
         self.assertGreater(two["signal"], one["signal"])
         self.assertEqual(two["observations"], 2)
 
+    def test_collapsing_the_log_changes_no_forecast(self):
+        """The invariant that makes the cleanup safe to run on a real log:
+        `bait_at` already ranks the copies as one, so taking them out of the
+        file must move nothing. If this ever fails, the file collapse and
+        the read-time collapse have stopped agreeing."""
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            b = os.path.join(d, "bait_log.jsonl")
+            rows = ([self._sighting("samtoland")] * 3
+                    + [self._sighting("saltwateredge")]
+                    + [self._sighting("samtoland", bait="squid")] * 2)
+            with open(b, "w") as fh:
+                for r in rows:
+                    fh.write(json.dumps(r) + "\n")
+            before = bait.bait_at(self.LAT, self.LON, self.WHEN, "striped_bass",
+                                  bait.load(b))
+            out = bait.dedupe(b)
+            self.assertEqual((out["rows"], out["kept"], out["removed"]), (6, 3, 3))
+            after = bait.bait_at(self.LAT, self.LON, self.WHEN, "striped_bass",
+                                 bait.load(b))
+            self.assertEqual(before, after)
+            self.assertEqual(bait.dedupe(b)["removed"], 0, "idempotent")
+
+    def test_collapsing_keeps_the_first_copy_and_nothing_you_logged(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            b = os.path.join(d, "bait_log.jsonl")
+            first = self._sighting("samtoland", logged_at="2026-09-10T07:11:44")
+            rows = [first, dict(first, logged_at="2026-09-17T07:24:07"),
+                    dict(self._sighting(""), source="own",
+                         notes="stood there and watched them")]
+            with open(b, "w") as fh:
+                for r in rows:
+                    fh.write(json.dumps(r) + "\n")
+            bait.dedupe(b)
+            log = bait.load(b)
+            self.assertEqual([r.get("source") for r in log], ["report", "own"])
+            self.assertEqual(log[0]["logged_at"], "2026-09-10T07:11:44")
+
     def test_a_sighting_of_its_own_is_untouched(self):
         # The collapse must not eat anything the log legitimately holds twice:
         # same bait, same water, different day, different place, different eyes.

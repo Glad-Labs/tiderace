@@ -119,7 +119,9 @@ def run(argv=None) -> int:
     bt = sub.add_parser("bait", help="record a bait sighting (or its absence)")
     bt.add_argument("--spot", help="spot key; or give --lat/--lon")
     bt.add_argument("--lat", type=float); bt.add_argument("--lon", type=float)
-    bt.add_argument("--bait", required=True, choices=baitmod.BAIT_TYPES)
+    bt.add_argument("--bait", choices=baitmod.BAIT_TYPES)
+    bt.add_argument("--dedupe", action="store_true",
+                    help="collapse copies of one observation out of the log")
     bt.add_argument("--abundance", default="decent", choices=sorted(baitmod.ABUNDANCE))
     bt.add_argument("--at", help="ISO datetime (default: now)")
     bt.add_argument("--source", default="own", choices=("own", "report", "voice"))
@@ -1600,6 +1602,20 @@ def _cmd_gso(args) -> int:
 
 
 def _cmd_bait(args) -> int:
+    if args.dedupe:
+        out = baitmod.dedupe()
+        if not out["removed"]:
+            print(f"  {out['rows']} sightings, no copies among them")
+            return 0
+        print(f"  {out['rows']} sightings -> {out['kept']}; "
+              f"{out['removed']} copies of an observation already logged removed")
+        print("  no forecast moves: bait_at already ranked them as one.")
+        return 0
+
+    # Required unless --dedupe, which is why argparse does not enforce it.
+    if not args.bait:
+        print("need --bait (or --dedupe)", file=sys.stderr)
+        return 1
     if args.spot:
         sp = spots.get(args.spot)
         lat, lon = sp.lat, sp.lon
