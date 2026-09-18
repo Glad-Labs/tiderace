@@ -337,6 +337,47 @@ async function fishChecks(page, label, deep) {
      marks.n > 0 && marks.cited > 0 && marks.prior > 0,
      `${marks.cited} cited · ${marks.prior} prior of ${marks.n}`);
 
+  // And the cited half must name what it is cited TO, on the card, beside the
+  // mark. "cited" with the document left behind in score.py is the same empty
+  // badge as a blank legal strip: it claims the work was done and shows none
+  // of it.
+  //
+  // Anchored to the disclosure the mark sits in, and compared against the
+  // string the API produced. walkthrough.mjs carried a version of this check
+  // that read `#fishcard .tclaim` -- the FIRST one on the card -- and looked
+  // for a bracket in it. That was a band claim until the Fish tab grew its
+  // encyclopedia section above the forecast, and has been reading Wikipedia's
+  // "not a rule and not a band" caveat ever since: a red result for a stale
+  // reason, which teaches people to ignore red results.
+  const cites = await page.evaluate(async () => {
+    const d = await (await fetch('/api/dossier?species=tautog')).json();
+    const want = {};
+    for (const t of ((d.forecast || {}).terms || []))
+      if (t.cited) want[t.label] = t.claim;
+    const got = {};
+    for (const el of document.querySelectorAll('#fish details.term')) {
+      const m = el.querySelector('.tmark');
+      if (!m || m.textContent.trim() !== 'cited') continue;
+      const c = el.querySelector('.tclaim');
+      got[el.querySelector('.tname').textContent.trim()] =
+        c ? c.textContent.trim() : '';
+    }
+    const labels = Object.keys(want);
+    return { n: labels.length,
+             missing: labels.filter(k => !want[k] || !(got[k] || '').includes(want[k])),
+             // [EFH-TOG p.5], [BB-TOG] -- the short codes score.py's docstring
+             // expands. Three of the seventy cited bands in the file cite in
+             // prose instead (measured 18 September 2026), so this asks that
+             // THIS card names a document, not that every band everywhere
+             // does -- a check that demanded all seventy would be asserting
+             // something the data does not claim.
+             docs: labels.filter(k => /\[[^\]]+\]/.test(got[k] || '')) };
+  });
+  ok(`${label}/Fish: a cited band carries the document it is cited to`,
+     cites.n > 0 && cites.missing.length === 0 && cites.docs.length > 0,
+     `${cites.n} cited · ${cites.docs.length} naming a document` +
+     (cites.missing.length ? ` · NOT ON THE CARD: ${cites.missing.join(', ')}` : ''));
+
   // The legal strip never goes silent. Same rule preflight enforces on the
   // map: "rules not modelled" out loud beats a blank, because a blank reads
   // as "no limit" and that is a fine under a commercial licence.

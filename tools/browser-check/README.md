@@ -36,7 +36,7 @@ tab (it drew a view rather than the placeholder, nothing spills its card, no
 sideways scroll, no uncaught error, AA contrast over what is actually
 behind the text), and In force and Fish carry checks of their own.
 
-Four things that pass came out of making it fail on purpose, and they are
+Five things that pass came out of making it fail on purpose, and they are
 the ones to preserve:
 
 * **A heading is not always the last thing to arrive.** `h2` is the right
@@ -54,6 +54,17 @@ the ones to preserve:
   the API actually produced, and it is the paragraph immediately after the
   image -- the natural-history licence line shares the class and would
   otherwise vouch for an image it has nothing to do with.
+* **"The first `.tclaim` on the card" stopped being the band's claim.** It
+  was one until #8 put an encyclopedia section above the forecast; from that
+  commit on it was Wikipedia's "not a rule and not a band" caveat, and
+  `walkthrough.mjs`'s copy of this check -- `/\[/` against whichever
+  `.tclaim` came first -- has been red for that reason ever since, which is
+  how a red result gets ignored. It is anchored here to the disclosure the
+  `cited` mark sits in and compared against the claim the API produced.
+  Dropping the claim paragraph from `card()` fails it, and so does stripping
+  the `[EFH-TOG p.5]` citations out of `dossier.py` while leaving the prose:
+  the first mutation catches a card that shows no documents, the second a
+  file that has none to show.
 * **One broken tab used to kill the run.** An exception escaped before the
   summary line, so a run that had found six real failures printed nothing
   and looked like a crash. Each tab is trapped; a tab that throws fails
