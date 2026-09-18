@@ -9285,6 +9285,144 @@ class SpeciesCard(unittest.TestCase):
         self.assertGreater(checked, 5, "only %d rules examined" % checked)
 
 
+class PhotographsNoManifestNamesAreDeleted(unittest.TestCase):
+    """A photograph the manifest no longer points at is worse than clutter.
+
+    `photo_path` resolves through the manifest, so a stranded file is already
+    unreachable — but it is still somebody's Creative Commons work sitting on
+    disk with nothing left to credit it, which is the one condition the
+    licence actually imposes.
+
+    Measured 18 September 2026, after the source moved from iNaturalist to
+    Wikipedia: five species changed extension, `fetch_all` wrote the new file
+    and rewrote the manifest entry, and 0.9 MB of the old photographs stayed
+    behind. Nothing removed them and the next source change would have done it
+    again.
+    """
+
+    def _dir(self, files, manifest):
+        import json, os, tempfile, unittest.mock as mock
+        from tiderace import fishpic
+        d = tempfile.mkdtemp()
+        for name, blob in files.items():
+            with open(os.path.join(d, name), "wb") as fh:
+                fh.write(blob)
+        with open(os.path.join(d, "manifest.json"), "w") as fh:
+            json.dump(manifest, fh)
+        return d, mock.patch.multiple(
+            fishpic, PHOTO_DIR=d, MANIFEST=os.path.join(d, "manifest.json"))
+
+    def test_a_superseded_file_goes_when_the_name_changes(self):
+        import os
+        from tiderace import fishpic
+        d, patched = self._dir({"tautog.jpg": b"old", "tautog.png": b"new"},
+                               {"tautog": {"file": "tautog.png"}})
+        with patched:
+            self.assertTrue(fishpic._drop_superseded(
+                "tautog.jpg", "tautog.png", log=lambda *a: None))
+        self.assertFalse(os.path.exists(os.path.join(d, "tautog.jpg")))
+        self.assertTrue(os.path.exists(os.path.join(d, "tautog.png")),
+                        "it deleted the photograph that replaced it")
+
+    def test_it_never_deletes_the_file_just_written(self):
+        """Same name means `cache.write_bytes` has already replaced it
+        atomically. Removing it here would delete the new photograph and leave
+        a manifest entry pointing at nothing."""
+        import os
+        from tiderace import fishpic
+        d, patched = self._dir({"tautog.jpg": b"new"},
+                               {"tautog": {"file": "tautog.jpg"}})
+        with patched:
+            self.assertFalse(fishpic._drop_superseded("tautog.jpg", "tautog.jpg"))
+            self.assertFalse(fishpic._drop_superseded("", "tautog.jpg"))
+            self.assertFalse(fishpic._drop_superseded(None, "tautog.jpg"))
+        self.assertTrue(os.path.exists(os.path.join(d, "tautog.jpg")))
+
+    def test_a_manifest_field_cannot_point_outside_the_directory(self):
+        """The manifest is ours, but a path that escaped this directory would
+        be deleting somebody else's file on the strength of a JSON field."""
+        import os, tempfile
+        from tiderace import fishpic
+        outside = os.path.join(tempfile.mkdtemp(), "keep.jpg")
+        with open(outside, "wb") as fh:
+            fh.write(b"not ours")
+        d, patched = self._dir({"tautog.png": b"new"},
+                               {"tautog": {"file": "tautog.png"}})
+        with patched:
+            for evil in ("../keep.jpg", "/etc/passwd",
+                         "../../" + os.path.basename(outside)):
+                self.assertFalse(fishpic._drop_superseded(evil, "tautog.png"),
+                                 evil)
+        self.assertTrue(os.path.exists(outside), "it deleted a file outside")
+
+    def test_prune_removes_orphans_and_keeps_what_the_manifest_names(self):
+        import os
+        from tiderace import fishpic
+        d, patched = self._dir(
+            {"tautog.png": b"keep", "scup.jpg": b"keep",
+             "bluefish.jpg": b"orphan", "squid.jpg": b"orphan"},
+            {"tautog": {"file": "tautog.png"},
+             "scup": {"file": "scup.jpg"},
+             "bluefish": {"file": "bluefish.png"},   # name moved on
+             "bigeye": {"resolved": False}})          # never had one
+        with patched:
+            out = fishpic.prune(log=lambda *a: None)
+        self.assertEqual(sorted(out["removed"]), ["bluefish.jpg", "squid.jpg"])
+        self.assertEqual(out["bytes"], len(b"orphan") * 2)
+        self.assertTrue(os.path.exists(os.path.join(d, "tautog.png")))
+        self.assertTrue(os.path.exists(os.path.join(d, "scup.jpg")))
+        self.assertFalse(os.path.exists(os.path.join(d, "bluefish.jpg")))
+
+    def test_prune_leaves_the_manifest_and_anything_not_an_image(self):
+        """It runs over a directory, so the one thing it must not do is treat
+        every file there as a photograph. The manifest holds every binomial,
+        licence and attribution this module has."""
+        import os
+        from tiderace import fishpic
+        d, patched = self._dir({"tautog.png": b"keep", "notes.txt": b"mine",
+                                "README": b"mine"},
+                               {"tautog": {"file": "tautog.png"}})
+        with patched:
+            out = fishpic.prune(log=lambda *a: None)
+        self.assertEqual(out["removed"], [])
+        for name in ("manifest.json", "notes.txt", "README", "tautog.png"):
+            self.assertTrue(os.path.exists(os.path.join(d, name)), name)
+
+    def test_a_fetch_that_changes_extension_strands_nothing(self):
+        """The whole bug, end to end. A species whose photograph arrives as a
+        .png where the manifest held a .jpg must leave one file behind, not
+        two."""
+        import os, unittest.mock as mock
+        from tiderace import fishpic, species as speciesmod
+        d, patched = self._dir({"tautog.jpg": b"old-inaturalist-jpeg"},
+                               {"tautog": {"file": "tautog.jpg",
+                                           "source": "inaturalist"}})
+        sp = speciesmod.get("tautog")
+        hit = {"url": "https://example.test/Tautoga.png", "source": "wikipedia",
+               "scientific": "Tautoga onitis", "licence": "CC0",
+               "attribution": "no rights reserved", "verified": "taxon name"}
+
+        class _Resp:
+            def read(self_inner): return b"new-wikipedia-png"
+            def __enter__(self_inner): return self_inner
+            def __exit__(self_inner, *a): return False
+
+        with patched, \
+                mock.patch.object(fishpic, "_from_wikipedia",
+                                  lambda *a, **k: hit), \
+                mock.patch.object(fishpic, "_from_inaturalist",
+                                  lambda *a, **k: None), \
+                mock.patch.object(fishpic.urllib.request, "urlopen",
+                                  lambda *a, **k: _Resp()), \
+                mock.patch.object(fishpic.time, "sleep", lambda *a: None):
+            fishpic.fetch_all([sp], refresh=True, log=lambda *a: None)
+            left = sorted(f for f in os.listdir(d) if f != "manifest.json")
+            entry = fishpic.load()["tautog"]
+        self.assertEqual(left, ["tautog.png"],
+                         "the superseded .jpg was left on disk")
+        self.assertEqual(entry["file"], "tautog.png")
+
+
 class ReferencePhotos(unittest.TestCase):
     """A photograph of the wrong animal on a card headed "Tautog" is worse
     than no photograph, because a card is where somebody goes to check.
