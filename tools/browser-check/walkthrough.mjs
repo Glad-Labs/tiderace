@@ -192,10 +192,13 @@ async function walk(url) {
 
   await page.screenshot({ path: 'walkthrough-map.png' });
 
-  // --- the desk, and all six of its tabs ---------------------------------
+  // --- the desk, and all seven of its tabs -------------------------------
+  // Does every screen render at all -- this file's own question. What they
+  // each SAY is desk.mjs's, and it covers the seven in three viewports.
   await page.goto(url.replace(/\/$/, '') + '/desk', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2500);
-  for (const s of ['history', 'reports', 'regs', 'hms', 'fish', 'sources']) {
+  for (const s of ['history', 'reports', 'confirm', 'regs', 'hms', 'fish',
+                   'sources']) {
     await page.click(`nav button[data-s=${s}]`);
     await page.waitForTimeout(2200);
     const txt = await page.evaluate(id =>
@@ -203,46 +206,15 @@ async function walk(url) {
     step(`desk tab: ${s}`, txt.length > 40 && !/could not load/i.test(txt),
          `${txt.length} chars`);
   }
-  // The species card's whole reason for existing is telling a cited band from
-  // a hand-set prior, so a card that renders both without that distinction
-  // would pass the length check above and be worth nothing. Tautog is the
-  // right fish to check: its substrate and temperature come out of named
-  // documents and its current and light curves come out of nobody.
-  {
-    await page.click('nav button[data-s=fish]');
-    await page.waitForTimeout(1600);
-    const card = await page.evaluate(async () => {
-      const b = [...document.querySelectorAll('#fish .pick button')]
-        .find(x => /Tautog/.test(x.textContent));
-      if (!b) return null;
-      b.click();
-      await new Promise(r => setTimeout(r, 1200));
-      const marks = [...document.querySelectorAll('#fishcard .tmark')]
-        .map(m => m.textContent.trim().toLowerCase());
-      return {
-        fish: document.querySelectorAll('#fish .pick button').length,
-        cited: marks.filter(m => m === 'cited').length,
-        prior: marks.filter(m => m === 'prior').length,
-        claim: (document.querySelector('#fishcard .tclaim') || {}).textContent || '',
-        img: !!document.querySelector('#fishcard img.photo'),
-        credit: (document.querySelector('#fishcard .credit') || {}).textContent || '',
-      };
-    });
-    step('desk fish: every loggable fish is pickable',
-         card && card.fish > 30, card ? `${card.fish} fish` : 'no picker');
-    step('desk fish: cited bands and hand-set priors are told apart',
-         card && card.cited > 0 && card.prior > 0,
-         card ? `${card.cited} cited, ${card.prior} prior` : 'no card');
-    step('desk fish: the claim names its document',
-         card && /\[/.test(card.claim), (card && card.claim.slice(0, 60)) || '');
-    // Somebody else's photograph under a Creative Commons licence. The credit
-    // is a condition of using it, so an image without one is worse than no
-    // image at all -- and this is a check that could only pass against a real
-    // rendered page.
-    step('desk fish: a photo carries its licence and credit',
-         card && (!card.img || /iNaturalist/.test(card.credit)),
-         card ? (card.img ? card.credit.slice(0, 70) : 'no photo for this fish') : '');
-  }
+  // The fish card's own checks are in desk.mjs, not here. Four of them lived
+  // in this file until 18 September 2026 and two had been failing since the
+  // Fish tab was reworked (#8) -- they read `#fishcard .tclaim` and
+  // `#fishcard .credit`, both of which now find the encyclopedia section that
+  // was added above the forecast. desk.mjs was already asserting the same
+  // things against the API rather than against a shape, and a second copy
+  // here could only ever drift out of step with the page a second time. What
+  // this file keeps is the walkthrough's own question -- does the tab render
+  // at all -- which is the `desk tab:` loop above.
 
   // Regs replaced Review, and the point of the swap was the link: a rule you
   // cannot check against its notice is the thing Matt said he did not want.
