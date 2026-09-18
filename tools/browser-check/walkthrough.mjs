@@ -35,17 +35,35 @@ async function walk(url) {
 
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await ready(page);
+  // MAP_READY is a fact about the map, not about the data. The markers are
+  // drawn by syncMarkers when the grid arrives, and the grid cache is keyed
+  // by the hour, so the first load after the top of the hour rebuilds cold:
+  // about 25 s for thirty positions. Measured against a live server on
+  // 18 September 2026 -- warm the markers are up 0.1 s after ready(), cold
+  // 24.8 s. That gap is what this step used to assert into: its condition was
+  // the literal `true` and it read the count on the next line, so it printed
+  // "ok -- 0 markers" on two full runs while the theme check at the end of
+  // the same run counted 28. A name that is false at the moment it runs.
+  //
+  // A fixed sleep is the other way to get this wrong: one here failed 3 of 26
+  // the first time a run straddled an hour boundary, on "No forecast loaded
+  // yet." -- the harness's assumption, not the app's fault. So wait for the
+  // markers themselves, on the grid's budget rather than the style's. The
+  // wait subsumes the grid it replaces: syncMarkers builds the one from the
+  // other, and both turned up inside the same 250 ms sample in every run
+  // measured, cold and warm alike.
+  const markers = await page.waitForFunction(
+    () => typeof MARKERS !== 'undefined' && Object.keys(MARKERS).length,
+    null, { timeout: 120000 }).then(h => h.jsonValue()).catch(() => 0);
+  // Headless fires no map move, so a marker that was added before the first
+  // one keeps its anchor offset and sits in the corner. These are built after
+  // the map has gone idle and arrive projected already (measured: 32 markers,
+  // 32 distinct transforms, with no pan at all) -- but the pan is what
+  // guarantees that, and it has to come after the wait to reach a marker at
+  // all. Above it, it was projecting an empty object.
   await page.evaluate(() => map.panBy([1, 0], { duration: 0 }));
-  step('map loads with markers', true,
-       `${await page.evaluate(() => Object.keys(MARKERS).length)} markers`);
-
-  // The grid cache is keyed by the hour, so the first load after the top of
-  // the hour rebuilds cold: about 25 s for thirty positions. A fixed sleep
-  // here failed 3 of 26 the first time a run straddled an hour boundary, on
-  // "No forecast loaded yet." -- the harness's assumption, not the app's
-  // fault. Wait for the grid, however long the water takes.
-  await page.waitForFunction(() => typeof GRID !== 'undefined' && GRID && GRID.spots && GRID.spots.length > 0,
-                             null, { timeout: 120000 }).catch(() => {});
+  step('map loads with markers', markers > 0,
+       markers ? `${markers} markers` : 'none after 120 s');
 
   // --- open a coordinate, then every tab in the sheet -------------------
   await page.evaluate(() => window.showConditions(41.4344, -71.3975, 'walkthrough'));
