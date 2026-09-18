@@ -260,6 +260,9 @@ def run(argv=None) -> int:
     sc.add_argument("--info", action="store_true",
                     help="fetch the natural history per fish from Wikipedia "
                          "(what it looks like, where it lives, what it eats)")
+    sc.add_argument("--prune", action="store_true",
+                    help="delete photographs no manifest entry points at, "
+                         "without fetching anything")
     sc.add_argument("--refresh", action="store_true",
                     help="with --photos or --info, redo the ones already "
                          "cached rather than keeping them")
@@ -394,6 +397,18 @@ def _cmd_species(args) -> int:
     as the same confident tuple in the same source file.
     """
     from . import dossier, species as speciesmod
+    if getattr(args, "prune", False) and not getattr(args, "photos", False):
+        from . import fishpic
+        print("\n  photographs on disk that no manifest entry points at:\n")
+        out = fishpic.prune()
+        print()
+        if out["removed"]:
+            print("  removed %d, freeing %d KB"
+                  % (len(out["removed"]), out["bytes"] // 1024))
+        else:
+            print("  none — every file on disk is one the manifest names")
+        print()
+        return 0
     if getattr(args, "photos", False):
         from . import fishpic
         print("\n  a reference photograph per fish, openly licensed.")
@@ -405,9 +420,19 @@ def _cmd_species(args) -> int:
         print("  Both routes go through the binomial a document gave: a "
               "common name is not a key.\n")
         rep = fishpic.fetch_all(speciesmod.loggable(), refresh=args.refresh)
+        # Anything the manifest no longer names. `fetch_all` drops a file it
+        # supersedes itself; this catches what a crash between the write and
+        # the manifest update would leave, and the five photographs actually
+        # stranded when the source moved from iNaturalist to Wikipedia.
+        pruned = fishpic.prune()
         print()
         print("  %d matched · %d downloaded · %d already on disk"
               % (rep["matched"], rep["downloaded"], rep["kept"]))
+        if pruned["removed"]:
+            print("  removed %d orphan%s no manifest entry pointed at (%d KB)"
+                  % (len(pruned["removed"]),
+                     "" if len(pruned["removed"]) == 1 else "s",
+                     pruned["bytes"] // 1024))
         if rep["by_source"]:
             print("  from " + " · ".join("%s %d" % (k, v) for k, v
                                          in sorted(rep["by_source"].items())))
