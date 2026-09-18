@@ -219,13 +219,29 @@ async function walk(url) {
       await new Promise(r => setTimeout(r, 1200));
       const marks = [...document.querySelectorAll('#fishcard .tmark')]
         .map(m => m.textContent.trim().toLowerCase());
+      // A BAND's claim, not the first `.tclaim` on the card. The Wikipedia
+      // natural-history note carries the same class and renders above the
+      // terms, so `querySelector` returned the encyclopedia disclaimer and
+      // this check never looked at a citation at all. Every band marked
+      // `cited` is collected rather than the first, and the count is
+      // reported below: a selector that matched nothing must not pass on an
+      // empty set.
+      const bands = [...document.querySelectorAll('#fishcard details.term')]
+        .filter(t => t.querySelector('.tmark.cited'))
+        .map(t => ((t.querySelector('.tclaim') || {}).textContent || '').trim());
+      // The credit for the PHOTO is the paragraph immediately after it. The
+      // same shared class, one line down: `.credit` is also on the natural-
+      // history licence line, which would vouch for an image it has nothing
+      // to do with. desk.mjs learned this first.
+      const img = document.querySelector('#fishcard img.photo');
+      const cr = img ? img.nextElementSibling : null;
       return {
         fish: document.querySelectorAll('#fish .pick button').length,
         cited: marks.filter(m => m === 'cited').length,
         prior: marks.filter(m => m === 'prior').length,
-        claim: (document.querySelector('#fishcard .tclaim') || {}).textContent || '',
-        img: !!document.querySelector('#fishcard img.photo'),
-        credit: (document.querySelector('#fishcard .credit') || {}).textContent || '',
+        bands,
+        img: !!img,
+        credit: cr && cr.classList.contains('credit') ? cr.textContent.trim() : '',
       };
     });
     step('desk fish: every loggable fish is pickable',
@@ -233,14 +249,31 @@ async function walk(url) {
     step('desk fish: cited bands and hand-set priors are told apart',
          card && card.cited > 0 && card.prior > 0,
          card ? `${card.cited} cited, ${card.prior} prior` : 'no card');
-    step('desk fish: the claim names its document',
-         card && /\[/.test(card.claim), (card && card.claim.slice(0, 60)) || '');
+    // Every band the card marks `cited` has to name the document it came
+    // from, which is the bracketed tag -- [EFH-TOG p.5], [BB-TOG]. A band
+    // marked cited whose claim names nothing is the exact failure this card
+    // exists to prevent, so it is reported by its own text.
+    const uncited = card ? card.bands.filter(c => !/\[/.test(c)) : [];
+    step('desk fish: every cited band names its document',
+         card && card.bands.length > 0 && uncited.length === 0,
+         !card ? 'no card'
+           : !card.bands.length ? 'no cited band on the card'
+           : uncited.length ? `${card.bands.length} cited, no document in `
+                              + JSON.stringify(uncited[0].slice(0, 50))
+           : `${card.bands.length} cited bands · ${card.bands[0].slice(0, 46)}`);
     // Somebody else's photograph under a Creative Commons licence. The credit
     // is a condition of using it, so an image without one is worse than no
     // image at all -- and this is a check that could only pass against a real
     // rendered page.
+    //
+    // Somebody, where it came from, and the licence: all three, or it is not
+    // an attribution. Naming ONE provider was wrong from the day the photo
+    // order changed to Wikipedia's taxobox first (2026-09-17), because it
+    // then failed on a correctly credited Wikimedia image. Same test as
+    // desk.mjs's sweep, deliberately -- one invariant, one expression of it.
     step('desk fish: a photo carries its licence and credit',
-         card && (!card.img || /iNaturalist/.test(card.credit)),
+         card && (!card.img ||
+                  /\S.* · (Wikimedia Commons|iNaturalist) \(.+\)/.test(card.credit)),
          card ? (card.img ? card.credit.slice(0, 70) : 'no photo for this fish') : '');
   }
 
