@@ -597,7 +597,106 @@ class WebFetching(unittest.TestCase):
         for junk in ("var a=1", "color:red", "menu menu", "copyright"):
             self.assertNotIn(junk, text)
 
+    def test_links_survive_the_chrome_that_text_drops(self):
+        """`to_text` drops nav because prose is what the model needs. Links
+        are the opposite case: on an index page the one you want is usually
+        in the nav, so they are collected before any of that filtering."""
+        markup = """<html><body><nav><a href="/regions/rhode-island/">RI</a></nav>
+          <p>Prose <a href="https://onthewater.com/fishing-reports/2026/09/x">here</a></p>
+          <a href="/regions/rhode-island/">RI again</a>
+          <a href="mailto:x@y.z">mail</a><a>no href</a></body></html>"""
+        links = fetch.links_in(markup, "https://onthewater.com/regions/rhode-island/")
+        self.assertEqual(links, ["https://onthewater.com/regions/rhode-island/",
+                                 "https://onthewater.com/fishing-reports/2026/09/x"],
+                         "document order, absolute, deduped, http(s) only")
+
+    def test_an_index_source_resolves_to_this_weeks_article(self):
+        """otw_ri_report pointed at /fishing-reports, the national index --
+        every other state's headline and not a word of Rhode Island. The
+        model was handed a table of contents, correctly found nothing, and
+        the source recorded "0 bait, 0 catch" with ok=True every Thursday
+        from mid-August. Nothing was broken enough to notice."""
+        import unittest.mock as m
+        src = fetch.SOURCES["otw_ri_report"]
+        self.assertIn("article", src, "the index source must say how to leave it")
+        doc = {"url": src["url"], "links": [
+            "https://onthewater.com/regions/connecticut/",
+            # the national index links every state's report; only RI matches
+            "https://onthewater.com/fishing-reports/2026/09/connecticut-fishing-report-september-17-2026",
+            "https://onthewater.com/fishing-reports/2026/09/rhode-island-fishing-report-september-17-2026",
+        ]}
+        with m.patch.object(fetch, "fetch", return_value=doc):
+            got = fetch.article_url(src)
+        self.assertEqual(got, "https://onthewater.com/fishing-reports/2026/09/"
+                              "rhode-island-fishing-report-september-17-2026")
+
+    def test_the_configured_index_is_the_rhode_island_one(self):
+        """The bug itself, pinned. `article_url` worked perfectly against the
+        national index -- it just never found a Rhode Island report there,
+        because there is none on that page. A mocked resolver cannot catch
+        that; only the configured URL can."""
+        src = fetch.SOURCES["otw_ri_report"]
+        self.assertNotEqual(
+            src["url"].rstrip("/"), "https://onthewater.com/fishing-reports",
+            "that is the national index -- the month of empty reads")
+        self.assertIn("rhode-island", src["url"],
+                      "an RI source has to be pointed at Rhode Island")
+        self.assertIn("rhode-island", src["article"])
+
+    def test_a_fetched_page_carries_its_links(self):
+        """`article_url` is only as good as what `fetch` keeps. Everything
+        else here mocks the fetch, so nothing else notices if it stops
+        collecting them -- and then every index source raises instead of
+        resolving."""
+        import tempfile
+        import unittest.mock as m
+
+        class _Resp:
+            status = 200
+            headers = type("H", (), {"get_content_charset": lambda self: "utf-8"})()
+            def read(self): return (b'<html><body><a href="/a/b">x</a>'
+                                    b'<p>Bunker off Conimicut.</p></body></html>')
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        with tempfile.TemporaryDirectory() as d:
+            with m.patch.object(fetch, "allowed", return_value=True), \
+                 m.patch.object(fetch, "crawl_delay", return_value=0), \
+                 m.patch.object(fetch, "_cache_path",
+                                side_effect=lambda u: os.path.join(d, "c.json")), \
+                 m.patch.object(fetch.urllib.request, "urlopen",
+                                return_value=_Resp()):
+                doc = fetch.fetch("https://example.com/index", force=True)
+
+        self.assertEqual(doc["links"], ["https://example.com/a/b"],
+                         "fetch must keep the links article_url reads")
+        self.assertIn("Bunker off Conimicut.", doc["text"])
+
+    def test_an_index_with_no_article_is_loud(self):
+
+        """The failure that hid: falling back to the index is exactly what it
+        was already doing. A redesigned index has to be a recorded failure --
+        the desk calls the source stale -- not another quiet empty read."""
+        import unittest.mock as m
+        src = fetch.SOURCES["otw_ri_report"]
+        with m.patch.object(fetch, "fetch",
+                            return_value={"url": src["url"], "links": [
+                                "https://onthewater.com/regions/rhode-island/",
+                                "https://onthewater.com/fishing-reports/2026/09/maine-fishing-report"]}):
+            with self.assertRaises(fetch.FetchError) as caught:
+                fetch.article_url(src)
+        self.assertIn(src["url"], str(caught.exception))
+
+    def test_a_source_that_is_its_own_article_is_left_alone(self):
+        for key in ("eastbay_report", "coastal_angler_ri", "fisherman_ri"):
+            src = fetch.SOURCES[key]
+            self.assertEqual(fetch.article_url(src), src["url"], key)
+        # and a --url scrape, which has no source entry at all
+        self.assertEqual(fetch.article_url({"url": "https://example.com/r"}),
+                         "https://example.com/r")
+
     def test_title_extraction(self):
+
         self.assertEqual(fetch.title_of("<html><title>Fish &amp; Chips</title>"),
                          "Fish & Chips")
         self.assertEqual(fetch.title_of("<html><body>no title</body></html>"), "")

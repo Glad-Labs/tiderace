@@ -138,7 +138,8 @@ def fetch(url: str, ttl: float = CACHE_TTL_S, force: bool = False) -> dict:
         _last_hit[host] = time.time()
 
     doc = {"url": url, "status": status, "fetched_at": datetime.now().isoformat(
-        timespec="seconds"), "text": to_text(body), "title": title_of(body)}
+        timespec="seconds"), "text": to_text(body), "title": title_of(body),
+        "links": links_in(body, url)}
     cache.write_json(path, doc)
     return doc
 
@@ -185,6 +186,70 @@ def to_text(markup: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+class _Links(HTMLParser):
+    """Every href on the page, in document order.
+
+    Deliberately not filtered the way `to_text` filters: `to_text` drops nav,
+    and on an index page the link you want is often in it.
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.hrefs: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "a":
+            return
+        for k, v in attrs:
+            if k == "href" and v:
+                self.hrefs.append(v)
+                break
+
+
+def links_in(markup: str, base: str) -> list[str]:
+    """Absolute links from a page, in document order, without duplicates."""
+    p = _Links()
+    try:
+        p.feed(markup)
+    except Exception:                                             # noqa: BLE001
+        pass
+    out, seen = [], set()
+    for h in p.hrefs:
+        u = urllib.parse.urljoin(base, h.strip())
+        if u.startswith(("http://", "https://")) and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+def article_url(src: dict, force: bool = False) -> str:
+    """The page actually worth reading for a source.
+
+    Most sources are the article. On The Water is an index: its RI page lists
+    the week's report and links to it, and the index itself carries a headline
+    and a one-line teaser. Reading the index got a table of contents -- region
+    names and the other states' headlines -- which is why that source reported
+    "0 bait, 0 catch" every week for a month while succeeding. See the note in
+    SOURCES.
+
+    Raises rather than falling back to the index, because falling back is what
+    it was already doing and the whole problem was that it looked fine.
+    """
+    pattern = src.get("article")
+    if not pattern:
+        return src["url"]
+    doc = fetch(src["url"], force=force)
+    if "links" not in doc:
+        # Cached before links were kept. One refetch, then it is there.
+        doc = fetch(src["url"], force=True)
+    for link in doc.get("links", []):
+        if re.search(pattern, link):
+            return link
+    raise FetchError(
+        "no article matching %s on %s -- the index changed shape, or this "
+        "week's report is not up yet" % (pattern, src["url"]))
+
+
 def title_of(markup: str) -> str:
     m = re.search(r"<title[^>]*>(.*?)</title>", markup, re.I | re.S)
     return html.unescape(m.group(1)).strip() if m else ""
@@ -216,7 +281,18 @@ SOURCES = {
         "note": "Aggregated RI reports. Facts only.",
     },
     "otw_ri_report": {
-        "url": "https://onthewater.com/fishing-reports",
+        # The region index, and `article` is how the week's report is found
+        # from it. The URL here used to be /fishing-reports, which is the
+        # national index: every other state's headline and not a word of
+        # Rhode Island. The model was handed a table of contents and
+        # correctly found nothing in it, so this source reported "0 bait,
+        # 0 catch" and ok=True every Thursday from mid-August. Measured 18
+        # September 2026: the national index renders 2,319 characters of
+        # navigation, the region index 1,782 (a headline and one teaser
+        # line), and the report itself 9,116.
+        "url": "https://onthewater.com/regions/rhode-island/",
+        "article": r"^https://onthewater\.com/fishing-reports/\d{4}/\d{2}/"
+                   r"rhode-island-fishing-report-",
         "kind": "report",
         "note": "Editorial fishing reports. Extract facts only — never store prose. "
                 "Relays Ocean State Tackle (Providence) and The Saltwater Edge "
