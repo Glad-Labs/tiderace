@@ -754,7 +754,16 @@ def _cmd_scrape(args) -> int:
                 for w in out.get("warnings", [])[:3]:
                     print(f"      ! {w[:100]}")
             else:
-                out = extract.extract_report(url, force=args.force,
+                # An index source resolves to this week's article first. This
+                # is inside the try on purpose: when the index changes shape
+                # `article_url` raises, the failure is recorded, and the desk
+                # calls the source stale -- which is what should have happened
+                # in August instead of a month of successful empty reads.
+                read = fetch.article_url(fetch.SOURCES.get(key) or {"url": url},
+                                         force=args.force)
+                if read != url:
+                    print(f"    -> {read}")
+                out = extract.extract_report(read, force=args.force,
                                              apply_bait=args.apply_bait)
                 nb, nc = len(out.get("bait", [])), len(out.get("catches", []))
                 print(f"    {nb} bait sighting(s), {nc} catch report(s)"
