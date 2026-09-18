@@ -597,7 +597,106 @@ class WebFetching(unittest.TestCase):
         for junk in ("var a=1", "color:red", "menu menu", "copyright"):
             self.assertNotIn(junk, text)
 
+    def test_links_survive_the_chrome_that_text_drops(self):
+        """`to_text` drops nav because prose is what the model needs. Links
+        are the opposite case: on an index page the one you want is usually
+        in the nav, so they are collected before any of that filtering."""
+        markup = """<html><body><nav><a href="/regions/rhode-island/">RI</a></nav>
+          <p>Prose <a href="https://onthewater.com/fishing-reports/2026/09/x">here</a></p>
+          <a href="/regions/rhode-island/">RI again</a>
+          <a href="mailto:x@y.z">mail</a><a>no href</a></body></html>"""
+        links = fetch.links_in(markup, "https://onthewater.com/regions/rhode-island/")
+        self.assertEqual(links, ["https://onthewater.com/regions/rhode-island/",
+                                 "https://onthewater.com/fishing-reports/2026/09/x"],
+                         "document order, absolute, deduped, http(s) only")
+
+    def test_an_index_source_resolves_to_this_weeks_article(self):
+        """otw_ri_report pointed at /fishing-reports, the national index --
+        every other state's headline and not a word of Rhode Island. The
+        model was handed a table of contents, correctly found nothing, and
+        the source recorded "0 bait, 0 catch" with ok=True every Thursday
+        from mid-August. Nothing was broken enough to notice."""
+        import unittest.mock as m
+        src = fetch.SOURCES["otw_ri_report"]
+        self.assertIn("article", src, "the index source must say how to leave it")
+        doc = {"url": src["url"], "links": [
+            "https://onthewater.com/regions/connecticut/",
+            # the national index links every state's report; only RI matches
+            "https://onthewater.com/fishing-reports/2026/09/connecticut-fishing-report-september-17-2026",
+            "https://onthewater.com/fishing-reports/2026/09/rhode-island-fishing-report-september-17-2026",
+        ]}
+        with m.patch.object(fetch, "fetch", return_value=doc):
+            got = fetch.article_url(src)
+        self.assertEqual(got, "https://onthewater.com/fishing-reports/2026/09/"
+                              "rhode-island-fishing-report-september-17-2026")
+
+    def test_the_configured_index_is_the_rhode_island_one(self):
+        """The bug itself, pinned. `article_url` worked perfectly against the
+        national index -- it just never found a Rhode Island report there,
+        because there is none on that page. A mocked resolver cannot catch
+        that; only the configured URL can."""
+        src = fetch.SOURCES["otw_ri_report"]
+        self.assertNotEqual(
+            src["url"].rstrip("/"), "https://onthewater.com/fishing-reports",
+            "that is the national index -- the month of empty reads")
+        self.assertIn("rhode-island", src["url"],
+                      "an RI source has to be pointed at Rhode Island")
+        self.assertIn("rhode-island", src["article"])
+
+    def test_a_fetched_page_carries_its_links(self):
+        """`article_url` is only as good as what `fetch` keeps. Everything
+        else here mocks the fetch, so nothing else notices if it stops
+        collecting them -- and then every index source raises instead of
+        resolving."""
+        import tempfile
+        import unittest.mock as m
+
+        class _Resp:
+            status = 200
+            headers = type("H", (), {"get_content_charset": lambda self: "utf-8"})()
+            def read(self): return (b'<html><body><a href="/a/b">x</a>'
+                                    b'<p>Bunker off Conimicut.</p></body></html>')
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        with tempfile.TemporaryDirectory() as d:
+            with m.patch.object(fetch, "allowed", return_value=True), \
+                 m.patch.object(fetch, "crawl_delay", return_value=0), \
+                 m.patch.object(fetch, "_cache_path",
+                                side_effect=lambda u: os.path.join(d, "c.json")), \
+                 m.patch.object(fetch.urllib.request, "urlopen",
+                                return_value=_Resp()):
+                doc = fetch.fetch("https://example.com/index", force=True)
+
+        self.assertEqual(doc["links"], ["https://example.com/a/b"],
+                         "fetch must keep the links article_url reads")
+        self.assertIn("Bunker off Conimicut.", doc["text"])
+
+    def test_an_index_with_no_article_is_loud(self):
+
+        """The failure that hid: falling back to the index is exactly what it
+        was already doing. A redesigned index has to be a recorded failure --
+        the desk calls the source stale -- not another quiet empty read."""
+        import unittest.mock as m
+        src = fetch.SOURCES["otw_ri_report"]
+        with m.patch.object(fetch, "fetch",
+                            return_value={"url": src["url"], "links": [
+                                "https://onthewater.com/regions/rhode-island/",
+                                "https://onthewater.com/fishing-reports/2026/09/maine-fishing-report"]}):
+            with self.assertRaises(fetch.FetchError) as caught:
+                fetch.article_url(src)
+        self.assertIn(src["url"], str(caught.exception))
+
+    def test_a_source_that_is_its_own_article_is_left_alone(self):
+        for key in ("eastbay_report", "coastal_angler_ri", "fisherman_ri"):
+            src = fetch.SOURCES[key]
+            self.assertEqual(fetch.article_url(src), src["url"], key)
+        # and a --url scrape, which has no source entry at all
+        self.assertEqual(fetch.article_url({"url": "https://example.com/r"}),
+                         "https://example.com/r")
+
     def test_title_extraction(self):
+
         self.assertEqual(fetch.title_of("<html><title>Fish &amp; Chips</title>"),
                          "Fish & Chips")
         self.assertEqual(fetch.title_of("<html><body>no title</body></html>"), "")
@@ -3533,6 +3632,192 @@ class OneParagraphIsOneSighting(unittest.TestCase):
         self.assertEqual(len(bait.independent(rows)), 4)
 
 
+class ConditionsDoNotLast(unittest.TestCase):
+    """Matt, 17 September 2026: "confirm that these things age out since
+    those conditions don't last forever."
+
+    They do, unevenly, and the list did not. Measured against the live queue
+    that day: 375 observations, of which 157 could still move a forecast, 134
+    only fed the season curve, and 84 were read by nothing at all -- 56 bait
+    sightings with no coordinate, 28 undated reports. The desk listed all 375
+    under the heading "375 waiting" with a confirm button beside each, which
+    is the shape the regulation queue died of.
+    """
+
+    def test_a_sighting_past_the_age_ceiling_cannot_score_at_any_distance(self):
+        """The ceiling is behaviour, not arithmetic: past it `bait_at` finds
+        no observations at all, standing on the mark, for the fish that wants
+        that bait most, at the best confidence there is."""
+        from tiderace import bait
+        now = datetime(2026, 9, 17, 12, 0)
+
+        def seen(days_ago):
+            return [{"bait": "bunker", "lat": 41.49, "lon": -71.32,
+                     "when": (now - timedelta(days=days_ago)).isoformat(),
+                     "abundance": "loaded", "confidence": "high", "source": "own"}]
+
+        fresh = bait.bait_at(41.49, -71.32, now, "striped_bass",
+                             sightings=seen(1))
+        self.assertGreater(fresh["signal"], 0.0)
+        self.assertEqual(fresh["observations"], 1)
+
+        # Just inside: still counted, and worth very little.
+        inside = bait.bait_at(41.49, -71.32, now, "striped_bass",
+                              sightings=seen(bait.MAX_AGE_DAYS - 1))
+        self.assertEqual(inside["observations"], 1)
+        self.assertLess(inside["signal"], 0.02)
+
+        # Just outside: gone entirely, and `known` says so rather than
+        # reporting a confident zero.
+        past = bait.bait_at(41.49, -71.32, now, "striped_bass",
+                            sightings=seen(bait.MAX_AGE_DAYS + 1))
+        self.assertEqual(past["observations"], 0)
+        self.assertEqual(past["signal"], 0.0)
+        self.assertFalse(past["known"])
+
+    def test_the_age_ceiling_is_derived_from_the_half_life_and_never_typed(self):
+        """A second literal would drift from HALF_LIFE_DAYS the first time
+        anyone tuned it, and the desk would go on showing rows the scorer had
+        stopped reading."""
+        import math
+        import pathlib
+        from tiderace import bait
+        self.assertAlmostEqual(
+            bait.MAX_AGE_DAYS,
+            bait.HALF_LIFE_DAYS * math.log2(1.0 / bait.WEIGHT_FLOOR), places=9)
+        src = strip_py_comments(
+            pathlib.Path(__file__).parent.joinpath("tiderace", "bait.py").read_text())
+        self.assertIn("MAX_AGE_DAYS = HALF_LIFE_DAYS", src)
+        self.assertNotIn("weight < 0.01", src, "the floor is named, or it is two numbers")
+
+    def test_standing_separates_what_moves_a_forecast_from_what_does_not(self):
+        from tiderace import extract, reports
+        # Midnight, because `observed_on` is a date: a row written "1 day ago"
+        # and read at noon is a day and a half old, and the first draft of this
+        # test asserted 84% against the 77% that is actually correct.
+        now = datetime(2026, 9, 17)
+
+        def bait_row(days_ago, status="applied"):
+            return {"kind": "bait", "status": status, "bait": "bunker",
+                    "observed_on": (now - timedelta(days=days_ago)).date().isoformat()}
+
+        def report_row(days_ago):
+            return {"kind": "catch_report", "status": "on_file", "species_key": "fluke",
+                    "observed_on": (now - timedelta(days=days_ago)).date().isoformat()}
+
+        live = extract.standing(bait_row(1), on=now)
+        self.assertEqual(live["state"], "live")
+        self.assertGreater(live["strength"], 0.8)
+
+        # Four days is the half-life; the number a person reads must be the
+        # number the scorer uses.
+        half = extract.standing(bait_row(4), on=now)
+        self.assertAlmostEqual(half["strength"], 0.5, places=2)
+
+        self.assertEqual(extract.standing(bait_row(40), on=now)["state"], "inert")
+        self.assertEqual(
+            extract.standing(bait_row(1, status="pending"), on=now)["state"], "inert",
+            "bait with no coordinate was never applied and is read by nothing")
+
+        self.assertEqual(extract.standing(report_row(3), on=now)["state"], "live")
+        self.assertEqual(
+            extract.standing(report_row(reports.FRESH_DAYS + 1), on=now)["state"], "season",
+            "an old report stops describing now but stays in the season curve")
+        self.assertEqual(
+            extract.standing({"kind": "catch_report", "status": "on_file"}, on=now)["state"],
+            "inert", "catch_reports() drops undated rows, so they never counted")
+
+    def test_an_old_report_is_demoted_but_still_counts_as_a_witness(self):
+        """The demotion has to be honest in both directions. `season` must not
+        quietly mean `ignored`: weekly_presence is the only thing that can ever
+        check the hand-set peak_months, and it is built from the whole year."""
+        import json
+        import os
+        import tempfile
+        from tiderace import extract, reports
+        with tempfile.TemporaryDirectory() as d:
+            q = os.path.join(d, "queue.jsonl")
+            old = {"kind": "catch_report", "status": "on_file", "species_key": "tautog",
+                   "species": "tautog", "place": "Newport", "observed_on": "2026-07-26",
+                   "source_url": "https://example.com/a", "attributed_to": "Ocean State Tackle",
+                   "quote": "tog in the harbour", "queued_at": "2026-07-27T00:00:00"}
+            with open(q, "w") as fh:
+                fh.write(json.dumps(old) + "\n")
+            row = extract.awaiting(q, on=datetime(2026, 9, 17))[0]
+            self.assertEqual(row["standing"]["state"], "season")
+            self.assertEqual(len(reports.catch_reports(q)), 1,
+                             "demoted, not dropped")
+            self.assertEqual(reports.weekly_presence("tautog", reports.catch_reports(q)),
+                             {30: 1}, "still one witness in its week")
+
+    def test_awaiting_puts_the_live_ones_first_and_filters_to_one_standing(self):
+        import json
+        import os
+        import tempfile
+        from tiderace import extract
+        now = datetime(2026, 9, 17, 12, 0)
+        with tempfile.TemporaryDirectory() as d:
+            q = os.path.join(d, "queue.jsonl")
+            rows = [
+                {"kind": "bait", "status": "pending", "bait": "squid", "place": "nowhere",
+                 "observed_on": "2026-09-16", "queued_at": "2026-09-16T00:00:00"},
+                {"kind": "catch_report", "status": "on_file", "species_key": "scup",
+                 "species": "scup", "observed_on": "2026-07-01", "queued_at": "2026-07-02T00:00:00"},
+                {"kind": "bait", "status": "applied", "bait": "bunker", "place": "Newport",
+                 "observed_on": "2026-09-16", "queued_at": "2026-09-16T00:00:00"},
+            ]
+            with open(q, "w") as fh:
+                for r in rows:
+                    fh.write(json.dumps(r) + "\n")
+
+            got = extract.awaiting(q, on=now)
+            self.assertEqual([r["standing"]["state"] for r in got],
+                             ["live", "season", "inert"],
+                             "ordered by what it is still doing, not by date")
+
+            live = extract.awaiting(q, on=now, states=("live",))
+            self.assertEqual([r["bait"] for r in live], ["bunker"])
+            self.assertEqual(extract.awaiting(q, on=now, states=("inert",))[0]["bait"], "squid")
+
+    def test_the_desk_lists_the_live_ones_and_offers_no_confirm_button(self):
+        """Nothing in the package reads status="confirmed" -- `catch_reports`
+        skips only retracted rows and the bait log is keyed by the sighting,
+        not the queue -- so a confirm button asks for work that changes no
+        number. The retraction is the one action with teeth."""
+        import pathlib
+        root = pathlib.Path(__file__).parent
+        desk = strip_comments((root / "tiderace" / "web" / "desk.html").read_text())
+        self.assertIn("/api/confirm?state=", desk)
+        self.assertIn("CONFIRM_STATE: 'live'", desk)
+        self.assertIn('data-d="retracted"', desk)
+        self.assertNotIn('data-d="confirmed"', desk,
+                         "nothing reads a confirmation; the desk must not ask for one")
+        self.assertNotIn("waiting</h2>", desk,
+                         "nothing is waiting on him; the heading must not say so")
+
+        pkg = root / "tiderace"
+        readers = [p.name for p in pkg.glob("*.py")
+                   if '"confirmed"' in strip_py_comments(p.read_text())
+                   and p.name not in ("extract.py", "cli.py")]
+        self.assertEqual(readers, [],
+                         "if something starts reading a confirmation, the desk "
+                         "should offer one again: %s" % readers)
+
+    def test_the_endpoint_counts_everything_and_lists_one_standing(self):
+        import pathlib
+        root = pathlib.Path(__file__).parent
+        srv = (root / "tiderace" / "server.py").read_text()
+        route = srv.split('if url.path == "/api/confirm":')[1].split('if url.path ==')[0]
+        route = strip_py_comments(route)
+        self.assertIn('q.get("state", ["live"])', route, "the default view is what is live")
+        self.assertIn("extract.awaiting(limit=5000)", route)
+        # Counted over everything, filtered afterwards: counting the cut list
+        # would report the size of the page rather than the size of the truth.
+        self.assertLess(route.index("standing[st] = standing.get(st, 0) + 1"),
+                        route.index('if not states or r["standing"]["state"] in states'),
+                        "the counts must be taken before the list is filtered")
+
+
 class RankedDotsOnTheMap(unittest.TestCase):
     """Matt, 9 September 2026: "it would be great to have the recommended
     spots color coded by quality, like make the best spot very noticeable and
@@ -4073,7 +4358,34 @@ class Reports(unittest.TestCase):
                             return_value=self._rows(specs)):
             return reports.catch_reports()
 
+    def test_the_newest_observations_come_back_first(self):
+        """Both callers that show reports truncate, and neither sorts:
+        `/api/reports` sends `rows[:120]` and the desk renders
+        `.slice(0, 40)` of those. The queue is append-only, so its own order
+        is oldest-first, and the cut was keeping the oldest forty.
+
+        Found on 17 September 2026 from the boat -- "the reports haven't
+        updated since end of August". They had. 240 observations were on
+        file, that morning's scrape among them, and the desk was showing
+        forty dated 27-31 August because the window froze on the day the
+        queue passed 120 and every scrape since had landed in the tail
+        nobody sends. Nothing was stale except the slice.
+        """
+        rows = self._load([
+            (self.URL, "tautog", "2026-08-27", "a"),
+            (self.URL, "scup", "2026-09-17", "b"),        # today, read last
+            (self.URL, "bluefish", "2026-08-31", "c"),
+            (self.URL2, "fluke", "2026-09-14", "d"),
+        ])
+        days = [str(r["day"]) for r in rows]
+        self.assertEqual(days, sorted(days, reverse=True), days)
+        self.assertEqual(days[0], "2026-09-17", "the newest must survive a cut")
+
+        # The shape the bug actually took: truncate the way the callers do.
+        self.assertEqual([r["species"] for r in rows[:2]], ["scup", "fluke"])
+
     def test_one_article_is_one_witness(self):
+
         # The invariant that matters. A weekly report naming a species in six
         # places is ONE observation, not six -- counting rows would manufacture
         # a consensus out of a single writer's week.
@@ -9361,20 +9673,37 @@ class ReferencePhotos(unittest.TestCase):
         self.assertEqual(d["photo"]["scientific"], "Tautoga onitis")
 
     def test_no_photo_says_which_kind_of_no(self):
-        """Three different absences, and a card that rendered them the same
-        would turn "we could not be sure" into "nothing here"."""
+        """Four different absences, and a card that rendered them the same
+        would turn "we could not be sure" into "nothing here".
+
+        The fourth is the one that cost something. A network error used to
+        come back from `resolve` as None and be written down as
+        `resolved: False`, which the card reads out as "we could not identify
+        this fish" -- a claim about the animal made out of a fact about the
+        wire. Five species carried that verdict and three of them resolve on
+        the first try.
+        """
         import unittest.mock as mock
         from tiderace import dossier, fishpic
         cases = [
             ({}, "not fetched yet"),
-            ({"resolved": False}, "no confident match"),
+            ({"resolved": False}, "no freely licensed photograph"),
             ({"resolved": True, "file": None}, "no Creative Commons"),
+            ({"error": "iNaturalist: timed out"}, "the last lookup failed"),
         ]
         for entry, expect in cases:
             with mock.patch.object(fishpic, "load", lambda e=entry: {"tautog": e}):
                 d = dossier.build("tautog")
             self.assertIsNone(d["photo"])
             self.assertIn(expect, d["unavailable"]["photo"], entry)
+        # And the failure names what actually went wrong, so "run it again"
+        # is advice a person can act on rather than a shrug.
+        with mock.patch.object(
+                fishpic, "load",
+                lambda: {"tautog": {"error": "iNaturalist: timed out"}}):
+            why = dossier.build("tautog")["unavailable"]["photo"]
+        self.assertIn("timed out", why)
+        self.assertNotIn("could not", why)
 
     def test_the_card_says_why_there_is_no_photo(self):
         """Nine of thirty-seven have none: five could not be matched with
@@ -9459,9 +9788,18 @@ class ReferencePhotos(unittest.TestCase):
                              hms.status(key)["scientific"])
             found += 1
         self.assertEqual(found, 3)
-        # And a fish nothing has a name for gets an empty string, never a
-        # guess, so the lookup falls back to a labelled common-name match.
-        self.assertEqual(species.scientific("spanish_mackerel"), "")
+        # The two that read through to hms under a DIFFERENT key. `hms.RULES`
+        # is keyed the way NOAA prints the name -- "blue marlin", with a
+        # space -- and this project's keys carry an underscore, so both missed
+        # and white marlin ended up with no photograph at all: a binomial
+        # already transcribed from a document, lost to a punctuation mark.
+        for key, want in (("blue_marlin", "Makaira nigricans"),
+                          ("white_marlin", "Kajikia albida")):
+            self.assertNotIn(key, species.SCIENTIFIC)
+            self.assertEqual(species.scientific(key), want,
+                             "%s no longer reaches hms.py" % key)
+            found += 1
+        self.assertEqual(found, 5)
 
     def test_every_sourced_binomial_looks_like_one(self):
         """Genus capitalised, epithet not, two words. A typo here sends the
@@ -9486,6 +9824,472 @@ class ReferencePhotos(unittest.TestCase):
             self.assertNotIn("fishpic.fetch_all", src, name)
             self.assertNotIn("fishpic.resolve", src, name)
 
+
+class SpeciesBackground(unittest.TestCase):
+    """What each fish IS, read off Wikipedia, and the two things that makes
+    dangerous.
+
+    The first is the wrong animal. Wikipedia is an excellent encyclopaedia and
+    a terrible key-value store for common names, and asking it by the name on
+    a boat lands on a different fish with a straight face. Measured on
+    2026-09-17: "False Albacore" reaches *Euthynnus affinis*, an Indo-Pacific
+    kawakawa; "grey trout" -- a weakfish alias this project already carried --
+    reaches a lake trout; "sea mullet" reaches a mullet; and "Weakfish"
+    reaches the genus *Cynoscion* rather than any species at all.
+
+    The second is a regulatory number. The striped bass article carries a
+    section headed "Current fishing regulations", and a size limit that nobody
+    read out of a RIDEM notice, rendered on the same card as the legal strip,
+    is the exact failure this project exists to avoid. Under a commercial
+    licence that is worse than a bad forecast.
+
+    Hermetic, like the rest of the suite: every response here is a stub.
+    `tiderace species --info` is what talks to Wikipedia, and nothing on a
+    forecast path does.
+    """
+
+    # A Wikidata reply shaped the way the real one is, so the verification
+    # under test is the real verification and not a convenience.
+    def _wikidata(self, rank, taxa):
+        def claim(v):
+            return [{"mainsnak": {"datavalue": {"value": v}}}]
+        claims = {}
+        if rank:
+            claims["P105"] = claim({"id": rank})
+        if taxa:
+            claims["P225"] = [{"mainsnak": {"datavalue": {"value": t}}}
+                              for t in taxa]
+        return {"entities": {"Q1": {"claims": claims}}}
+
+    def _stub(self, rank, taxa, title="Some Fish"):
+        """Wikipedia returns a page; Wikidata returns the claims. `article`
+        calls them in that order."""
+        from tiderace import wiki
+        replies = [
+            {"query": {"pages": [{"title": title, "pageid": 1,
+                                  "pageprops": {"wikibase_item": "Q1"},
+                                  "revisions": [{"revid": 99,
+                                                 "timestamp": "2026-01-01T00:00:00Z"}]}]}},
+            self._wikidata(rank, taxa),
+        ]
+        def fake(api, params):
+            return replies.pop(0)
+        return wiki, fake
+
+    def test_a_genus_is_not_a_species(self):
+        """"Weakfish" redirects to the genus Cynoscion, and a card headed
+        "Weakfish" showing the genus would be a quiet lie.
+
+        The rank claim is tested on its own here, with a taxon name that
+        AGREES, because otherwise it is not tested at all: in the real
+        Cynoscion case the name comparison refuses the article first and the
+        rank guard never runs. That was this test's first draft, and deleting
+        the guard entirely left it green.
+        """
+        import unittest.mock as mock
+        # Name agrees, rank does not. Only the rank guard can refuse this.
+        wiki, fake = self._stub("Q34740", ["Cynoscion regalis"], "Cynoscion")
+        with mock.patch.object(wiki, "_get", fake), \
+                mock.patch.object(wiki.time, "sleep", lambda *a: None):
+            self.assertIsNone(wiki.article("Cynoscion regalis"),
+                              "a genus passed the species check")
+        # A rank claim missing altogether is also not a species.
+        wiki, fake = self._stub(None, ["Cynoscion regalis"], "Cynoscion")
+        with mock.patch.object(wiki, "_get", fake), \
+                mock.patch.object(wiki.time, "sleep", lambda *a: None):
+            self.assertIsNone(wiki.article("Cynoscion regalis"))
+        # And the shape the real redirect has, where the name disagrees too.
+        wiki, fake = self._stub("Q34740", ["Cynoscion"], "Cynoscion")
+        with mock.patch.object(wiki, "_get", fake), \
+                mock.patch.object(wiki.time, "sleep", lambda *a: None):
+            self.assertIsNone(wiki.article("Cynoscion regalis"))
+
+    def test_an_article_about_a_different_fish_is_refused(self):
+        """The kawakawa. "False Albacore" on Wikipedia is *Euthynnus
+        affinis*; the fish off Rhode Island is *E. alletteratus*. Same genus,
+        same common name in the tackle shop, different ocean."""
+        import unittest.mock as mock
+        wiki, fake = self._stub("Q7432", ["Euthynnus affinis"], "Kawakawa")
+        with mock.patch.object(wiki, "_get", fake), \
+                mock.patch.object(wiki.time, "sleep", lambda *a: None):
+            self.assertIsNone(wiki.article("Euthynnus alletteratus"))
+
+    def test_the_right_fish_resolves_and_records_what_verified_it(self):
+        import unittest.mock as mock
+        wiki, fake = self._stub("Q7432", ["Tautoga onitis"], "Tautog")
+        with mock.patch.object(wiki, "_get", fake), \
+                mock.patch.object(wiki.time, "sleep", lambda *a: None):
+            got = wiki.article("Tautoga onitis")
+        self.assertEqual(got["taxon"], "Tautoga onitis")
+        self.assertEqual(got["verified"], "taxon name")
+        # The revision travels with it. A Wikipedia revision id is permanent,
+        # so "where did this sentence come from" has an answer that keeps.
+        self.assertEqual(got["revid"], 99)
+        self.assertIn("oldid=99", got["permalink"])
+
+    def test_a_genus_revision_resolves_and_says_the_genus_moved(self):
+        """NMFS-NE-146 prints *Loligo pealeii*; the accepted combination is
+        *Doryteuthis pealeii*. Same animal, and the record has to say so
+        rather than pretend the document was wrong."""
+        import unittest.mock as mock
+        wiki, fake = self._stub("Q7432", ["Doryteuthis pealeii"],
+                                "Longfin inshore squid")
+        with mock.patch.object(wiki, "_get", fake), \
+                mock.patch.object(wiki.time, "sleep", lambda *a: None):
+            got = wiki.article("Loligo pealeii")
+        self.assertEqual(got["taxon"], "Doryteuthis pealeii")
+        self.assertIn("genus revised", got["verified"])
+
+    def test_sections_about_fishing_are_refused(self):
+        """Default deny, and deny is checked FIRST so that a heading cannot
+        buy its way in on a good word. These are real headings, taken off the
+        thirty-seven articles on 2026-09-17, not invented ones."""
+        from tiderace import wiki
+        for head in ("Current fishing regulations", "Management", "Fisheries",
+                     "Recreational fishing", "Commercial fishery", "As food",
+                     "Cuisine", "Commercial fishing, angling, and food quality",
+                     "Conservation status and management", "References",
+                     "External links", "Economic importance"):
+            self.assertFalse(wiki._wanted_section(head), head)
+        for head in ("Description", "Distribution and habitat", "Diet",
+                     "Life cycle", "Similar species", "Feeding habits",
+                     "Taxonomy", "Reproduction", "Conservation", "About",
+                     "Characteristics", "Lifecycle", "Habits"):
+            self.assertTrue(wiki._wanted_section(head), head)
+
+    def test_a_rule_shaped_paragraph_is_dropped_from_an_allowed_section(self):
+        """The allowlist keeps whole sections about fishing out. This is the
+        second net, for the sentence in a Conservation section that happens to
+        name a quota -- which is exactly where two of the four real drops came
+        from (porbeagle)."""
+        from tiderace import wiki
+        for para in (
+                "The minimum size is 16 inches total length.",
+                "There is a bag limit of three fish per angler per day.",
+                "The open season runs from May to December.",
+                "Norway was allowed an annual quota of 125 tons.",
+                "Fish under 28 in may not be retained.",
+                "A permit is required to land them."):
+            self.assertTrue(wiki.REGULATORY.search(para), para)
+        # And it must not eat the biology, which is the whole point of the
+        # card. A net that catches everything has caught nothing.
+        for para in (
+                "Tautog are brown and dark olive, with white blotches.",
+                "They reach a maximum length of 90 cm (3 ft).",
+                "Spawning occurs offshore, in late spring to early summer.",
+                "They inhabit hard substrate at depths from 1 to 75 m.",
+                "Adults feed on mussels, crabs and other crustaceans."):
+            self.assertIsNone(wiki.REGULATORY.search(para), para)
+
+    def test_a_filtered_source_admits_it_was_filtered(self):
+        """A card showing only what survived would read as the whole article.
+        The refused headings are carried out with the kept ones."""
+        import unittest.mock as mock
+        from tiderace import wiki
+        text = ("A fish that lives here.\n\n\n== Description ==\n\n"
+                "It is brown.\n\n\n== Current fishing regulations ==\n\n"
+                "The minimum size is 16 inches.\n\n\n== References ==\n\nx\n")
+        with mock.patch.object(
+                wiki, "_get",
+                lambda api, p: {"query": {"pages": [{"extract": text}]}}):
+            got = wiki.sections("Some Fish")
+        self.assertEqual([s["heading"] for s in got["sections"]],
+                         ["Description"])
+        self.assertIn("Current fishing regulations", got["refused"])
+        self.assertIn("References", got["refused"])
+        # And not one word of the refused section reached the output.
+        kept = " ".join(p for s in got["sections"] for p in s["paragraphs"])
+        self.assertNotIn("16 inches", kept + " ".join(got["summary"]))
+
+    def test_only_open_licences_are_kept(self):
+        """Commons is mostly free and not entirely. These are somebody's
+        photographs and this repository is AGPL: shipping one that is not
+        licensed for it is the same class of mistake as inventing a size
+        limit."""
+        import unittest.mock as mock
+        from tiderace import wiki
+
+        def stub(code, short, repo="shared"):
+            replies = [
+                {"query": {"pages": [{"pageimage": "F.jpg",
+                                      "thumbnail": {"source": "http://x/f.jpg"}}]}},
+                {"query": {"pages": [{
+                    "imagerepository": repo,
+                    "imageinfo": [{"descriptionurl": "http://c/F.jpg",
+                                   "mime": "image/jpeg",
+                                   "extmetadata": {
+                                       "License": {"value": code},
+                                       "LicenseShortName": {"value": short},
+                                       "Artist": {"value": "<a href='#'>Someone</a>"}}}]}]}},
+            ]
+            return lambda api, p: replies.pop(0)
+
+        for code, short in (("cc0", "CC0"), ("cc-by-4.0", "CC BY 4.0"),
+                            ("cc-by-sa-3.0", "CC BY-SA 3.0"),
+                            ("pd", "Public domain")):
+            with mock.patch.object(wiki, "_get", stub(code, short)), \
+                    mock.patch.object(wiki.time, "sleep", lambda *a: None):
+                got = wiki.image("Some Fish")
+            self.assertIsNotNone(got, code)
+            # The markup comes off the attribution, or the card prints angle
+            # brackets at a person.
+            self.assertEqual(got["attribution"], "Someone")
+        for code, short in (("fairuse", "Fair use"), ("", ""),
+                            ("non-free", "Non-free")):
+            with mock.patch.object(wiki, "_get", stub(code, short)), \
+                    mock.patch.object(wiki.time, "sleep", lambda *a: None):
+                self.assertIsNone(wiki.image("Some Fish"), code)
+        # A file held locally on en.wikipedia rather than shared from Commons
+        # is usually local BECAUSE it is non-free.
+        with mock.patch.object(wiki, "_get", stub("cc0", "CC0", repo="local")), \
+                mock.patch.object(wiki.time, "sleep", lambda *a: None):
+            self.assertIsNone(wiki.image("Some Fish"))
+
+    def test_a_network_failure_is_never_recorded_as_a_verdict(self):
+        """Three facts, not one: nobody looked, somebody looked and could not
+        be sure, and somebody tried to look and could not reach the server.
+        Collapsing the third into the second is what told five species they
+        could not be identified when the wire had simply dropped."""
+        import unittest.mock as mock
+        from tiderace import wiki
+
+        import urllib.error
+
+        def boom(api, params):
+            raise urllib.error.URLError("no route to host")
+        with mock.patch.object(wiki, "_get", boom):
+            got = wiki.article("Tautoga onitis")
+        self.assertIsNotNone(got, "a failure came back looking like 'no article'")
+        self.assertIn("error", got)
+        # image() too, because a Commons blip must not quietly demote a card
+        # to the second-choice source.
+        with mock.patch.object(wiki, "_get", boom):
+            self.assertIn("error", wiki.image("Tautog") or {})
+
+    def test_a_fish_with_no_sourced_binomial_is_not_looked_up_at_all(self):
+        """No common-name fallback, anywhere. The three wrong fish in this
+        class's docstring are what that fallback costs, and the temptation to
+        add one 'just for the fish we have no name for' is exactly how it
+        would come back."""
+        import unittest.mock as mock
+        from tiderace import species, wiki
+        called = []
+        with mock.patch.object(wiki, "article",
+                               lambda b: called.append(b) or None), \
+                mock.patch.object(species, "scientific", lambda k: ""), \
+                mock.patch.object(wiki.cache, "write_json", lambda *a: None), \
+                mock.patch.object(wiki, "load", dict), \
+                mock.patch.object(wiki.time, "sleep", lambda *a: None):
+            rep = wiki.fetch_all([species.BY_KEY["tautog"]], log=lambda *a: None)
+        self.assertEqual(called, [], "a fish with no binomial was looked up")
+        self.assertEqual(rep["no_binomial"], ["tautog"])
+
+    def test_every_fish_has_a_binomial_from_a_document(self):
+        """All thirty-seven, so no lookup anywhere ever has an excuse to fall
+        back to a common name. Seventeen came from EFH source documents and
+        pelagic.py; the other fifteen from the NOAA MRIP species-code table,
+        and two read through to hms.py."""
+        from tiderace import species
+        missing = [sp.key for sp in species.SPECIES
+                   if not species.scientific(sp.key)]
+        self.assertEqual(missing, [])
+        self.assertEqual(len(species.SPECIES), 37)
+
+    def test_an_article_that_is_all_lead_still_reaches_the_card(self):
+        """The scup article puts the whole of it in the lead -- how big they
+        get, how long they live, where they spawn, that they were the most
+        abundant fish in colonial Narragansett Bay -- and carries no section
+        this allowlist wants.
+
+        Gating the card on sections alone threw all four paragraphs away and
+        then said "not fetched yet" about a fish that had been fetched. That
+        is the wrong kind of absence, and it sends a person off to run a
+        command that will change nothing.
+        """
+        import unittest.mock as mock
+        from tiderace import dossier, wiki
+        lead_only = {"scup": {
+            "title": "Scup", "url": "u", "permalink": "p", "revid": 7,
+            "checked_on": "2026-09-17", "taxon": "Stenotomus chrysops",
+            "verified": "taxon name", "found": True,
+            "summary": ["The scup is a fish.", "They grow to 18 in."],
+            "sections": [], "refused": ["Cuisine", "Fishing"]}}
+        with mock.patch.object(wiki, "load", lambda: lead_only):
+            d = dossier.build("scup")
+        self.assertIsNotNone(d["about"], "a fetched article read as unfetched")
+        self.assertEqual(len(d["about"]["summary"]), 2)
+        self.assertNotIn("about", d["unavailable"])
+        # And an article that really was filtered down to nothing says THAT,
+        # rather than sending somebody to re-run a fetch that already ran.
+        empty = {"scup": dict(lead_only["scup"], summary=[], sections=[])}
+        with mock.patch.object(wiki, "load", lambda: empty):
+            d = dossier.build("scup")
+        self.assertIsNone(d["about"])
+        self.assertIn("none of it was natural history",
+                      d["unavailable"]["about"])
+        self.assertNotIn("not fetched", d["unavailable"]["about"])
+
+    def test_a_lead_only_article_is_not_refetched_every_run(self):
+        """The other half of the scup fix, and the reason it needed a second
+        commit.
+
+        `get` learned that a lead-only article counts and `fetch_all`'s cache
+        check did not, so scup was rendered correctly and re-read from
+        Wikipedia on every single run -- "1 read · 36 already cached", three
+        round trips to answer a question already on disk. The bug was not the
+        predicate; it was that the predicate existed twice. So the test is
+        that the two callers cannot disagree.
+        """
+        import unittest.mock as mock
+        from tiderace import species, wiki
+        lead_only = {"summary": ["The scup is a fish."], "sections": [],
+                     "found": True, "checked_on": "2026-09-17"}
+        # The card shows it...
+        with mock.patch.object(wiki, "load", lambda: {"scup": lead_only}):
+            self.assertIsNotNone(wiki.get("scup"))
+        # ...and the fetch leaves it alone.
+        looked = []
+        with mock.patch.object(wiki, "load", lambda: {"scup": lead_only}), \
+                mock.patch.object(wiki, "article",
+                                  lambda b: looked.append(b) or None), \
+                mock.patch.object(wiki.cache, "write_json", lambda *a: None), \
+                mock.patch.object(wiki.time, "sleep", lambda *a: None):
+            rep = wiki.fetch_all([species.BY_KEY["scup"]], log=lambda *a: None)
+        self.assertEqual(looked, [], "a cached article was fetched again")
+        self.assertEqual(rep["kept"], 1)
+        self.assertEqual(rep["read"], 0)
+        # --refresh still means refresh, or there would be no way to update.
+        with mock.patch.object(wiki, "load", lambda: {"scup": lead_only}), \
+                mock.patch.object(wiki, "article",
+                                  lambda b: looked.append(b) or None), \
+                mock.patch.object(wiki.cache, "write_json", lambda *a: None), \
+                mock.patch.object(wiki.time, "sleep", lambda *a: None):
+            wiki.fetch_all([species.BY_KEY["scup"]], refresh=True,
+                           log=lambda *a: None)
+        self.assertEqual(looked, ["Stenotomus chrysops"])
+
+    def test_the_cache_check_and_the_card_ask_the_same_question(self):
+        """Written once, asked twice. If these two ever diverge again the
+        symptom is silent -- a fish that renders perfectly and quietly hits
+        the network for ever."""
+        import inspect
+        from tiderace import wiki
+        src = strip_py_comments(inspect.getsource(wiki))
+        # Exactly one place decides what "we have something" means.
+        self.assertEqual(src.count('get("sections") or'), 1, src.count("x"))
+        for fn in (wiki.get, wiki.fetch_all):
+            self.assertIn("has_content", strip_py_comments(inspect.getsource(fn)),
+                          fn.__name__)
+        for entry, want in (({"sections": [{"heading": "x"}]}, True),
+                            ({"summary": ["x"]}, True),
+                            ({"summary": [], "sections": []}, False),
+                            ({}, False)):
+            self.assertIs(wiki.has_content(entry), want, entry)
+
+    def test_nothing_that_decides_anything_imports_wiki(self):
+        """The licence for reading a tertiary source at all is that nothing
+        computes on it. A band decides a forecast and a rule decides whether a
+        fish is a fine; this decides nothing, and the day it does the licence
+        is gone."""
+        import pathlib
+        root = pathlib.Path(__file__).parent / "tiderace"
+        checked = 0
+        for name in ("score.py", "pelagic.py", "prospect.py", "regs.py",
+                     "applied.py", "heat.py", "features.py", "survey.py",
+                     "hms.py", "ridem.py"):
+            src = strip_py_comments((root / name).read_text())
+            self.assertNotIn("import wiki", src, name)
+            self.assertNotIn("wiki.", src, name)
+            checked += 1
+        self.assertEqual(checked, 10, "the walk stopped finding files")
+
+    def test_the_taxobox_image_wins_over_the_observation_photo(self):
+        """Matt, 17 September 2026: the tautog photograph was a real
+        *Tautoga onitis* -- a pale juvenile in the weed, which is not the fish
+        anybody recognises. iNaturalist's default photo is the observation
+        people liked most; a taxobox image is the one an editor chose to show
+        what the species looks like. Different questions, and only one of them
+        is ours."""
+        import unittest.mock as mock
+        from tiderace import fishpic, species
+        inat = []
+        with mock.patch.object(
+                fishpic, "_from_wikipedia",
+                lambda sp, b: {"source": "wikipedia", "url": "http://x/w.jpg",
+                               "scientific": "Tautoga onitis", "licence": "cc0",
+                               "attribution": "a", "credit_url": "",
+                               "verified": "taxon name", "photo_id": "F",
+                               "common": "Tautog", "matched_on": b,
+                               "taxon_id": None}), \
+                mock.patch.object(fishpic, "_from_inaturalist",
+                                  lambda sp, b: inat.append(b)), \
+                mock.patch.object(fishpic.urllib.request, "urlopen",
+                                  mock.mock_open(read_data=b"JPEG")), \
+                mock.patch.object(fishpic.cache, "write_bytes", lambda *a: None), \
+                mock.patch.object(fishpic.cache, "write_json", lambda *a: None), \
+                mock.patch.object(fishpic, "load", dict), \
+                mock.patch.object(fishpic.os, "makedirs", lambda *a, **k: None), \
+                mock.patch.object(fishpic.time, "sleep", lambda *a: None):
+            rep = fishpic.fetch_all([species.BY_KEY["tautog"]],
+                                    log=lambda *a: None)
+        self.assertEqual(rep["by_source"], {"wikipedia": 1})
+        self.assertEqual(inat, [], "iNaturalist was asked anyway")
+
+    def test_a_commons_failure_does_not_quietly_fall_through(self):
+        """The fallback is for "Commons has nothing free", not for "the
+        network coughed". A reader looking at an iNaturalist photo has no way
+        to tell which happened, so the second case has to stop rather than
+        downgrade."""
+        import unittest.mock as mock
+        from tiderace import fishpic, species
+
+        def blew_up(sp, b):
+            raise fishpic.LookupFailed("commons lookup failed: timed out")
+        inat = []
+        with mock.patch.object(fishpic, "_from_wikipedia", blew_up), \
+                mock.patch.object(fishpic, "_from_inaturalist",
+                                  lambda sp, b: inat.append(b)), \
+                mock.patch.object(fishpic.cache, "write_json", lambda *a: None), \
+                mock.patch.object(fishpic, "load", dict), \
+                mock.patch.object(fishpic.os, "makedirs", lambda *a, **k: None), \
+                mock.patch.object(fishpic.time, "sleep", lambda *a: None):
+            rep = fishpic.fetch_all([species.BY_KEY["tautog"]],
+                                    log=lambda *a: None)
+        self.assertEqual(inat, [], "a network blip demoted the source")
+        self.assertEqual(rep["failed"], ["tautog"])
+        self.assertEqual(rep["no_match"], [], "a failure was filed as a refusal")
+
+    def test_the_card_carries_the_licence_and_the_revision(self):
+        """CC BY-SA is a condition, not a footer. And the revision is what
+        makes the text citable at all -- without it the card is quoting an
+        article that may since say something else."""
+        import unittest.mock as mock
+        from tiderace import dossier, wiki
+        cached = {"tautog": {
+            "title": "Tautog", "url": "http://w/Tautog", "revid": 99,
+            "permalink": "http://w/?oldid=99", "revised_on": "2025-12-18",
+            "checked_on": "2026-09-17", "taxon": "Tautoga onitis",
+            "verified": "taxon name", "found": True,
+            "summary": ["A wrasse."],
+            "sections": [{"heading": "Description", "paragraphs": ["Brown."],
+                          "dropped_paragraphs": 0}],
+            "refused": ["Cuisine"]}}
+        with mock.patch.object(wiki, "load", lambda: cached):
+            d = dossier.build("tautog")
+        a = d["about"]
+        self.assertEqual(a["licence"], "CC BY-SA 4.0")
+        self.assertIn("oldid=99", a["permalink"])
+        self.assertEqual(a["revid"], 99)
+        self.assertIn("not a rule and not a band", a["note"])
+        # The desk renders all three or the text should not render at all.
+        import pathlib
+        desk = strip_comments(
+            (pathlib.Path(__file__).parent / "tiderace" / "web"
+             / "desk.html").read_text())
+        fish = desk.split("async fish()")[1].split("\n  async ")[0]
+        for bit in ("ab.licence", "ab.permalink", "ab.revid", "ab.note",
+                    "ab.summary", "ab.sections"):
+            self.assertIn(bit, fish, bit)
 
 class ProspectedCandidates(unittest.TestCase):
     """Matt, 3 September 2026: the goal is for the system to come up with the

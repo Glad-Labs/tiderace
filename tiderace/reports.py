@@ -159,6 +159,21 @@ def catch_reports(path: str | None = None) -> list[dict]:
             "confidence": r.get("confidence", "medium"),
             "quote": r.get("quote", ""),
         })
+
+    # Newest first, because every consumer truncates and none of them sorted.
+    # The queue is append-only, so its order is the order things were first
+    # read -- oldest at the front. `/api/reports` sends `rows[:120]` and the
+    # desk shows `.slice(0, 40)` of those, so the cut kept the *oldest* forty.
+    # The visible window froze on the day the queue passed the limit and every
+    # scrape since landed in the tail nobody sends. Measured 17 September 2026:
+    # 240 observations on file, the desk showing forty of them dated 27-31
+    # August, while that morning's scrape sat unread at the other end.
+    #
+    # Sorting here rather than at either cut, because "most recent" is what a
+    # list of reports means to everyone who asks for one, and there are two
+    # callers that truncate and four more that aggregate. The sort is stable,
+    # so observations sharing a day keep the order they were read in.
+    out.sort(key=lambda r: r["day"], reverse=True)
     return out
 
 

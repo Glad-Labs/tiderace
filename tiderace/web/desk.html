@@ -8,8 +8,8 @@
 /* The reading half of the app.
 
    These four -- the log's own history, what other people are reporting,
-   claims waiting to be believed, and the federal offshore rules -- were CLI
-   only, which meant nobody ever looked at them. They do not belong on the map
+   what those reports have already put into the model, and the federal
+   offshore rules -- were CLI only, which meant nobody ever looked at them. They do not belong on the map
    either: none is something you do with a rod in your hand, and the map screen
    was decluttered on purpose. So: a second page, reached from the map and
    reachable back, scrolling like a document because that is what it is. */
@@ -99,6 +99,35 @@ h2{font:600 13px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
   margin-right:6px;
 }
 .tag.hi{color:var(--good)} .tag.lo{color:var(--warn)}
+/* The in-force list. Its whole job is to stop reading as an inbox: the filter
+   row says how many rows are in each standing, so choosing to look at the 134
+   season rows is a decision and not a backlog. The one button is a retraction,
+   so it is styled as a quiet action rather than the other half of a pair --
+   there is no longer a matching "confirm", because nothing read it. */
+#confirm .picks{display:flex; flex-wrap:wrap; gap:6px; margin:0 0 9px}
+#confirm .picks button{
+  background:var(--panel); border:1px solid var(--hair); border-radius:999px;
+  color:var(--ink-2); font:12px/1 var(--mono); padding:8px 11px; cursor:pointer;
+  font-variant-numeric:tabular-nums;
+}
+#confirm .picks button.on{color:var(--ink); border-color:var(--accent)}
+/* Stacked, not columned. `.row .v` is a right-aligned nowrap column because
+   everywhere else on the desk it holds a number; here it holds a sentence
+   saying what the row is still doing, and at 375px that sentence measured
+   345px and took the whole page sideways (538px in a 375px viewport,
+   17 September 2026). */
+#confirm .row{flex-wrap:wrap}
+#confirm .row .k{flex:1 1 100%; min-width:0}
+#confirm .row .v{flex:1 1 100%; margin-left:0; text-align:left;
+                 white-space:normal}
+#confirm .row .v .tag{white-space:normal}
+#confirm button.no{
+  background:var(--panel); border:1px solid var(--hair); border-radius:8px;
+  color:var(--ink-2); font:12px/1 var(--mono); padding:8px 10px; cursor:pointer;
+  margin-top:6px;
+}
+#confirm button.no:hover{color:var(--crit); border-color:var(--crit)}
+#confirm button.no[disabled]{color:var(--muted); cursor:default}
 /* The species cards. The one visual job that matters is telling a cited band
    from a hand-set prior at a glance: half of what this app knows about a
    tautog comes out of a document with a page number and half is somebody's
@@ -140,6 +169,22 @@ h2{font:600 13px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
 #fish img.photo{width:100%; border-radius:10px; display:block; margin:0 0 9px;
                 background:var(--panel-2)}
 #fish .credit{margin:0 0 13px; font:10px/1.5 var(--mono); color:var(--muted)}
+/* Natural history. Body text rather than mono, because these are paragraphs a
+   person reads rather than readings they scan, and 12px mono for four hundred
+   words is punishing. Everything else on this page stays mono on purpose.
+   `--display` is the body stack this page already uses; a new --sans token
+   would be a third font for no reason, and an undefined one resolves to
+   nothing and silently drops the whole declaration. */
+#fish .about p{margin:0 0 10px; font:13px/1.65 var(--display); color:var(--ink-2)}
+#fish .about p:last-child{margin-bottom:0}
+#fish details.sec{border-top:1px solid rgba(39,64,72,.55); padding:11px 0 0;
+                  margin:11px 0 0}
+#fish details.sec summary{list-style:none; cursor:pointer; color:var(--depth);
+                          font:12px/1.5 var(--mono); letter-spacing:.02em}
+#fish details.sec summary::-webkit-details-marker{display:none}
+#fish details.sec[open] summary{color:var(--muted); margin-bottom:8px}
+#fish details.sec .about{padding-left:10px;
+                         border-left:2px solid var(--hair)}
 .bar{height:7px; border-radius:4px; background:var(--hair); margin:10px 0}
 .bar i{display:block; height:100%; border-radius:4px; background:var(--accent)}
 a{color:var(--depth)}
@@ -155,7 +200,7 @@ a{color:var(--depth)}
 <nav>
   <button data-s="history" class="on">Log</button>
   <button data-s="reports">Reports</button>
-  <button data-s="confirm">Confirm</button>
+  <button data-s="confirm">In force</button>
   <button data-s="regs">Regs</button>
   <button data-s="hms">HMS</button>
   <button data-s="fish">Fish</button>
@@ -208,6 +253,16 @@ async function show(name){
   }
 }
 
+// Why a row is in each list, in the terms the code actually uses. Bait decays
+// on a 4-day half-life and is skipped past ~27 days; a catch report stops
+// describing "now" after 10 days but never stops feeding the season curve,
+// which is the only thing that can ever check the hand-set peak_months.
+const STANDING_WHY = {
+  live: 'Bait in the log and reports from the last 10 days. Retracting one of these changes a number today.',
+  season: 'Older than 10 days, so it no longer says anything about now — but it still counts as one witness in that week of the season curve.',
+  inert: 'Read, kept, and used by nothing: bait with no coordinate, undated reports, and sightings too old to score. Retracting these changes nothing.',
+};
+
 const RENDER = {
   async history(){
     const d = await get('/api/history');
@@ -235,37 +290,64 @@ const RENDER = {
 
   // Applied on arrival, confirmed after. Matt, 15 September 2026: "I don't
   // have time to go chasing them all. I'd rather just confirm them after
-  // they're applied." Every row here is already in force -- a bait sighting
-  // in the log, a catch report counting as a witness -- and the two buttons
-  // are the whole review: agree, or take it back out.
+  // they're applied." So nothing here is waiting on him and the page must
+  // not pretend otherwise -- it once said "375 waiting" over a list of
+  // things already in force, which is the shape the regulation queue died
+  // of. There is no confirm button: nothing in the codebase reads
+  // status="confirmed", so offering it would be asking for work that
+  // changes no number. The one button left is the one with teeth.
+  //
+  // Conditions do not last, so the default list is what could still move a
+  // forecast today. The rest is reachable and counted, never implied.
+  CONFIRM_STATE: 'live',
   async confirm(){
-    const d = await get('/api/confirm');
+    const st = RENDER.CONFIRM_STATE;
+    const d = await get('/api/confirm?state=' + encodeURIComponent(st));
     const rows = d.rows || [];
+    const sd = d.standing || {};
     const what = r => r.kind === 'bait'
       ? `${esc(r.abundance || '')} ${esc(r.bait || '')}`.trim()
       : esc(r.species_raw || r.species || '?');
-    const state = r => r.status === 'applied' ? '<span class="tag">in the bait log</span>'
-      : r.status === 'on_file' ? '<span class="tag">counted as a witness</span>'
-      : '<span class="tag lo">no place to put it</span>';
+    // What the row is doing, in the app's own terms. A bait sighting carries
+    // how much of it is left, because 4-day half-life means a fortnight-old
+    // sighting is a rounding error and the reader cannot see that from a date.
+    const doing = r => {
+      const s = r.standing || {};
+      const age = s.age_days == null ? '' :
+        (s.age_days < 1 ? 'today' : Math.round(s.age_days) + ' d old');
+      const left = (r.kind === 'bait' && s.state === 'live')
+        ? ' · ' + Math.round((s.strength || 0) * 100) + '% of fresh' : '';
+      const cls = s.state === 'live' ? 'tag' : 'tag lo';
+      return `<span class="${cls}">${esc(s.note || '')}</span>` +
+             `<br><span class="dim">${esc(age)}${left}</span>`;
+    };
     const list = rows.map(r =>
       `<div class="row" data-id="${esc(r.id)}">
          <span class="k">${what(r)}${r.place ? ' · ' + esc(r.place) : ''}
            ${r.matched_spot ? '<span class="dim">→ ' + esc(r.matched_spot) + '</span>' : ''}<br>
-           <span class="dim">${esc(r.observed_on || '')} · ${esc((r.source_url || '').replace(/^https?:\/\/(www\.)?/, '').split('/')[0])}
+           <span class="dim">${esc(r.observed_on || 'undated')} · ${esc((r.source_url || '').replace(/^https?:\/\/(www\.)?/, '').split('/')[0])}
            · ${esc(r.confidence || '')}${r.attributed_to ? ' · ' + esc(r.attributed_to) : ''}</span><br>
            <span class="dim">“${esc((r.quote || '').slice(0, 140))}”</span></span>
-         <span class="v" style="white-space:nowrap">${state(r)}
-           <button class="ok" data-d="confirmed">confirm</button>
+         <span class="v">${doing(r)}
            <button class="no" data-d="retracted">not right</button></span>
-       </div>`).join('') || '<div class="empty">Nothing waiting. Everything read has been looked at.</div>';
-    const c = d.counts || {};
+       </div>`).join('') || `<div class="empty">${st === 'live'
+        ? 'Nothing the reports put in force is still current.'
+        : 'Nothing here.'}</div>`;
+    const tab = (k, label) =>
+      `<button class="pick${k === st ? ' on' : ''}" data-state="${k}">${label} ${sd[k] || 0}</button>`;
     $('#confirm').innerHTML =
-      `<h2>${d.total || rows.length} waiting${(d.total || 0) > rows.length ? ', first ' + rows.length + ' shown' : ''}</h2>
-       <div class="dim" style="margin-bottom:9px">Already in force: ${c['bait/applied'] || 0} bait sightings
-         in the log, ${c['catch_report/on_file'] || 0} catch reports counting as witnesses,
-         ${c['bait/pending'] || 0} sightings with no place to put them. Confirm keeps one;
-         not right takes it back out.</div>
+      `<h2>${sd.live || 0} in force</h2>
+       <div class="dim" style="margin-bottom:9px">Read from reports and applied on
+         arrival — already in the bait log, already counting as witnesses. Nothing
+         is waiting on you. <b>Not right</b> takes one back out; there is nothing
+         to do to keep one.</div>
+       <div class="picks">${tab('live', 'In force')}${tab('season', 'Season curve only')}${tab('inert', 'Nothing reads it')}</div>
+       <div class="dim" style="margin:0 0 9px">${esc(STANDING_WHY[st] || '')}</div>
        <div class="card">${list}</div>`;
+    $('#confirm').querySelectorAll('button[data-state]').forEach(b => b.onclick = () => {
+      RENDER.CONFIRM_STATE = b.dataset.state;
+      RENDER.confirm();
+    });
     $('#confirm').querySelectorAll('button[data-d]').forEach(b => b.onclick = async () => {
       const row = b.closest('.row');
       b.disabled = true;
@@ -479,8 +561,15 @@ const RENDER = {
         // Somebody else's photograph under a Creative Commons licence. The
         // credit is a condition of using it, not decoration, so it renders
         // with the image or the image does not render at all.
-        h += `<p class="credit">${esc(d.photo.credit || '')} · `
-           + `${esc(d.photo.scientific || '')}`
+        // The credit links to the file it came from where the source gave us
+        // one. Attribution that cannot be followed back is half an
+        // attribution, and the two sources have different front doors.
+        const cr = esc(d.photo.credit || '');
+        h += `<p class="credit">`
+           + (d.photo.credit_url
+              ? `<a href="${esc(d.photo.credit_url)}" target="_blank" `
+                + `rel="noopener">${cr}</a>` : cr)
+           + ` · ${esc(d.photo.scientific || '')}`
            + `${d.photo.verified ? ' — matched by ' + esc(d.photo.verified) : ''}</p>`;
       } else if (d.unavailable && d.unavailable.photo){
         // Said rather than left blank. "No confident match on iNaturalist" is
@@ -500,6 +589,43 @@ const RENDER = {
          + `<span class="tag">${esc(d.hms ? 'federal · HMS' : d.group)}</span></p>`;
       if (d.notes) h += `<p class="dim" style="margin:12px 0 0">${esc(d.notes)}</p>`;
       h += '</div>';
+
+      /* What the fish is, before what the forecast weights. Somebody who has
+         one in their hands is asking "what is this and where does it live",
+         not "what is the weight on bottom type" -- that is the night-before
+         question and it keeps.
+
+         The summary is open and the sections are <details>, same as the terms
+         below: the glance is free and the four hundred words are one tap
+         away. The licence line is a condition of using the text, not a
+         footer, so it renders with the text or the text does not render. */
+      const ab = d.about;
+      if (ab){
+        h += `<h2 style="margin-top:20px">What it is</h2><div class="card">`;
+        h += `<div class="about">`
+           + (ab.summary || []).map(p => `<p>${esc(p)}</p>`).join('')
+           + `</div>`;
+        for (const sec of (ab.sections || [])){
+          h += `<details class="sec"><summary>${esc(sec.heading)}</summary>`
+             + `<div class="about">`
+             + sec.paragraphs.map(p => `<p>${esc(p)}</p>`).join('')
+             + `</div></details>`;
+        }
+        /* Said out loud. This is a tertiary source that has been filtered,
+           and a filtered source that does not admit it was filtered is the
+           more misleading of the two. */
+        h += `<p class="tclaim">${esc(ab.note)}</p>`;
+        h += `<p class="credit">${esc(ab.licence)} · `
+           + `<a href="${esc(ab.permalink)}" target="_blank" rel="noopener">`
+           + `${esc(ab.title)}, revision ${esc(String(ab.revid))}</a>`
+           + ` · read ${esc(ab.read_on || '')}`
+           + ` · matched by ${esc(ab.verified || '')} on ${esc(ab.taxon || '')}`
+           + `</p></div>`;
+      } else if (d.unavailable && d.unavailable.about){
+        h += `<h2 style="margin-top:20px">What it is</h2>`
+           + `<div class="card"><p class="tclaim" style="margin:0">`
+           + `${esc(d.unavailable.about)}</p></div>`;
+      }
 
       const f = d.forecast;
       if (f){

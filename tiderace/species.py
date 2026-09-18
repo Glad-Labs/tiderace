@@ -236,8 +236,45 @@ BY_KEY = {s.key: s for s in SPECIES}
 # binomial it landed on so a person can see a wrong one.
 #
 # Sources are the NOAA NEFSC Essential Fish Habitat source documents read on
-# 2026-09-16 (title pages), plus the names already carried in score.py and
-# pelagic.py for bands cited there.
+# 2026-09-16 (title pages), the NOAA MRIP species-code table read on
+# 2026-09-17, and the names already carried in score.py and pelagic.py for
+# bands cited there.
+#
+# The table used to cover seventeen of the thirty-seven, and the other twenty
+# fell through to a common-name match. That gap is what this rule was written
+# against, and on 2026-09-17 it cost three wrong fish -- not on iNaturalist
+# this time but on Wikipedia, which is the other register `wiki.py` reads:
+#
+#   "False Albacore"  -> Euthynnus affinis     (kawakawa, Indo-Pacific;
+#                                               ours is E. alletteratus)
+#   "grey trout"      -> Salvelinus namaycush  (lake trout -- a weakfish alias
+#                                               that is also a char's name)
+#   "sea mullet"      -> Mugil cephalus        (a mullet, for northern kingfish)
+#
+# Each looked entirely plausible and each is a different animal. So the table
+# is now complete, and `scientific()` is the only route any lookup may take.
+MRIP_N = ("NOAA Marine Recreational Information Program, Appendix N: Species "
+          "Codes Sorted by Common Name (NMFS, 2008). Common name, ITIS TSN "
+          "and scientific name, one row per species. Read 2026-09-17: "
+          "https://www.st.nmfs.noaa.gov/st1/recreational/documents/"
+          "Intercept_Appendices/Appendix%20N%20Species%20Codes%20Sorted%20by"
+          "%20Common%20Name.pdf")
+
+# Every binomial below was checked against WoRMS on 2026-09-17 -- given the
+# name, is it the accepted combination? Fifteen came back accepted. Two came
+# back superseded, and in both the value this project already held from its
+# own document is the current one, so the MRIP row is NOT used for them:
+#
+#   MRIP "WINTER FLOUNDER  172904  PLEURONECTES AMERICANUS"
+#       -> WoRMS: unaccepted, valid name Pseudopleuronectes americanus
+#          (NMFS-NE-138 has it right)
+#   MRIP "WHITE MARLIN     172499  TETRAPTURUS ALBIDUS"
+#       -> WoRMS: unaccepted, valid name Kajikia albida
+#          (hms.py has it right)
+#
+# That is what a 2008 table costs and it is worth saying out loud: the
+# document is the source, but a document has a date, and a genus can move
+# after it is printed.
 SCIENTIFIC: dict[str, str] = {
     # EFH source-document title pages, read 2026-09-16.
     "tautog": "Tautoga onitis",                     # NMFS-NE-118
@@ -258,6 +295,22 @@ SCIENTIFIC: dict[str, str] = {
     "mahi": "Coryphaena hippurus",                  # pelagic.py, [SAFMC-DW]
     "mako": "Isurus oxyrinchus",                    # pelagic.py, Vaudo et al.
     "wahoo": "Acanthocybium solandri",              # pelagic.py, [SAFMC-DW]
+    # NOAA MRIP Appendix N, read 2026-09-17. The comment is the row as the
+    # table prints it -- common name, TSN, scientific name -- because the TSN
+    # is an ITIS key and makes the row something a person can go and check.
+    "striped_bass": "Morone saxatilis",             # STRIPED BASS 167680
+    "bluefish": "Pomatomus saltatrix",              # BLUEFISH 168559
+    "weakfish": "Cynoscion regalis",                # WEAKFISH 169241
+    "northern_kingfish": "Menticirrhus saxatilis",  # NORTHERN KINGFISH 169276
+    "atlantic_mackerel": "Scomber scombrus",        # ATLANTIC MACKEREL 172414
+    "summer_triggerfish": "Balistes capriscus",     # GRAY TRIGGERFISH 173138
+    "cobia": "Rachycentron canadum",                # COBIA 168566
+    "spanish_mackerel": "Scomberomorus maculatus",  # SPANISH MACKEREL 172436
+    "bonito": "Sarda sarda",                        # ATLANTIC BONITO 172409
+    "false_albacore": "Euthynnus alletteratus",     # LITTLE TUNNY 172402
+    "thresher": "Alopias vulpinus",                 # THRESHER SHARK 159916
+    "porbeagle": "Lamna nasus",                     # PORBEAGLE 159911
+    "blue_shark": "Prionace glauca",                # BLUE SHARK 160424
 }
 
 
@@ -267,13 +320,21 @@ def scientific(key: str) -> str:
     `hms.py` transcribed one for every federally managed species when it
     transcribed their rules, so those are not repeated in the table above --
     a name written twice is a name that can disagree with itself. This is the
-    single lookup; `fishpic` uses it and nothing else does.
+    single lookup; `fishpic` and `wiki` use it and nothing else does.
+
+    `hms.RULES` is keyed by the name NOAA prints -- "blue marlin", with a
+    space -- and this file's keys carry an underscore. So `blue_marlin` and
+    `white_marlin` missed, fell through to a common-name search, and white
+    marlin ended up with no photograph at all: two binomials this project had
+    already transcribed from a document, lost to a punctuation mark. The
+    underscore is swapped out here rather than in `hms.status`, because the
+    key NOAA uses is the right key for a module that mirrors NOAA.
     """
     if key in SCIENTIFIC:
         return SCIENTIFIC[key]
     try:
         from . import hms
-        return hms.status(key).get("scientific") or ""
+        return hms.status(key.replace("_", " ")).get("scientific") or ""
     except Exception:                                             # noqa: BLE001
         return ""
 

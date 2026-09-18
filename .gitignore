@@ -44,7 +44,10 @@ data/gso/
 # Local settings, including whose licence you fish under.
 data/config.json
 
-# Extraction review queue — claims awaiting human approval, not facts.
+# Extraction queue. Not "claims awaiting approval": since 15 September 2026
+# reports and bait are applied on arrival and reviewed after, so this holds
+# observations that are already in force, each carrying the article it came
+# from and a coordinate where one was resolved.
 data/review_queue.jsonl
 
 # Editable-install metadata
@@ -76,9 +79,15 @@ browser-check.png
 walkthrough-map.png
 walkthrough-desk.png
 
-# Reference photographs of each fish, fetched from iNaturalist by
-# `tiderace species --photos`. Somebody else's Creative Commons work, a couple
+# Reference photographs of each fish, fetched by `tiderace species --photos`
+# from Wikimedia Commons and iNaturalist. Somebody else's open-licensed work, a couple
 # of megabytes of it, and regenerable — so it belongs on the machine and not
 # in this history, which already carries 3.8 MB of blobs from one careless
 # `git add -A`.
 data/species_photos/
+
+# Natural history read off Wikipedia by `tiderace species --info`. Somebody
+# else's CC BY-SA text, regenerable, and specific to the revision this install
+# happened to read -- so it belongs on the machine and not in the history,
+# beside the photographs it was fetched with.
+data/species_wiki.json

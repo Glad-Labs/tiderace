@@ -168,6 +168,11 @@ def run(argv=None) -> int:
     rv.add_argument("--apply", action="store_true",
                     help="bring the queue up to the applied-on-arrival rule now, "
                          "without fetching anything")
+    rv.add_argument("--state", default="live",
+                    choices=("live", "season", "inert", "all"),
+                    help="live: still moves a forecast today (default). season: "
+                         "too old to describe now, still one witness in the "
+                         "season curve. inert: read and used by nothing.")
 
     rg = sub.add_parser("regs", help="compare recreational and commercial rules")
     rg.add_argument("--species", choices=sorted(score.PROFILES) + sorted(pelagic.PROFILES))
@@ -249,10 +254,15 @@ def run(argv=None) -> int:
     sc.add_argument("--all", action="store_true",
                     help="list every loggable fish and which tiers it reaches")
     sc.add_argument("--photos", action="store_true",
-                    help="fetch a reference photo per fish from iNaturalist "
-                         "(Creative Commons only; a few minutes)")
+                    help="fetch a reference photo per fish — the Wikipedia "
+                         "taxobox image, iNaturalist as fallback (open "
+                         "licences only; a few minutes)")
+    sc.add_argument("--info", action="store_true",
+                    help="fetch the natural history per fish from Wikipedia "
+                         "(what it looks like, where it lives, what it eats)")
     sc.add_argument("--refresh", action="store_true",
-                    help="with --photos, re-fetch ones already on disk")
+                    help="with --photos or --info, redo the ones already "
+                         "cached rather than keeping them")
 
     sv = sub.add_parser("serve", help="run the local map UI")
     sv.add_argument("--port", type=int, default=8765)
@@ -386,20 +396,58 @@ def _cmd_species(args) -> int:
     from . import dossier, species as speciesmod
     if getattr(args, "photos", False):
         from . import fishpic
-        print("\n  resolving each fish on iNaturalist and keeping the "
-              "Creative Commons photos.")
-        print("  a common name is not a key: where a document gave a binomial "
-              "the lookup uses that,")
-        print("  because matching \"Monkfish\" by common name alone returned a "
-              "fish from the Indian Ocean.\n")
+        print("\n  a reference photograph per fish, openly licensed.")
+        print("  Wikipedia's taxobox image first — an editor picked that one "
+              "to show what the")
+        print("  species looks like, where iNaturalist's is the observation "
+              "photo people liked")
+        print("  most, and for the tautog that was a juvenile in the weed.")
+        print("  Both routes go through the binomial a document gave: a "
+              "common name is not a key.\n")
         rep = fishpic.fetch_all(speciesmod.loggable(), refresh=args.refresh)
         print()
         print("  %d matched · %d downloaded · %d already on disk"
               % (rep["matched"], rep["downloaded"], rep["kept"]))
+        if rep["by_source"]:
+            print("  from " + " · ".join("%s %d" % (k, v) for k, v
+                                         in sorted(rep["by_source"].items())))
         if rep["no_match"]:
-            print("  no confident match: " + ", ".join(rep["no_match"]))
+            print("  nothing freely licensed on either source: "
+                  + ", ".join(rep["no_match"]))
         if rep["no_licence"]:
             print("  photo is all rights reserved: " + ", ".join(rep["no_licence"]))
+        if rep["failed"]:
+            # Named apart from the refusals on purpose. These are fish nobody
+            # managed to look up, not fish that could not be identified.
+            print("  lookup FAILED (network, not the fish — run again): "
+                  + ", ".join(rep["failed"]))
+        print()
+        return 0
+    if getattr(args, "info", False):
+        from . import wiki
+        print("\n  reading each fish's Wikipedia article for natural history.")
+        print("  by binomial only: \"False Albacore\" resolves to a fish from "
+              "the Indo-Pacific,")
+        print("  and \"grey trout\" — a weakfish alias — resolves to a lake "
+              "trout.")
+        print("  sections about fishing are refused, because a size limit "
+              "nobody read out of a")
+        print("  RIDEM notice has no business on the same card as the legal "
+              "strip.\n")
+        rep = wiki.fetch_all(speciesmod.loggable(), refresh=args.refresh)
+        print()
+        print("  %d read · %d already cached · %d sections refused · "
+              "%d paragraphs dropped as rule-shaped"
+              % (rep["read"], rep["kept"], rep["refused_sections"],
+                 rep["dropped_paragraphs"]))
+        if rep["no_binomial"]:
+            print("  no sourced binomial, so not looked up: "
+                  + ", ".join(rep["no_binomial"]))
+        if rep["no_article"]:
+            print("  no verified article: " + ", ".join(rep["no_article"]))
+        if rep["failed"]:
+            print("  lookup FAILED (network — run again): "
+                  + ", ".join(rep["failed"]))
         print()
         return 0
     if args.all or not args.name:
@@ -443,6 +491,36 @@ def _cmd_species(args) -> int:
         print()
         for line in _wrap(d["notes"], w - 4):
             print(f"  {line}")
+
+    # ---- what the fish is ----------------------------------------------
+    #
+    # Before the forecast, because "what does this animal look like and where
+    # does it live" is the question somebody with one in their hands is
+    # actually asking, and the weights are the question they ask the night
+    # before. Long on purpose, same as the claims below: this command's whole
+    # job is to print the thing in full rather than a summary of it.
+    a = d.get("about")
+    if a:
+        print()
+        print(f"  WHAT IT IS   (Wikipedia: {a['title']}, rev {a['revid']}, "
+              f"read {a['read_on']})")
+        print("  " + "─" * w)
+        for para in a["summary"]:
+            for line in _wrap(para, w - 6):
+                print(f"      {line}")
+            print()
+        for sec in a["sections"]:
+            print(f"  {sec['heading']}")
+            for para in sec["paragraphs"]:
+                for line in _wrap(para, w - 6):
+                    print(f"      {line}")
+                print()
+        for line in _wrap(a["note"], w - 6):
+            print(f"      {line}")
+        print(f"      {a['licence']} · {a['permalink']}")
+    elif d["unavailable"].get("about"):
+        print()
+        print(f"  what it is: {d['unavailable']['about']}")
 
     f = d["forecast"]
     if f:
@@ -678,7 +756,16 @@ def _cmd_scrape(args) -> int:
                 for w in out.get("warnings", [])[:3]:
                     print(f"      ! {w[:100]}")
             else:
-                out = extract.extract_report(url, force=args.force,
+                # An index source resolves to this week's article first. This
+                # is inside the try on purpose: when the index changes shape
+                # `article_url` raises, the failure is recorded, and the desk
+                # calls the source stale -- which is what should have happened
+                # in August instead of a month of successful empty reads.
+                read = fetch.article_url(fetch.SOURCES.get(key) or {"url": url},
+                                         force=args.force)
+                if read != url:
+                    print(f"    -> {read}")
+                out = extract.extract_report(read, force=args.force,
                                              apply_bait=args.apply_bait)
                 nb, nc = len(out.get("bait", [])), len(out.get("catches", []))
                 print(f"    {nb} bait sighting(s), {nc} catch report(s)"
@@ -825,27 +912,47 @@ def _cmd_review(args) -> int:
     if getattr(args, "confirm", None) or getattr(args, "retract", None):
         return rc
 
-    rows = [r for r in extract.awaiting() if not args.kind or r.get("kind") == args.kind]
-    if not rows:
-        print("\n  Nothing waiting. Everything read has been looked at.\n")
-        return rc
+    # Counted over everything, listed for one standing. Conditions do not
+    # last: the default is what could still move a forecast today, because a
+    # list that grows all season is a list nobody reads.
+    every = extract.awaiting(limit=5000)
+    tally = {s: 0 for s in extract.STANDINGS}
+    for r in every:
+        tally[r["standing"]["state"]] = tally.get(r["standing"]["state"], 0) + 1
+    rows = [r for r in every
+            if (args.state == "all" or r["standing"]["state"] == args.state)
+            and (not args.kind or r.get("kind") == args.kind)]
 
-    print(f"\n  {len(rows)} observation(s) in force and not yet looked at")
+    print(f"\n  {tally['live']} in force · {tally['season']} season curve only"
+          f" · {tally['inert']} read by nothing")
+    if not rows:
+        print(f"\n  Nothing {args.state}.\n")
+        return rc
     print("  " + "─" * 74)
-    state = {"applied": "in the bait log", "on_file": "counted as a witness",
-             "pending": "no place to put it"}
     for r in rows:
-        kind = r.get("kind", "?")
+        kind, st = r.get("kind", "?"), r["standing"]
+        age = "" if st["age_days"] is None else (
+            "today" if st["age_days"] < 1 else f"{round(st['age_days'])} d old")
+        left = (f" · {round(st['strength'] * 100)}% of fresh"
+                if kind == "bait" and st["state"] == "live" else "")
         print(f"\n  {r['id']}  [{kind}] {r.get('species_raw') or r.get('species') or r.get('bait', '')}"
-              f"  ({r.get('confidence', '?')}) · {state.get(r.get('status'), r.get('status'))}")
-        print(f"    {r.get('observed_on', '')} · {r.get('abundance', '')} at {r.get('place', '')}"
-              f" → {r.get('matched_spot') or 'unplaced'}")
+              f"  ({r.get('confidence', '?')}) · {st['note']}")
+        # Joined from the parts that exist: a catch report has no abundance
+        # and an inert row has no age, and interpolating them regardless left
+        # "2026-09-17 ·  · decent at Watch Hill Reefs" on every other line.
+        where = " ".join(x for x in (r.get("abundance", ""), "at",
+                                     r.get("place", "")) if x.strip())
+        where = (where + " → " + (r.get("matched_spot") or "unplaced")).strip()
+        bits = [r.get("observed_on") or "undated", age + left, where]
+        print("    " + " · ".join(b for b in bits if b.strip()))
         print(f"    \"{r.get('quote', '')[:110]}\"")
         print(f"    {r.get('source_url', '')}")
 
     print("\n  " + "─" * 74)
-    print("  Everything above is already in force. To take one back:")
-    print("    tiderace review --retract ID      (or --confirm ID to agree)")
+    print("  Everything above is already in force — nothing is waiting on you.")
+    print("  To take one back:  tiderace review --retract ID")
+    print("  Nothing reads a confirmation, so agreeing costs and changes nothing;")
+    print("  --confirm ID still records that you looked.")
     print("  Regulations are not here: the overlay applies RIDEM's notices itself,")
     print("  and every applied number links to its notice on the desk.")
     print(f"  Queue: {extract.REVIEW_PATH}\n")

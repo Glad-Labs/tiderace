@@ -23,6 +23,7 @@ running and cannot read a file. If the app is up but everything 404s, check
 python3 -m tiderace serve             # the app (systemd user unit, port 8765)
 python3 tests.py                      # the suite, no runner needed
 node tools/browser-check/preflight.mjs  # LOOK AT IT — required before commit
+node tools/browser-check/desk.mjs       # the desk page; preflight covers only the map
 python3 -m tiderace evaluate          # does the model beat the free baseline?
 ```
 
@@ -31,10 +32,12 @@ regs offshore conditions basemap survey whales reports birds hms history
 evaluate gso charts species serve`.
 
 `species <name>` prints the card for one fish -- every band, what each one
-rests on, and the rules -- and is the fastest way to see whether a claim is
-cited or a hand-set prior. `species --photos` fetches a reference photograph
-per fish from iNaturalist; it is the only thing in the project that reaches
-that API for anything but whales, and nothing on a forecast path calls it.
+rests on, the natural history, and the rules -- and is the fastest way to see
+whether a claim is cited or a hand-set prior. `species --photos` fetches a
+reference photograph per fish and `species --info` the natural history; both
+reach the network, both are slow on purpose, and nothing on a forecast path
+calls either. They are the only things in the project that touch iNaturalist
+for anything but whales, or Wikipedia at all.
 
 ---
 
@@ -215,11 +218,40 @@ confirm them after they're applied." A placed, high- or medium-confidence
 bait sighting from a report goes into the bait log the moment it is read
 (the timer runs `scrape --apply-bait`), a catch report counts as a witness
 the moment it is read, and `extract.reconcile_queue` brings the queue up to
-that rule after every scrape. The desk's Confirm tab and `tiderace review
---confirm/--retract ID` are the review: a retraction takes the sighting back
-out of the log and the report off the witness list. Regulations never queue;
-the overlay applies them itself. The one thing this does not do is guess a
-place: a sighting with no coordinate stays pending and unused.
+that rule after every scrape. Regulations never queue; the overlay applies
+them itself. The one thing this does not do is guess a place: a sighting with
+no coordinate stays pending and unused.
+
+**The review is a retraction, not an inbox.** There is no confirm button on
+the desk, because nothing in the package reads `status="confirmed"` —
+`reports.catch_reports` skips only retracted rows and the bait log is keyed by
+the sighting, not the queue — so offering one asks for work that changes no
+number. `tiderace review --confirm ID` still records that you looked. Only
+`--retract` does anything: the sighting leaves the bait log and the report
+leaves the witness list. Matt, 17 September 2026, on being shown 375 rows
+headed "375 waiting", none of them ever actioned: *"why not just log
+everything? I don't have time to verify every claim."* That heading was the
+shape the regulation queue died of, and the tab is now **In force**.
+
+**Conditions expire, and the list says how.** `extract.standing` gives every
+row one of three states, and both the desk and the CLI list the live ones by
+default:
+
+- **live** — bait inside `bait.MAX_AGE_DAYS` (derived from `HALF_LIFE_DAYS`
+  and `WEIGHT_FLOOR`, ≈26.6 days, never typed), or a report inside
+  `reports.FRESH_DAYS`. Retracting one changes a number today.
+- **season** — a report past 10 days. It has stopped describing *now*, and it
+  has **not** stopped counting: `weekly_presence` is built from the whole year
+  and is the only thing that can ever check the hand-set `peak_months`.
+  Demoted, never discarded.
+- **inert** — bait with no coordinate (never applied), an undated report
+  (`catch_reports` drops it rather than stamping it with today), or bait too
+  old to clear the weight floor. Read by nothing; the button is decoration.
+
+Bait decays continuously at a four-day half life, so it ages out on its own: a
+sighting is worth 50% at four days, 18% at ten, 2.6% at three weeks, and is
+skipped outright past the ceiling. Nothing prunes the queue file — the ageing
+is in what the list *shows*, not in what is kept.
 
 A wrong size limit is not a bad forecast, it is a fine — and under Matt's
 father's commercial licence it is worse than a fine. When the app says a rule
@@ -227,6 +259,57 @@ is not modelled, that is a fact about the app, not permission to keep the fish.
 A test asserts `species.py` carries no size/season/bag numbers. **A search
 result is not a source.** Regulations work belongs in the sibling `fishreg`
 repo, which plays amendment streams forward to compute current state.
+
+### A binomial is the only key; a common name is not
+
+Every one of the 37 species now carries a scientific name from a document
+(`species.SCIENTIFIC`, plus two that read through to `hms.py`), and every
+lookup -- iNaturalist for a photograph, Wikipedia for natural history -- goes
+through it. There is no common-name fallback anywhere, and there must not be
+one: on 17 September 2026 the alias lists this project already had resolved
+"False Albacore" to an Indo-Pacific kawakawa, "grey trout" to a lake trout,
+"sea mullet" to a mullet, and "Weakfish" to a genus. Four plausible wrong
+animals, from names Matt actually says. The fifteen missing names came from
+NOAA's MRIP species-code table, each with its ITIS TSN, cross-checked against
+WoRMS -- which flagged two the 2008 table had superseded and where the
+project's own values were already right.
+
+### Wikipedia is background, never a band and never a rule
+
+`wiki.py` reads natural history -- what the fish looks like, where it lives,
+what it eats, when it spawns. The licence for reading a tertiary source at all
+is that **nothing computes on it**: no scorer, no prospector and no regulation
+path imports it, and a test asserts that. The day something does, the licence
+is gone.
+
+Sections about fishing are refused by a default-deny allowlist, because the
+striped bass article carries one headed "Current fishing regulations" and a
+size limit nobody read out of a RIDEM notice has no business on the same card
+as the legal strip. A second net drops any surviving paragraph that reads like
+a rule. Both refusals are counted and shown; a filtered source that does not
+admit it was filtered is the more misleading of the two.
+
+### A reference photograph answers "what does this look like"
+
+Wikipedia's taxobox image first, iNaturalist second. Matt, 17 September 2026:
+"the tautog fish image looks incorrect" -- then, "maybe the tautog image is
+correct, just different than what I'm used to seeing." Both true. It was a
+real *Tautoga onitis* and a pale juvenile in the weed, which is not the fish
+anyone recognises. iNaturalist's `default_photo` is the observation people
+liked best; a taxobox image is the one an editor chose to show what the
+species looks like. Different questions, and only the second is ours. Getting
+that order right filled all nine of the gaps as well.
+
+### Three kinds of no, not two
+
+A lookup that could not be carried out is a fact about the network. Until
+17 September 2026 `fishpic` recorded it as `resolved: False`, which the card
+reads out as "no confident match for this fish" -- five species carried that
+verdict and three of them resolve on the first try. "Nobody looked", "looked
+and could not be sure" and "tried to look and could not reach the server" are
+three different facts and the card says which. The same trap caught a fourth
+time the same day: gating the card on sections alone made scup, whose article
+is all lead and no section, report "not fetched yet" after being fetched.
 
 ### There is no list of spots
 
@@ -304,7 +387,12 @@ scarcest thing in the project and the only irreplaceable one.
 ## Look at it before you commit
 
 **Any change that touches the UI runs `node tools/browser-check/preflight.mjs`
-before it is committed, and the run is reported.** Not after Matt finds it. This
+before it is committed, and the run is reported.** `preflight` covers the map
+page only; a change to `desk.html` runs `desk.mjs` as well, which exists
+because the desk was rewritten once with 671 green tests and no way for any of
+them to see the page. `desk.mjs` walks all seven tabs since 18 September 2026 —
+before that it checked the Confirm tab and nothing else, which is the same gap
+one level down. Not after Matt finds it. This
 is a standing instruction from him, given on 2 September 2026, and it exists
 because of what that day looked like:
 
