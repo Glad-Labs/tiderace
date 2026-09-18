@@ -93,6 +93,7 @@ class Sighting:
     spot: str | None = None
     source: str = "own"            # own | report | voice
     confidence: str = "high"       # high | medium | low
+    witness: str = ""              # who said so, for a report; see independent()
     notes: str | None = None
     logged_at: str = ""
 
@@ -106,27 +107,43 @@ def record(s: Sighting, path: str = BAIT_PATH) -> Sighting:
 
 
 def retract(source_url: str, observed_on: str, bait: str,
-            path: str = BAIT_PATH, spot: str | None = None) -> int:
+            path: str = BAIT_PATH, spot: str | None = None,
+            witness: str | None = None) -> int:
     """Take a report-sourced sighting back out of the log: the one this
-    article put in for this bait on this day at this place, and nothing you
-    logged yourself. `spot` matters: one column reported squid in Newport
-    Harbor and squid off Brenton Reef on the same day, and retracting the
-    harbour took the reef with it (15 Sep 2026). Returns how many lines
-    went. Atomic, like every write here."""
+    article put in for this bait on this day at this place, on this word,
+    and nothing you logged yourself. `spot` matters: one column reported
+    squid in Newport Harbor and squid off Brenton Reef on the same day, and
+    retracting the harbour took the reef with it (15 Sep 2026). `witness`
+    matters for the same reason one level down: a column can quote two shops
+    about the same bait in the same harbour, and disagreeing with one of
+    them is not disagreeing with the other.
+
+    A row that does not say who said it matches any witness, because it
+    cannot be told apart -- that is every sighting written before the field
+    existed, and refusing to retract them would be worse than over-reaching.
+    Returns how many lines went. Atomic, like every write here."""
     rows = load(path)
     keep = [r for r in rows if not (
         r.get("source") == "report" and source_url and
         source_url in (r.get("notes") or "") and
         (r.get("bait") or "").lower() == (bait or "").lower() and
         str(r.get("when", "")).startswith(str(observed_on)[:10]) and
-        (spot is None or r.get("spot") == spot))]
+        (spot is None or r.get("spot") == spot) and
+        (witness is None or not r.get("witness") or r.get("witness") == witness))]
     if len(keep) == len(rows):
         return 0
+    _rewrite(keep, path)
+    return len(rows) - len(keep)
+
+
+def _rewrite(rows: list[dict], path: str) -> None:
+    """Replace the log with these rows, atomically. The server and the CLI
+    run concurrently against this file, so it is never half-written."""
     d = os.path.dirname(os.path.abspath(path)) or "."
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".bait-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:
-            for r in keep:
+            for r in rows:
                 fh.write(json.dumps(r) + "\n")
         os.replace(tmp, path)
     except BaseException:
@@ -135,7 +152,6 @@ def retract(source_url: str, observed_on: str, bait: str,
         except OSError:
             pass
         raise
-    return len(rows) - len(keep)
 
 
 def load(path: str = BAIT_PATH) -> list[dict]:
@@ -151,6 +167,66 @@ def load(path: str = BAIT_PATH) -> list[dict]:
                 except json.JSONDecodeError:
                     continue
     return out
+
+
+def independent(rows: list[dict]) -> list[dict]:
+    """One origin, one row. Two readings of the same origin are not evidence
+    twice over.
+
+    This is the same rule the module already states for birds and whales --
+    "two readings of the same inference, and adding them would be the
+    averaging mistake in reverse: manufacturing confidence from correlated
+    evidence" -- applied to the log itself, because the log can hold the same
+    observation twice. It did: until 17 September 2026 the review queue keyed
+    an observation partly on the extractor's quote, so one Newport Harbor
+    paragraph quoted two ways wrote "loaded bunker" twice, and each copy then
+    corroborated the other for +10% apiece up to the cap. Three copies of one
+    sentence bought the full MAX_CORROBORATION, which is the entire bonus two
+    genuinely independent witnesses would have earned.
+
+    `witness` is what keeps this from over-collapsing: one column quoting
+    Snug Harbor and The Saltwater Edge about the same bait on the same day is
+    two people who looked, and they stay two rows. Sightings written before
+    that field existed carry no witness, so identical ones collapse -- the
+    only honest reading of two identical lines that do not say who said them.
+    """
+    seen, out = set(), []
+    for r in rows:
+        key = (r.get("source", "own"), str(r.get("bait", "")).lower(),
+               str(r.get("when", "")), r.get("lat"), r.get("lon"),
+               r.get("witness") or "", r.get("notes") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
+def dedupe(path: str = BAIT_PATH) -> dict:
+    """Collapse copies out of the log itself, keeping the first of each.
+
+    `independent` already stops a duplicate counting, so this changes no
+    forecast -- it is housekeeping for a file that was written wrong. Eight
+    of the twenty-one lines on 18 September 2026 were copies, put there by
+    the quote-keyed dedupe in `extract.item_id` before it was fixed: one
+    coastalanglermag paragraph quoted two ways, read on two passes.
+
+    It keeps the FIRST of each group rather than the newest, because the
+    rows are identical apart from `logged_at` and the earliest is the one
+    that was actually the observation being recorded.
+
+    What this costs, and it is worth saying out loud: lines written before
+    `witness` existed cannot say who said them, so a column quoting two
+    shops about the same bait on the same day collapses to one. That is an
+    under-count of corroboration, which is the safe direction, and it is
+    exactly what `independent` has already been doing to those rows.
+    """
+    rows = load(path)
+    keep = independent(rows)
+    if len(keep) == len(rows):
+        return {"rows": len(rows), "kept": len(keep), "removed": 0}
+    _rewrite(keep, path)
+    return {"rows": len(rows), "kept": len(keep), "removed": len(rows) - len(keep)}
 
 
 def _nm(lat1, lon1, lat2, lon2) -> float:
@@ -209,6 +285,8 @@ def bait_at(lat: float, lon: float, when: datetime, species: str,
     # because of the birds.
     if exclude_sources:
         rows = [r for r in rows if r.get("source") not in exclude_sources]
+    # Before anything is ranked or corroborated: one origin, one row.
+    rows = independent(rows)
     rel = RELEVANCE.get(species, {})
     if not rows or not rel:
         return {"signal": 0.0, "observations": 0, "top": None, "known": False}

@@ -58,28 +58,12 @@ def _outlet(url: str) -> str:
 # The witness is whoever actually saw the fish. Fall back to the publisher only
 # when a paragraph credits nobody, and keep the two namespaced apart so an
 # unattributed On The Water item never silently merges with an attributed one.
-_NOISE = {"the", "at", "in", "of", "inc", "llc", "co", "and", "bait", "tackle",
-          "marina", "outfitters", "outfitter", "shop", "store", "charters",
-          "guide", "guides", "capt", "captain", "mr", "ms"}
-
-
-def _norm_name(name: str) -> str:
-    """Collapse a credited source to a stable identity.
-
-    Reports name the same shop several ways across a season -- "Ocean State
-    Tackle", "Ocean State Tackle in Providence", "Dave at Ocean State". Keeping
-    the first two significant words absorbs the trailing town and the dropped
-    suffix, which is what actually varies. Two words rather than one because
-    "Watch Hill" and "Watch anything else" should not merge.
-    """
-    raw = (name or "").lower()
-    # "Dave at Ocean State Tackle" -- the person moves jobs, the shop is the
-    # stable identity, and the article writes it both ways across a season.
-    if " at " in raw:
-        raw = raw.rsplit(" at ", 1)[1]
-    words = re.findall(r"[a-z0-9]+", raw)
-    keep = [w for w in words if w not in _NOISE]
-    return "".join(keep[:2])
+# One definition, in extract.py, because the bait path keys on it too: the id
+# a bait sighting is deduped under and the identity a witness is counted under
+# have to be the same notion of "who said this", or the two will disagree
+# about whether "Saltwater Edge" and "Saltwater Edge Blog" are one person.
+_NOISE = extract._NOISE
+_norm_name = extract._norm_name
 
 
 def _witness(row: dict) -> str:
