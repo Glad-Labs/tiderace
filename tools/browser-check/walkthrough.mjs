@@ -36,16 +36,47 @@ async function walk(url) {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await ready(page);
   await page.evaluate(() => map.panBy([1, 0], { duration: 0 }));
-  step('map loads with markers', true,
-       `${await page.evaluate(() => Object.keys(MARKERS).length)} markers`);
 
   // The grid cache is keyed by the hour, so the first load after the top of
   // the hour rebuilds cold: about 25 s for thirty positions. A fixed sleep
   // here failed 3 of 26 the first time a run straddled an hour boundary, on
   // "No forecast loaded yet." -- the harness's assumption, not the app's
   // fault. Wait for the grid, however long the water takes.
-  await page.waitForFunction(() => typeof GRID !== 'undefined' && GRID && GRID.spots && GRID.spots.length > 0,
-                             null, { timeout: 120000 }).catch(() => {});
+  //
+  // The markers are waited for in the same breath, and that is the fix to a
+  // check that could not fail. `map loads with markers` passed `true` as its
+  // condition and ran BEFORE this wait, so it reported "0 markers" on a cold
+  // grid and "32 markers" on a warm one and was green both times -- the
+  // empty-MARKERS state check.mjs's own header calls out as proving nothing.
+  // `ready` waits for the map style; the markers come from the grid, which
+  // is a separate fetch, and `syncMarkers` returns early until both are in.
+  // The timeout stays swallowed: a grid that never arrives should be
+  // reported by the check below in the app's own numbers, not thrown as a
+  // harness exception.
+  await page.waitForFunction(
+    () => typeof GRID !== 'undefined' && GRID && GRID.spots && GRID.spots.length > 0
+       && typeof MARKERS !== 'undefined'
+       && Object.keys(MARKERS).length === GRID.spots.length,
+    null, { timeout: 120000 }).catch(() => {});
+
+  // One marker per position the grid returned, on the map, counted against
+  // the app's own number rather than a literal -- a hardcoded 32 would go
+  // stale the day `prospect` returns a thirty-third and would then be wrong
+  // in the reassuring direction. `syncMarkers` keys MARKERS by `spot.key`,
+  // so a duplicate key silently drops a position and this catches that too.
+  const mk = await page.evaluate(() => {
+    const spots = (typeof GRID !== 'undefined' && GRID && GRID.spots)
+      ? GRID.spots.length : 0;
+    const ms = typeof MARKERS !== 'undefined' ? Object.values(MARKERS) : [];
+    return { spots, markers: ms.length,
+             // In the document, not merely constructed. A marker built and
+             // then knocked off the map is the 2 September wind-farm bug,
+             // and an object count alone cannot see it.
+             drawn: ms.filter(m => m.el && m.el.isConnected).length };
+  });
+  step('map draws a marker for every position the grid returned',
+       mk.spots > 0 && mk.markers === mk.spots && mk.drawn === mk.spots,
+       `${mk.drawn} drawn of ${mk.markers} markers for ${mk.spots} positions`);
 
   // --- open a coordinate, then every tab in the sheet -------------------
   await page.evaluate(() => window.showConditions(41.4344, -71.3975, 'walkthrough'));
