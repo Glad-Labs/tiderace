@@ -435,13 +435,64 @@ async function fishChecks(page, label, deep) {
      `examined ${keys.length}${bad.length ? ': ' + bad.join(' ') : ''}`);
 }
 
+/* The limits table is parsed now rather than retyped, and the half of that
+ * worth checking on a rendered page is the half that says what the parser
+ * could NOT read. A silent partial parse is the worst outcome available here:
+ * it looks exactly like a complete one.
+ *
+ * Asserted against the API's own answer rather than against a fixed number,
+ * because how many rows RIDEM writes that this parser declines is RIDEM's
+ * business and changes when they edit the page. What must hold is that every
+ * refusal the API reports reaches the screen, with its reason. A unit test
+ * could only check that the strings exist in the source -- and did: disabling
+ * the branch that renders them left every one of those strings in place and
+ * the test green, which is why this check is here instead. */
+async function regsChecks(page, label, deep) {
+  const api = await page.evaluate(async () =>
+    await (await fetch('/api/regs')).json().catch(() => null));
+  const t = (api && api.table) || {};
+  const shown = await page.evaluate(() =>
+    (document.getElementById('regs') || {}).textContent || '');
+
+  ok(`${label}/Regs: the limits table says it was read, and when`,
+     !!t.rev && shown.includes(t.rev) && /read automatically/i.test(shown),
+     t.rev ? `rev ${t.rev}, ${t.read} of ${t.rows} rows` : 'no revision parsed');
+
+  // Its own floor. A run where the parser refused nothing proves nothing
+  // about whether refusals are displayed, so it says so rather than passing.
+  const unread = t.unreadable || [];
+  const missing = unread.filter(w => !shown.includes(w.reason));
+  ok(`${label}/Regs: every row the parser refused is on the screen with its reason`,
+     unread.length > 0 && missing.length === 0,
+     unread.length
+       ? `${unread.length} refused, ${missing.length} not shown`
+       : 'nothing was refused on this run — check proves nothing');
+
+  ok(`${label}/Regs: the refusals name the fish they are about`,
+     unread.length > 0 && unread.every(w => !w.species || shown.includes(w.species)),
+     unread.map(w => w.species).filter(Boolean).join(', ').slice(0, 70));
+
+  // The banner rules that are not rows -- the winter flounder spatial closure
+  // covers the water this whole app is about.
+  const notes = t.notes || [];
+  ok(`${label}/Regs: a table-wide note is shown as a rule, not dropped`,
+     notes.length > 0 && notes.every(n => shown.includes(n.text.slice(0, 40))),
+     notes.length ? `${notes.length} note(s)` : 'no notes on this run');
+
+  // The message this replaced asked Matt to go and retype regs.py. Leaving it
+  // in would ask for work the app has already done.
+  ok(`${label}/Regs: it no longer asks a person to re-transcribe the table`,
+     !/still needs a person|Read the diff above/i.test(shown),
+     'no summons on the page');
+}
+
 /* ---------------------------------------------------------------- tabs */
 
 const TABS = [
   ['history', 'Log'],
   ['reports', 'Reports'],
   ['confirm', 'In force', confirmChecks],
-  ['regs', 'Regs'],
+  ['regs', 'Regs', regsChecks],
   ['hms', 'HMS'],
   // The fourth column is an extra thing to wait for, where a heading arrives
   // before the content does. Only Fish needs one so far.

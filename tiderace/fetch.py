@@ -139,9 +139,24 @@ def fetch(url: str, ttl: float = CACHE_TTL_S, force: bool = False) -> dict:
 
     doc = {"url": url, "status": status, "fetched_at": datetime.now().isoformat(
         timespec="seconds"), "text": to_text(body), "title": title_of(body),
-        "links": links_in(body, url)}
+        "links": links_in(body, url), "tables": tables_in(body)}
     cache.write_json(path, doc)
     return doc
+
+
+def tables(url: str, ttl: float = CACHE_TTL_S, force: bool = False) -> list:
+    """The page's tables, refetching once if the cache predates this field.
+
+    `fetch` gained "tables" on 18 September 2026 and every document cached
+    before then lacks it. Absent and empty are different -- one is "this page
+    has no tables", the other is "nobody looked" -- and a caller that cannot
+    tell them apart reads the limits page as a page with no limits on it. So
+    a cached doc with no `tables` key is refetched rather than believed.
+    """
+    doc = fetch(url, ttl=ttl, force=force)
+    if "tables" not in doc:
+        doc = fetch(url, ttl=ttl, force=True)
+    return doc.get("tables") or []
 
 
 # ------------------------------------------------------------- html -> text
@@ -184,6 +199,156 @@ def to_text(markup: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\s*\n\s*", "\n", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+class _Tables(HTMLParser):
+    """Every <table> as a rectangular grid of cell text.
+
+    `to_text` is the wrong tool for a table and the RIDEM limits page is why.
+    It joins a row's cells with nothing between them, so the only reason
+    "American Eel" and '9"' come out on separate lines at all is that RI's
+    Drupal theme wraps every cell in a <p>, which IS in BLOCK. That is a
+    theming detail, not a contract -- a site redesign that drops the <p>
+    silently collapses a whole row onto one line, and a parser reading the
+    flattened text would go from right to confidently wrong with no error.
+
+    Worse, it is already ambiguous. A cell can hold several lines --
+
+        <td><p>Closed 9/1 - 12/31<br>for any gear other than<br>
+               baited pots or spears</p></td>
+
+    -- and flattened, those three lines are indistinguishable from three
+    separate cells. Reading a size limit out of that is exactly the kind of
+    guess this project refuses to make.
+
+    So cells are kept as cells and the lines inside one are kept as a list.
+    colspan and rowspan are expanded rather than recorded, because the point
+    of the grid is that column *index* means something: the commercial table
+    spans its size and limit columns across two cells each for layout, and
+    without expansion "limit" is column 3 in one row and column 5 in another.
+    A spanned cell repeats its content into every slot it covers, which is
+    what it visually means.
+    """
+
+    CELL = {"td", "th"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tables: list[list[list[list[str]]]] = []
+        self._rows: list | None = None
+        self._row: list | None = None
+        self._cell: list[str] | None = None
+        self._span = 1
+        self._rowspan = 1
+        # Rowspans owed to LATER rows: column index -> (lines, rows to fill).
+        # `_pending` is what the row being read has just declared and `_carry`
+        # is what earlier rows declared, and they have to stay apart: merged,
+        # a rowspan=2 header filled its own row a second time, so table 2 came
+        # out as Species, Minimum size, Season, Species, Minimum size, Season.
+        # A cell spans DOWN from the row it is written in, never sideways
+        # within it.
+        self._carry: dict[int, tuple[list[str], int]] = {}
+        self._pending: dict[int, tuple[list[str], int]] = {}
+        self._depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "table":
+            # Nested tables are used for layout and would interleave rows into
+            # the parent. Only the outermost is taken; the inner one's text
+            # still lands in whatever cell contains it.
+            self._depth += 1
+            if self._depth == 1:
+                self._rows, self._carry, self._pending = [], {}, {}
+        elif tag == "tr" and self._depth == 1:
+            self._flush_row()
+            self._row = []
+        elif tag in self.CELL and self._depth == 1 and self._row is not None:
+            self._close_cell()
+            self._cell = []
+            self._span = max(1, min(20, _int(a.get("colspan"), 1)))
+            self._rowspan = max(1, min(50, _int(a.get("rowspan"), 1)))
+        elif tag == "br" and self._cell is not None:
+            self._cell.append("")
+
+    def handle_endtag(self, tag):
+        if tag in self.CELL and self._depth == 1:
+            self._close_cell()
+        elif tag == "tr" and self._depth == 1:
+            self._flush_row()
+        elif tag == "table":
+            if self._depth == 1:
+                self._flush_row()
+                if self._rows:
+                    self.tables.append(self._rows)
+                self._rows = None
+            self._depth = max(0, self._depth - 1)
+
+    def handle_data(self, data):
+        if self._cell is None or not data.strip():
+            return
+        if not self._cell:
+            self._cell.append("")
+        self._cell[-1] = (self._cell[-1] + " " + data.strip()).strip()
+
+    def _close_cell(self):
+        if self._cell is None or self._row is None:
+            return
+        lines = [ln for ln in (s.strip() for s in self._cell) if ln]
+        for _ in range(self._span):
+            self._row.append(lines)
+            if self._rowspan > 1:
+                self._pending[len(self._row) - 1] = (lines, self._rowspan - 1)
+        self._cell = None
+        self._span = self._rowspan = 1
+
+    def _flush_row(self):
+        if self._row is None:
+            return
+        self._close_cell()
+        # A cell spanning down from an earlier row occupies its column before
+        # this row's own cells are placed, the same way a browser lays it out.
+        if self._carry:
+            out, own = [], list(self._row)
+            for i in range(max(self._carry) + 1 + len(own)):
+                if i in self._carry:
+                    lines, left = self._carry[i]
+                    out.append(lines)
+                    if left > 1:
+                        self._carry[i] = (lines, left - 1)
+                    else:
+                        del self._carry[i]
+                elif own:
+                    out.append(own.pop(0))
+            out.extend(own)
+            self._row = out
+        if any(c for c in self._row):
+            self._rows.append(self._row)
+        self._row = None
+        # Only now do this row's own spans start owing anything to the next.
+        self._carry.update(self._pending)
+        self._pending = {}
+
+
+def _int(v, default: int) -> int:
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def tables_in(markup: str) -> list[list[list[list[str]]]]:
+    """Tables -> rows -> cells -> the lines inside one cell."""
+    p = _Tables()
+    try:
+        p.feed(markup)
+    except Exception:                                             # noqa: BLE001
+        pass
+    p._flush_row()
+    if p._rows:
+        p.tables.append(p._rows)
+    return [[[[html.unescape(ln) for ln in cell] for cell in row]
+             for row in tbl] for tbl in p.tables]
 
 
 class _Links(HTMLParser):
