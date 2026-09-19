@@ -42,7 +42,7 @@ import hashlib
 import tempfile
 
 from . import bait as baitmod
-from . import fetch, llm, ridem
+from . import fetch, limits as limitsmod, llm, ridem
 
 REVIEW_PATH = os.environ.get(
     "TIDERACE_REVIEW",
@@ -224,6 +224,93 @@ def _ask(schema: dict, instruction: str, doc: dict,
 
 # ------------------------------------------------------------- regulations
 
+def _is_limits_page(url: str) -> bool:
+    """Is this the sizes-and-limits table rather than the notices page?
+
+    Matched on the URL's own path, not on the SOURCES key, because
+    `scrape --url` can reach the same page under no key at all and would then
+    be read by the wrong parser.
+    """
+    return "minimum-sizes-possession-limits" in (url or "")
+
+
+def _limits_table(doc: dict, url: str, force: bool = False) -> dict:
+    """The annual table, mirrored into the same change stream as the notices.
+
+    Every rule carries the table's own "Rev." date as its effective date, so
+    `reconcile.effective_state` orders it against the notices without any new
+    precedence rule: a notice published after the revision supersedes it, and
+    a revision published after a notice supersedes that. The two sources are
+    the same kind of thing -- RIDEM saying what the rule is, on a date.
+
+    Only fields the parser actually READ become changes. A row whose limit
+    cell it refused contributes no possession limit, so the rule falls through
+    to whatever the notices and the hand-written `regs.py` say, instead of the
+    fishery appearing to have no limit at all.
+    """
+    tables = doc.get("tables")
+    if tables is None:
+        tables = fetch.tables(url, force=True)
+    got = limitsmod.parse_page(tables, doc.get("text", ""), url)
+
+    out = {"changes": [], "injection_suspected": [],
+           "rule_parsed": len(got["rules"]), "rule_unparsed": len(got["refused"]),
+           "warnings": list(got["warnings"]), "backend": "table",
+           "text": doc.get("text", ""), "fetched_at": doc.get("fetched_at"),
+           "limits": got}
+
+    for r in got["rules"]:
+        if not r.get("limit_known") or not r.get("effective_date"):
+            continue
+        if r["limit_kind"] == "amount":
+            value = "%s %s %s" % (r["amount"]["value"], r["amount"]["unit"],
+                                  r["period"])
+            change = "possession_limit"
+        elif r["limit_kind"] == "closed":
+            value, change = "closed", "season_close"
+        else:
+            value, change = "no limit", "possession_limit"
+        out["changes"].append({
+            "species": r["species"], "species_key": r["species_key"],
+            "change_type": change, "license_mode": "commercial",
+            "effective_date": r["effective_date"], "value": value,
+            "quote": r["quote"], "parser": "table",
+            # The table states current rules rather than announcing changes,
+            # so there is nothing to cross-check a number against the way
+            # "four hundred (400)" checks itself. What stands in for it is the
+            # grid: the value is a possession limit because of the column it
+            # sits in. Saying `cross_checked` here would claim the stronger
+            # guarantee and it is not the one this source offers.
+            "cross_checked": False, "confidence": "high",
+            "sub_fishery": r.get("sub_fishery"),
+            "aggregate_program": None,
+            "amount": r.get("amount"), "period": r.get("period"),
+            "source_url": url,
+        })
+
+    # A fish on the page that this project does not score is expected and
+    # says nothing; a row whose size or limit could not be read is the whole
+    # reason this list exists. Sorted so the second kind cannot be pushed off
+    # the end by twenty of the first -- which is what happened on the first
+    # run, where cod, monkfish, pollock and weakfish were all invisible behind
+    # American eel and Atlantic salmon.
+    field_first = sorted(got["refused"], key=lambda w: not w.get("field"))
+    unknown = sum(1 for w in got["refused"] if not w.get("field"))
+    for w in field_first[:6]:
+        if not w.get("field"):
+            break
+        out["warnings"].append("refused %s %s: %s" % (
+            w.get("species", "?"), w.get("field", ""), w["reason"]))
+    if unknown:
+        out["warnings"].append(
+            "%d row(s) on the page are species this project does not score"
+            % unknown)
+    for c in out["changes"]:
+        c.update(source_url=url, source_title=doc.get("title", ""),
+                 fetched_at=doc.get("fetched_at"), kind="regulation")
+    return out
+
+
 def extract_regulations(url: str, force: bool = False,
                         use_model: bool = False) -> dict:
     """Read rule changes off a RIDEM page.
@@ -250,6 +337,15 @@ def extract_regulations(url: str, force: bool = False,
     it; whether the page changed is bookkeeping (scrapelog), not extraction.
     """
     doc = fetch.fetch(url, force=force)
+
+    # The limits table is a table, and reading it as prose is what made it the
+    # one regulation job still waiting on a person. `ridem.parse_page` looks
+    # for "Beginning 12:00AM on ..." sentences and this page has none, so it
+    # found nothing here every day since the source was added and reported a
+    # clean run -- the page's own possession limits were never read at all.
+    if _is_limits_page(url):
+        return _limits_table(doc, url, force=force)
+
     rule = ridem.parse_page(doc["text"])
 
     out = {"changes": [], "injection_suspected": [],

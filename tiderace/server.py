@@ -588,6 +588,34 @@ class Handler(BaseHTTPRequestHandler):
                         by.get("ridem_limits") or {}, regsmod.COMMERCIAL_CHECKED_ON)
                 except Exception:                                  # noqa: BLE001
                     pass
+
+                # What the limits table itself said, last time it was read.
+                # Since 18 September 2026 the table is parsed rather than
+                # retyped, so `baseline_moved` is no longer a summons -- it is
+                # the difference between the hand-written file's date and a
+                # source the app has already read for itself. What matters now
+                # is how much of the table it could read, which is why the
+                # refusals are counted here and shown rather than logged.
+                table = {}
+                try:
+                    from . import limits as limitsmod
+                    doc = fetchmod.fetch(fetchmod.SOURCES["ridem_limits"]["url"])
+                    got = limitsmod.parse_page(
+                        doc.get("tables") or [], doc.get("text", ""),
+                        doc.get("url", ""))
+                    unknown = [w for w in got["refused"] if not w.get("field")]
+                    table = {
+                        "rev": got["rev"],
+                        "read": len(got["rules"]),
+                        "rows": got["commercial"],
+                        "unreadable": [w for w in got["refused"] if w.get("field")],
+                        "not_scored": len(unknown),
+                        "notes": got["notes"],
+                        "warnings": got["warnings"],
+                        "fetched_at": doc.get("fetched_at"),
+                    }
+                except Exception:                                  # noqa: BLE001
+                    table = {}
                 return self._send_json({
                     "as_of": when.isoformat(),
                     "rows": rows,
@@ -599,6 +627,7 @@ class Handler(BaseHTTPRequestHandler):
                     "sources": sources,
                     "baseline_moved": baseline_moved,
                     "transcribed_on": regsmod.COMMERCIAL_CHECKED_ON.isoformat(),
+                    "table": table,
                 })
             if url.path == "/api/reports":
                 from . import reports as rep
