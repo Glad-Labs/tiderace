@@ -62,8 +62,28 @@ async function walk(url) {
   // guarantees that, and it has to come after the wait to reach a marker at
   // all. Above it, it was projecting an empty object.
   await page.evaluate(() => map.panBy([1, 0], { duration: 0 }));
-  step('map loads with markers', markers > 0,
-       markers ? `${markers} markers` : 'none after 120 s');
+  // One marker per position the grid returned, and on the map. The wait
+  // above settles whether any arrived at all; this is what they have to add
+  // up to, counted against the app's own number rather than a literal -- a
+  // hardcoded 32 goes stale the day `prospect` returns a thirty-third, and
+  // would then be wrong in the reassuring direction. `syncMarkers` keys
+  // MARKERS by `spot.key`, so a duplicate key silently drops a position and
+  // the equality is what sees it. `drawn` is the other half: a marker built
+  // and then knocked off the map is the 2 September wind-farm bug, and an
+  // object count cannot see that one.
+  const mk = await page.evaluate(() => {
+    const ms = typeof MARKERS !== 'undefined' ? Object.values(MARKERS) : [];
+    return { spots: (typeof GRID !== 'undefined' && GRID && GRID.spots)
+               ? GRID.spots.length : 0,
+             markers: ms.length,
+             drawn: ms.filter(m => m.el && m.el.isConnected).length };
+  });
+  step('map draws a marker for every position the grid returned',
+       markers > 0 && mk.spots > 0 && mk.markers === mk.spots
+         && mk.drawn === mk.spots,
+       markers ? `${mk.drawn} drawn of ${mk.markers} markers for `
+                 + `${mk.spots} positions`
+               : 'none after 120 s');
 
   // --- open a coordinate, then every tab in the sheet -------------------
   await page.evaluate(() => window.showConditions(41.4344, -71.3975, 'walkthrough'));
