@@ -292,11 +292,48 @@ async function run(url) {
       map.jumpTo({center: [top.lon, top.lat], zoom: Math.max(map.getZoom(), 11)});
       await new Promise(r => setTimeout(r, 900));
       const dot = k => MARKERS[k].el.querySelector('.dot');
+
+      // The tap below lands 18 px off the best dot's centre and expects the
+      // best dot to be what `nearestSpot` returns. That is only a question
+      // about the app while the best dot is the nearest thing to that point.
+      // On 19 September 2026 it was not: the best position was Matt's
+      // charlestown_breachway mark and his charlestown_beach mark sat 10 px
+      // away at zoom 11, so a tap 18 px east was genuinely nearer to the
+      // second one. `nearestSpot` returned the correct answer and the check
+      // called it a failure -- a red result about the data, which is the kind
+      // that gets ignored until it is ignored on the day it was real.
+      //
+      // So the field is separated before it is tapped, rather than the check
+      // being told to expect ambiguity. Each zoom level doubles the pixel
+      // distance between two fixed coordinates, so this terminates quickly;
+      // the floor is the tap offset plus nearestSpot's own 22 px radius,
+      // which is the distance at which the tapped point is unambiguous.
+      const CLEAR = 18 + 22;
+      const gap = () => {
+        const b = dot(top.key).getBoundingClientRect();
+        const c = {x: b.left + b.width / 2, y: b.top + b.height / 2};
+        let best = Infinity;
+        for (const [k, m] of Object.entries(MARKERS)) {
+          if (k === top.key) continue;
+          const e = m.el.querySelector('.dot'); if (!e) continue;
+          const r = e.getBoundingClientRect(); if (!r.width) continue;
+          best = Math.min(best, Math.hypot(r.left + r.width / 2 - c.x,
+                                           r.top + r.height / 2 - c.y));
+        }
+        return best;
+      };
+      let near = gap();
+      while (near < CLEAR && map.getZoom() < 16) {
+        map.jumpTo({center: [top.lon, top.lat], zoom: map.getZoom() + 1});
+        await new Promise(r => setTimeout(r, 500));
+        near = gap();
+      }
       const tb = dot(top.key).getBoundingClientRect();
       const others = Object.values(MARKERS).filter(m => m.el.dataset.key !== top.key)
         .map(m => m.el.querySelector('.dot').getBoundingClientRect().width);
       SEL = null; paint();
       return { key: top.key, x: tb.left + tb.width / 2, y: tb.top + tb.height / 2,
+               near: Math.round(near), clear: CLEAR, zoom: +map.getZoom().toFixed(1),
                size: tb.width, maxOther: Math.max(...others),
                colour: dot(top.key).style.background, worstColour: dot(worst.key).style.background,
                digit: dot(top.key).querySelector('.rk').textContent,
@@ -319,8 +356,15 @@ async function run(url) {
         return sel;
       }, dots.was);
     }
+    // Its own precondition, reported either way: a run where the field could
+    // not be separated has not tested nearestSpot, and says so rather than
+    // passing or blaming the app.
     ok(`phone/${scheme}: a tap 18 px off the best dot selects it`,
-       dots && snapped === dots.key, dots ? `selected ${snapped}` : 'no field');
+       dots && dots.near >= dots.clear && snapped === dots.key,
+       !dots ? 'no field'
+         : dots.near < dots.clear
+           ? `inconclusive — nearest neighbour ${dots.near}px < ${dots.clear}px even at z${dots.zoom}`
+           : `selected ${snapped} · nearest neighbour ${dots.near}px at z${dots.zoom}`);
 
     // HERE is a 97 px disc over the bottom-right of the map, and the labels
     // of positions 1, 5 and 6 drew under it at the best-dot zoom (11 Sep
