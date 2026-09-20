@@ -662,14 +662,40 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 /* The one control allowed to shrink. It sizes itself to its widest option --
    "Fluke (Summer Flounder)" -- which took 242px of a 314px bar and pushed the
    chart menu and scan off the edge. min-width:0 is what lets a flex item go
-   below its content width at all. */
-#bar > #species{flex:1 1 auto; min-width:96px;
+   below its content width at all.
+
+   The basis is 0, and that is the whole fix for a bug this rule caused for a
+   fortnight. With `auto` the picker's base size is its widest option, 242px
+   in a 296px content box, so the bar started over-full and flex had to take
+   34px back from somewhere. It could not take it from the picker: max-width
+   clamps the picker to 46vw, which the flex algorithm scores as a *max
+   violation*, freezes the item at that size, and restarts the distribution
+   over whatever is left -- the two buttons. So the picker kept every pixel of
+   its 189px and `charts` and `scan` paid the whole 34px between them, which
+   is why an honest 412px phone drew "cha..." and "sc..." (measured 18 Sep
+   2026: charts wanted 65px and had 51, scan wanted 60 and had 47). Raising
+   the picker's flex-shrink does nothing, because a frozen item does not
+   shrink. A basis of 0 means the picker claims nothing up front and *grows*
+   into what the buttons leave, so the two fixed labels are sized first and
+   the picker takes the remainder -- 155px at 412px, 118px at 375px, and it
+   is still the item that gives way, not the labels. */
+#bar > #species{flex:1 1 0; min-width:96px;
                 max-width:calc(46vw / var(--ui, 1))}
 /* At a scale between the honest phone (ui 1) and Chrome's desktop-site
    980px (ui ~2.4) the divided bar is ~240px, and with the picker the only
    thing allowed to shrink it went to 31px -- a chevron and no fish name
    (11 Sep 2026, ui 1.62 in emulation). The picker keeps a readable floor
-   and the two buttons give up letters instead. */
+   and the two buttons give up letters instead.
+
+   That is still the behaviour below ~340px, where the picker has hit its
+   96px floor and something has to give -- ellipsis is the right failure
+   there, and it is what keeps a narrow screen from *spilling* a control out
+   of the bar instead. What changed on 18 September 2026 is that it is now
+   the last resort it was always described as, rather than the first thing
+   that happened on a 412px phone. `BarLabelsAreNotClipped` in preflight.mjs
+   is what holds that line: it reads scrollWidth against clientWidth, which
+   is the only way an ellipsis is visible to script, and the old rule failed
+   it at both phone widths. */
 #bar > button{flex:0 1 auto; min-width:0; overflow:hidden;
               text-overflow:ellipsis; white-space:nowrap}
 #layers{

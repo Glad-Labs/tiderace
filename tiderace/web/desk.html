@@ -80,9 +80,14 @@ h2{font:600 13px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
 #regs .rv{font:13px/1.5 var(--mono); color:var(--ink); margin-top:5px}
 #regs .rv.shut{color:var(--crit)}
 #regs .names{font:13px/1.9 var(--mono); color:var(--ink-2)}
-#regs .chg{font:13px/1.5 var(--mono)}
-#regs .chg .k{color:var(--ink-2); display:inline-block; min-width:13ch;
+#regs .chg, #regs .parsed{font:13px/1.5 var(--mono)}
+#regs .chg .k, #regs .parsed .k{color:var(--ink-2); display:inline-block;
+              min-width:13ch;
               padding-right:1ch}  /* "limits table" is 12ch; 9 ran it into its value */
+/* Same look, different claim. `.chg` is "did this page change", and there is
+   exactly one per RIDEM page -- walkthrough.mjs counts them and fails if the
+   number moves, which is how reusing the class for the parse summary was
+   caught (18 Sep 2026). What the parser read is not a change verdict. */
 #regs details.diff{margin-top:6px}
 #regs details.diff summary{cursor:pointer; color:var(--depth); font:12px/1.6 var(--mono)}
 #regs pre.diff{margin:6px 0 0; padding:9px; max-height:320px; overflow:auto;
@@ -487,12 +492,33 @@ const RENDER = {
           <pre class="diff">${diffHtml(p.diff)}</pre></details>` : '';
       return `<div class="chg"><span class="k">${esc(p.label)}</span>${v}${link}${stale}</div>${diff}`;
     }).join('');
-    const baseline = d.baseline_moved
-      ? `<div class="warn" style="margin-top:9px">The limits table changed after
-           regs.py was transcribed (${esc(d.transcribed_on || '')}). The
-           reconciler only plays notices forward — a change to the table is the
-           one thing that still needs a person. Read the diff above.</div>`
-      : '';
+    // Until 18 September 2026 this said a limits-table change was "the one
+    // thing that still needs a person" and told Matt to read the diff. The
+    // table is parsed now, so that message would be asking for work the app
+    // has already done. What is worth showing instead is what the parse
+    // actually got: the table's own revision date, how many of its rows
+    // became rules, and — the part that matters — every row it could NOT
+    // read. A parser that quietly read 30 of 41 and reported success is the
+    // most dangerous thing here, so the refusals are the loud half.
+    const t = d.table || {};
+    const unread = t.unreadable || [];
+    const baseline = t.rev
+      ? `<div class="parsed" style="margin-top:9px"><span class="k">limits table</span>
+           read automatically · rev ${esc(t.rev)} ·
+           ${esc(String(t.read || 0))} of ${esc(String(t.rows || 0))} rows became rules${
+             t.not_scored ? `, ${esc(String(t.not_scored))} are fish this app does not score` : ''}</div>
+         ${unread.length ? `<div class="warn" style="margin-top:6px">
+           ${esc(String(unread.length))} value${unread.length === 1 ? '' : 's'} on the table
+           could not be read, and ${unread.length === 1 ? 'it was' : 'they were'} left to
+           the notices and to regs.py rather than guessed. One row can appear
+           twice — monkfish gives up its size and its limit separately:
+           <ul style="margin:6px 0 0 16px">${unread.map(w =>
+             `<li>${esc(w.species || '?')} — ${esc(w.field || '')}: ${esc(w.reason || '')}</li>`
+           ).join('')}</ul></div>` : ''}
+         ${(t.notes || []).map(n => `<div class="warn" style="margin-top:6px">${esc(n.text)}</div>`).join('')}`
+      : `<div class="warn" style="margin-top:9px">The limits table has not been
+           read, so the rules below rest on regs.py and the notices alone.
+           ${esc((t.warnings || []).join(' '))}</div>`;
     $('#regs').innerHTML =
       `<h2>Rules in force ${esc(d.as_of || '')}</h2>
        <div class="card">${pages || '<div class="empty">no RIDEM sources configured</div>'}${baseline}</div>

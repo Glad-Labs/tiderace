@@ -380,6 +380,64 @@ def _from_inaturalist(sp, binomial: str) -> dict | None:
                 photo_id=photo["photo_id"])
 
 
+def _drop_superseded(old_file, new_file, log=print) -> bool:
+    """Remove a species' previous photograph once a differently-named one has
+    replaced it. Returns whether anything was removed.
+
+    Only ever the file the manifest itself recorded for this species, never a
+    name derived from anywhere else, and never when the new file carries the
+    same name -- `cache.write_bytes` has already replaced that one atomically
+    and deleting it here would delete the photograph we just fetched.
+    """
+    if not old_file or old_file == new_file:
+        return False
+    # Belt and braces: the manifest is ours, but a path that escaped this
+    # directory would be deleting somebody else's file on the strength of a
+    # JSON field.
+    if os.path.basename(old_file) != old_file:
+        return False
+    stale = os.path.join(PHOTO_DIR, old_file)
+    if not os.path.exists(stale):
+        return False
+    try:
+        os.remove(stale)
+    except OSError:
+        return False
+    log("  %-22s removed superseded %s" % ("", old_file))
+    return True
+
+
+def prune(log=print) -> dict:
+    """Delete photographs no manifest entry points at any more.
+
+    A second pass for what `_drop_superseded` cannot reach: files left by a
+    run that crashed between the write and the manifest update, and the five
+    this project actually stranded when the source moved. Everything the
+    manifest names is kept, so a species whose photograph is current is never
+    touched.
+    """
+    man = load()
+    keep = {e.get("file") for e in man.values() if e.get("file")}
+    removed, freed = [], 0
+    if not os.path.isdir(PHOTO_DIR):
+        return {"removed": [], "bytes": 0}
+    for name in sorted(os.listdir(PHOTO_DIR)):
+        if name == os.path.basename(MANIFEST) or name in keep:
+            continue
+        if not name.endswith((".jpg", ".png")):
+            continue          # never anything but an image this module wrote
+        path = os.path.join(PHOTO_DIR, name)
+        try:
+            size = os.path.getsize(path)
+            os.remove(path)
+        except OSError:
+            continue
+        removed.append(name)
+        freed += size
+        log("  removed orphan %s (%d KB)" % (name, size // 1024))
+    return {"removed": removed, "bytes": freed}
+
+
 def fetch_all(species_list, refresh: bool = False, log=print) -> dict:
     """Find and download a reference photograph for each fish. A small report.
 
@@ -451,6 +509,18 @@ def fetch_all(species_list, refresh: bool = False, log=print) -> dict:
         # a test walks this package looking for anybody who decided to do it
         # themselves -- which is how this line was written the first time.
         cache.write_bytes(os.path.join(PHOTO_DIR, fname), blob)
+        # The file this species had before, if the new one is named
+        # differently. Without this the old copy is stranded: unreachable,
+        # because `photo_path` resolves through the manifest and the manifest
+        # now names the new file -- but still on disk, and no longer carrying
+        # the attribution entry that made keeping it lawful.
+        #
+        # Measured 18 September 2026, after the source moved from iNaturalist
+        # to Wikipedia: five species changed extension, and 0.9 MB of somebody
+        # else's Creative Commons photographs sat in the directory with
+        # nothing left to credit them. The next source change would do it
+        # again.
+        _drop_superseded(have.get("file"), fname, log)
         man[sp.key] = dict(hit, resolved=True, file=fname, bytes=len(blob),
                            checked_on=time.strftime("%Y-%m-%d"))
         man[sp.key].pop("url", None)      # the local copy is what we serve

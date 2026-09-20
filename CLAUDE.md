@@ -193,17 +193,64 @@ claimed:
   silent. The two tests that asserted scored ⊆ regulated were rewritten to
   assert that.
 
-Two paths carry rules into the app, and the difference is who read them.
-The in-season RIDEM notices are parsed by template (`ridem.py`), played
-forward (`reconcile.py`) and applied as an overlay beside `regs.py`
-(`applied.py`) with the notice and the sentence attached — that is mirroring
-a source, and it runs unattended. The annual limits table is what `regs.py`
-is typed in from by a person, and nothing automates that. What the app does
-instead is fingerprint both pages daily (`scrapelog.record(content=...)`) and
-say on the desk whether either changed; **a limits-table change after
-`COMMERCIAL_CHECKED_ON` is the signal to re-transcribe `regs.py`**, and it is
-the only regulation event that still needs a human. A number the *model*
-read (`parser="model"`, from `--use-model`) never reaches the overlay.
+Two RIDEM pages carry rules into the app, both read by template, and
+**neither needs a person** (18 September 2026 — Matt: "nothing should require
+a human, regs included"). The in-season notices are parsed by `ridem.py`,
+played forward (`reconcile.py`) and applied as an overlay beside `regs.py`
+(`applied.py`) with the notice and the sentence attached. The annual limits
+table is parsed by `limits.py` off the **grid** — `fetch.tables_in` recovers
+rows and cells from the markup, because `to_text` joins a row's cells with
+nothing between them and only RI's Drupal `<p>` wrapper made it look
+separable. Both are mirroring a source. A number the *model* read
+(`parser="model"`, from `--use-model`) still never reaches the overlay.
+
+The two parsers earn their licence differently and it is worth knowing which
+is which. `ridem.py` has a **redundancy checksum** — RIDEM writes "four
+hundred (400)", so a parse that disagrees with itself is caught. The table
+never repeats itself, so what stands in is **structure**: a value is a
+possession limit because of the column it sits in. That is why the table's
+changes carry `cross_checked: False` — claiming otherwise would claim the
+stronger guarantee.
+
+The table's rules take the page's own **`Rev. m/d/yyyy`** as their effective
+date, which is what lets `reconcile` order them against the notices with no
+new precedence rule: the 16 September menhaden notice beats the 14 September
+revision, and a later revision would beat the notice. Both parsers must spell
+`sub_fishery` the same way (`general_category`, `floating_fish_trap`,
+`with_exemption_certificate`, `inside_mma`…) — `reconcile._identity` keys on
+it, and when the table said "general category" against the notices'
+"general_category" scup held 10,000 lbs/week and 50,000 lbs/day at once with
+nothing to say which was live. `limits.SUBS` maps to ridem.py's spellings and
+a test reads that vocabulary out of `ridem.py` with `ast` rather than
+restating it.
+
+**A refusal must never become a permission.** This is the whole safety model,
+and the first version of `limits.py` got it wrong: monkfish's cell says
+"4,900 lbs/wk tails or 14,259 whole", the parser correctly refused it, and
+then emitted a rule with no limit at all — a loosening, which is the
+direction that costs money. Every field now carries `size_known` /
+`limit_known` / `season_known`, "the page says No limit" and "nobody could
+read this" are different facts, and a field that was not read contributes no
+change. Of 41 commercial rows it reads 22 rules and refuses 6 values (cod,
+menhaden-inside, monkfish twice, pollock's `1/1 - 12-31` typo, weakfish's
+"All other times call RIDMF"); 20 rows are fish this project does not score.
+Species and sub-fishery names are matched **exactly** against explicit tables
+with no fuzzy fallback, for the reason the binomial rule exists.
+
+`regs.py` stays hand-written and is now the fallback rather than the only
+road in. `COMMERCIAL_CHECKED_ON` and `baseline_moved` are still computed, but
+the desk no longer asks anyone to act on them — it shows what the parse got,
+the revision it read, and **every value it refused, with the reason**. A
+parser that quietly read 30 of 41 rows and reported success would be the most
+dangerous thing in the project, so the refusals are the loud half, and
+`desk.mjs` asserts each one reaches the screen. It has to be a browser check:
+the unit test for it passed with the rendering branch disabled, because the
+strings it matched were still in the file.
+
+What has *not* changed is RIDEM's own caveat. The page says "Possession
+limits and open fisheries are subject to change" and "For current COMMERCIAL
+POSSESSION LIMITS call 423-1920". That is a property of the source, not a gap
+in the parser, so the hotline stays on the strip.
 
 The overlay keys a rule by species, mode, change, sub-fishery **and
 Aggregate Program**, and `commercial_status` picks the possession limit for

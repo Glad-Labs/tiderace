@@ -37,7 +37,7 @@ tab (it drew a view rather than the placeholder, nothing spills its card, no
 sideways scroll, no uncaught error, AA contrast over what is actually
 behind the text), and In force and Fish carry checks of their own.
 
-Four things that pass came out of making it fail on purpose, and they are
+Five things that pass came out of making it fail on purpose, and they are
 the ones to preserve:
 
 * **A heading is not always the last thing to arrive.** `h2` is the right
@@ -55,6 +55,17 @@ the ones to preserve:
   the API actually produced, and it is the paragraph immediately after the
   image -- the natural-history licence line shares the class and would
   otherwise vouch for an image it has nothing to do with.
+* **"The first `.tclaim` on the card" stopped being the band's claim.** It
+  was one until #8 put an encyclopedia section above the forecast; from that
+  commit on it was Wikipedia's "not a rule and not a band" caveat, and
+  `walkthrough.mjs`'s copy of this check -- `/\[/` against whichever
+  `.tclaim` came first -- has been red for that reason ever since, which is
+  how a red result gets ignored. It is anchored here to the disclosure the
+  `cited` mark sits in and compared against the claim the API produced.
+  Dropping the claim paragraph from `card()` fails it, and so does stripping
+  the `[EFH-TOG p.5]` citations out of `dossier.py` while leaving the prose:
+  the first mutation catches a card that shows no documents, the second a
+  file that has none to show.
 * **One broken tab used to kill the run.** An exception escaped before the
   summary line, so a run that had found six real failures printed nothing
   and looked like a crash. Each tab is trapped; a tab that throws fails
@@ -67,28 +78,26 @@ nothing or a console that fills up. It takes a URL and defaults to
 `http://localhost:8765`, so pointing it at a server of your own is
 `node tools/browser-check/walkthrough.mjs http://localhost:8799`.
 
-One thing it learned the hard way, and it is the `.credit` bullet above for the
-third time:
+Its own checks are the ones no single page owns: the map renders with its
+markers, the sheet's tabs say something, the slider moves the forecast and
+leaves the observations alone, the theme survives a round trip. The fish
+card's checks are NOT among them -- four lived here until 18 September 2026
+and moved to `desk.mjs`, for the reason the `.tclaim` bullet above gives.
 
-* **The species card puts two different kinds of thing in one class, and
-  `querySelector` takes the first.** Both of its Fish checks measured the
-  wrong element for it. `the claim names its document` asserted a bracketed
-  citation against the first `.tclaim` -- which is the Wikipedia
-  natural-history note, rendered above the bands and sharing their class, so
-  the check read the encyclopedia disclaimer and never looked at a band. It
-  takes the claim of a band marked `cited` now, every one of them, and
-  reports the count so a selector matching nothing fails instead of passing
-  on an empty set. The photo check had the same shape one class over and the
-  fix is the one desk.mjs already uses: the credit is the paragraph
-  immediately after the image. Anything looser finds the natural-history
-  licence line and vouches for an image it has nothing to do with.
+One lesson of its own, and it is the same shape as that one:
 
-  Its other half was a *stale* expectation rather than a misaimed one: it
-  asserted the provider was `iNaturalist`, and the photo order changed to
-  Wikipedia's taxobox first on 17 September 2026, so it failed on a correctly
-  credited Wikimedia image. What the licence actually requires is somebody, a
-  source and a licence -- which is what it asks for now, and which is why the
-  test is desk.mjs's regex rather than a second opinion about the same rule.
+* **A check whose condition is the literal `true` cannot fail.**
+  `step('map loads with markers', true, ...)` printed the count and passed on
+  any of it, including none: on 18 September 2026 it printed "ok -- 0
+  markers" on two full runs against a live server. The empty-MARKERS state is
+  the one `check.mjs`'s own header calls out as proving nothing, and this
+  check was reporting it as a pass. It ran in a real gap, too -- `ready()` is
+  a fact about the map style, the markers are drawn when the grid arrives,
+  measured 0.1 s apart warm and 24.8 s cold. It waits for the markers now, on
+  the grid's budget, and asserts the count it reports: one per position
+  `GRID` returned, each of them in the document. Every `step`/`ok` condition
+  in this directory was audited for the same shape afterwards; this was the
+  only one.
 
 ## Why this exists
 

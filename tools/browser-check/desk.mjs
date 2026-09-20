@@ -337,6 +337,47 @@ async function fishChecks(page, label, deep) {
      marks.n > 0 && marks.cited > 0 && marks.prior > 0,
      `${marks.cited} cited · ${marks.prior} prior of ${marks.n}`);
 
+  // And the cited half must name what it is cited TO, on the card, beside the
+  // mark. "cited" with the document left behind in score.py is the same empty
+  // badge as a blank legal strip: it claims the work was done and shows none
+  // of it.
+  //
+  // Anchored to the disclosure the mark sits in, and compared against the
+  // string the API produced. walkthrough.mjs carried a version of this check
+  // that read `#fishcard .tclaim` -- the FIRST one on the card -- and looked
+  // for a bracket in it. That was a band claim until the Fish tab grew its
+  // encyclopedia section above the forecast, and has been reading Wikipedia's
+  // "not a rule and not a band" caveat ever since: a red result for a stale
+  // reason, which teaches people to ignore red results.
+  const cites = await page.evaluate(async () => {
+    const d = await (await fetch('/api/dossier?species=tautog')).json();
+    const want = {};
+    for (const t of ((d.forecast || {}).terms || []))
+      if (t.cited) want[t.label] = t.claim;
+    const got = {};
+    for (const el of document.querySelectorAll('#fish details.term')) {
+      const m = el.querySelector('.tmark');
+      if (!m || m.textContent.trim() !== 'cited') continue;
+      const c = el.querySelector('.tclaim');
+      got[el.querySelector('.tname').textContent.trim()] =
+        c ? c.textContent.trim() : '';
+    }
+    const labels = Object.keys(want);
+    return { n: labels.length,
+             missing: labels.filter(k => !want[k] || !(got[k] || '').includes(want[k])),
+             // [EFH-TOG p.5], [BB-TOG] -- the short codes score.py's docstring
+             // expands. Three of the seventy cited bands in the file cite in
+             // prose instead (measured 18 September 2026), so this asks that
+             // THIS card names a document, not that every band everywhere
+             // does -- a check that demanded all seventy would be asserting
+             // something the data does not claim.
+             docs: labels.filter(k => /\[[^\]]+\]/.test(got[k] || '')) };
+  });
+  ok(`${label}/Fish: a cited band carries the document it is cited to`,
+     cites.n > 0 && cites.missing.length === 0 && cites.docs.length > 0,
+     `${cites.n} cited · ${cites.docs.length} naming a document` +
+     (cites.missing.length ? ` · NOT ON THE CARD: ${cites.missing.join(', ')}` : ''));
+
   // The legal strip never goes silent. Same rule preflight enforces on the
   // map: "rules not modelled" out loud beats a blank, because a blank reads
   // as "no limit" and that is a fine under a commercial licence.
@@ -394,13 +435,64 @@ async function fishChecks(page, label, deep) {
      `examined ${keys.length}${bad.length ? ': ' + bad.join(' ') : ''}`);
 }
 
+/* The limits table is parsed now rather than retyped, and the half of that
+ * worth checking on a rendered page is the half that says what the parser
+ * could NOT read. A silent partial parse is the worst outcome available here:
+ * it looks exactly like a complete one.
+ *
+ * Asserted against the API's own answer rather than against a fixed number,
+ * because how many rows RIDEM writes that this parser declines is RIDEM's
+ * business and changes when they edit the page. What must hold is that every
+ * refusal the API reports reaches the screen, with its reason. A unit test
+ * could only check that the strings exist in the source -- and did: disabling
+ * the branch that renders them left every one of those strings in place and
+ * the test green, which is why this check is here instead. */
+async function regsChecks(page, label, deep) {
+  const api = await page.evaluate(async () =>
+    await (await fetch('/api/regs')).json().catch(() => null));
+  const t = (api && api.table) || {};
+  const shown = await page.evaluate(() =>
+    (document.getElementById('regs') || {}).textContent || '');
+
+  ok(`${label}/Regs: the limits table says it was read, and when`,
+     !!t.rev && shown.includes(t.rev) && /read automatically/i.test(shown),
+     t.rev ? `rev ${t.rev}, ${t.read} of ${t.rows} rows` : 'no revision parsed');
+
+  // Its own floor. A run where the parser refused nothing proves nothing
+  // about whether refusals are displayed, so it says so rather than passing.
+  const unread = t.unreadable || [];
+  const missing = unread.filter(w => !shown.includes(w.reason));
+  ok(`${label}/Regs: every row the parser refused is on the screen with its reason`,
+     unread.length > 0 && missing.length === 0,
+     unread.length
+       ? `${unread.length} refused, ${missing.length} not shown`
+       : 'nothing was refused on this run — check proves nothing');
+
+  ok(`${label}/Regs: the refusals name the fish they are about`,
+     unread.length > 0 && unread.every(w => !w.species || shown.includes(w.species)),
+     unread.map(w => w.species).filter(Boolean).join(', ').slice(0, 70));
+
+  // The banner rules that are not rows -- the winter flounder spatial closure
+  // covers the water this whole app is about.
+  const notes = t.notes || [];
+  ok(`${label}/Regs: a table-wide note is shown as a rule, not dropped`,
+     notes.length > 0 && notes.every(n => shown.includes(n.text.slice(0, 40))),
+     notes.length ? `${notes.length} note(s)` : 'no notes on this run');
+
+  // The message this replaced asked Matt to go and retype regs.py. Leaving it
+  // in would ask for work the app has already done.
+  ok(`${label}/Regs: it no longer asks a person to re-transcribe the table`,
+     !/still needs a person|Read the diff above/i.test(shown),
+     'no summons on the page');
+}
+
 /* ---------------------------------------------------------------- tabs */
 
 const TABS = [
   ['history', 'Log'],
   ['reports', 'Reports'],
   ['confirm', 'In force', confirmChecks],
-  ['regs', 'Regs'],
+  ['regs', 'Regs', regsChecks],
   ['hms', 'HMS'],
   // The fourth column is an extra thing to wait for, where a heading arrives
   // before the content does. Only Fish needs one so far.

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import atexit
 import os
+import ast
+import inspect
 import re
 import shutil
 import tempfile
@@ -25,6 +27,7 @@ from tiderace import (astro, bait, birds, conditions, evaluate, extract, fetch, 
                       provenance,
                       bathy, cache as cachemod, species as speciesmod, voicelog, llm, reconcile, reports, protected, survey, whales,
                       exif as exifmod, madmf, photolog,
+                      limits as limitsmod,
                       regs, ridem, score, solunar, spots)
 
 STALE_REC = regs.STALE_AFTER_DAYS
@@ -885,6 +888,263 @@ class RidemParser(unittest.TestCase):
         self.assertIsNone(ridem.parse_notice("Fishing was good last week."))
         page = ridem.parse_page("Nothing here.\nOr here.")
         self.assertEqual(page["notices"], [])
+
+
+class TableGrid(unittest.TestCase):
+    """`fetch.tables_in`, which is what makes the limits table readable at all.
+
+    Every fixture here is the real markup off dem.ri.gov, trimmed. The point
+    of the module is that cell boundaries survive, so the tests are about
+    boundaries rather than about text.
+    """
+
+    ROW = ('<table><tr><td valign="middle"><p>American Eel</p></td>'
+           '<td colspan="2"><p align="center">9"</p></td>'
+           '<td><p align="center">Closed 9/1 - 12/31<br>for any gear other than'
+           '<br>baited pots or spears</p></td>'
+           '<td colspan="2"><p align="center">No limit</p></td></tr></table>')
+
+    def test_a_cell_keeps_its_own_lines(self):
+        """Three <br>-separated lines are three lines of ONE cell.
+
+        Flattened by `to_text` they are indistinguishable from three separate
+        cells, which is how a season becomes a size limit."""
+        cells = fetch.tables_in(self.ROW)[0][0]
+        season = cells[3]
+        self.assertEqual(season, ["Closed 9/1 - 12/31", "for any gear other than",
+                                  "baited pots or spears"])
+
+    def test_colspan_is_expanded_so_column_index_means_something(self):
+        row = fetch.tables_in(self.ROW)[0][0]
+        self.assertEqual(len(row), 6)
+        self.assertEqual(row[1], row[2])            # the spanned size cell
+        self.assertEqual(row[4], row[5])            # the spanned limit cell
+
+    def test_rowspan_fills_the_row_below_not_its_own(self):
+        """The bug this found: a rowspan=2 header filled its own row twice, so
+        the shellfish table came out Species, Minimum size, Species, Minimum
+        size and every column index after it was wrong."""
+        html = ('<table><tr><th rowspan="2"><p>Species</p></th>'
+                '<th colspan="2"><p>Management Areas</p></th></tr>'
+                '<tr><th><p>Resident</p></th><th><p>Non-Resident</p></th></tr>'
+                '</table>')
+        rows = fetch.tables_in(html)[0]
+        self.assertEqual([c[0] for c in rows[0]],
+                         ["Species", "Management Areas", "Management Areas"])
+        self.assertEqual([c[0] for c in rows[1]],
+                         ["Species", "Resident", "Non-Resident"])
+
+    def test_a_page_with_no_table_is_empty_not_an_error(self):
+        self.assertEqual(fetch.tables_in("<p>no tables here</p>"), [])
+
+
+class LimitsTable(unittest.TestCase):
+    """The RIDEM limits table, read by template.
+
+    Every row below is real. The ones that look strange -- monkfish's two
+    sizes, RIDEM's own "12-31" typo, striped bass's four closed weekdays --
+    are the rows that caused bugs, and they are here so they cannot come back.
+    """
+
+    URL = "https://dem.ri.gov/x/marine-fisheries-minimum-sizes-possession-limits"
+
+    def row(self, species, size, season, limit):
+        """One commercial row in the shape `fetch.tables_in` produces."""
+        as_cell = lambda v: v if isinstance(v, list) else [v]
+        return [as_cell(species), as_cell(size), as_cell(size),
+                as_cell(season), as_cell(limit), as_cell(limit)]
+
+    HEAD = [["SPECIES"], ["MINIMUM SIZE"], ["MINIMUM SIZE"], ["SEASON"],
+            ["CURRENT", "COMMERCIAL", "POSSESSION", "LIMIT"],
+            ["CURRENT", "COMMERCIAL", "POSSESSION", "LIMIT"]]
+
+    def parse(self, *rows, rev="Rev. 9/14/2026"):
+        return limitsmod.parse_page([[self.HEAD] + list(rows)], rev, self.URL)
+
+    # ---------------------------------------------------------- the easy case
+
+    def test_a_plain_row_is_read_whole(self):
+        out = self.parse(self.row("Black Sea Bass", '11"', "1/1 - 12/31",
+                                  "400 lbs/day"))
+        r, = out["rules"]
+        self.assertEqual(r["species_key"], "black_sea_bass")
+        self.assertEqual(r["min_inches"], 11.0)
+        self.assertEqual(r["amount"], {"value": 400, "unit": "lbs"})
+        self.assertEqual(r["period"], "per day")
+        self.assertEqual(r["periods"], (((1, 1), (12, 31)),))
+        self.assertTrue(r["size_known"] and r["limit_known"] and r["season_known"])
+
+    def test_the_tables_own_revision_date_is_the_effective_date(self):
+        """Not the fetch date. It is what lets a notice published after the
+        revision supersede it in `reconcile`, and the other way round."""
+        out = self.parse(self.row("Tautog", '16"', "1/1 - 12/31", "No limit"))
+        self.assertEqual(out["rev"], "2026-09-14")
+        self.assertEqual(out["rules"][0]["effective_date"], "2026-09-14")
+
+    def test_no_revision_date_means_nothing_is_applied(self):
+        """A rule with no effective date cannot be ordered against the
+        notices, so it is refused rather than guessed at today's date."""
+        out = self.parse(self.row("Tautog", '16"', "1/1 - 12/31", "No limit"),
+                         rev="no date anywhere on this page")
+        self.assertEqual(out["rules"], [])
+        self.assertTrue(any("effective date" in w for w in out["warnings"]))
+
+    # ------------------------------------------- a refusal is not a permission
+
+    def test_an_unreadable_limit_does_not_become_no_limit(self):
+        """Monkfish. The page says 4,900 lbs/wk tails OR 14,259 whole; the
+        first version of this parser refused the cell and then emitted a rule
+        with no limit on it at all, which is the loosening that costs money."""
+        out = self.parse(self.row(
+            "Monkfish", ['17" whole/', '11" tail'], "5/1 - 4/30",
+            ["4,900 lbs/wk tails or", "14,259 lbs/week whole fish"]))
+        r, = out["rules"]
+        self.assertFalse(r["limit_known"])
+        self.assertFalse(r["size_known"])
+        self.assertEqual(r["limit_kind"], "unreadable")
+        self.assertIsNone(r["amount"])
+        self.assertFalse(r["closed"])
+        self.assertTrue(any(w["field"] == "limit" for w in out["refused"]))
+        self.assertTrue(any(w["field"] == "size" for w in out["refused"]))
+
+    def test_an_unreadable_field_never_reaches_the_change_stream(self):
+        """The consumer's half of the same rule."""
+        doc = {"tables": [[self.HEAD, self.row(
+                   "Monkfish", '17" whole/', "5/1 - 4/30",
+                   ["4,900 lbs/wk tails or", "14,259 lbs/week whole"])]],
+               "text": "Rev. 9/14/2026", "fetched_at": "2026-09-18T00:00:00"}
+        out = extract._limits_table(doc, self.URL)
+        self.assertEqual(out["changes"], [])
+
+    def test_no_limit_on_the_page_is_a_rule_and_is_kept(self):
+        """The other side of it: "No limit" is something RIDEM published, and
+        it must not be confused with a cell nobody could read."""
+        out = self.parse(self.row("Haddock", '16"', "1/1 - 12/31", "No limit"))
+        r, = out["rules"]
+        self.assertTrue(r["limit_known"])
+        self.assertEqual(r["limit_kind"], "none")
+
+    def test_a_typo_in_the_season_is_refused_not_ignored(self):
+        """RIDEM's own page says pollock is open "1/1 - 12-31". A parser that
+        shrugs returns no open period, which reads as a fishery that is shut
+        all year."""
+        out = self.parse(self.row("Pollock", '19"', "1/1 - 12-31", "No limit"))
+        r, = out["rules"]
+        self.assertFalse(r["season_known"])
+        self.assertTrue(any(w["field"] == "season" for w in out["refused"]))
+
+    # ------------------------------------------------- the rules that are odd
+
+    def test_closed_weekdays_are_read_off_the_season(self):
+        """Striped bass general category is shut Fri/Sat/Sun/Mon all season.
+        A season read without them says the fishery is open on a Saturday."""
+        out = self.parse(self.row(
+            "Striped bass", ["General Category", '34"'],
+            ["Sub-Periods", "6/2 - 12/31", "CLOSED Fri/Sat/Sun/Mon", "thru-out"],
+            "Closed"))
+        r, = out["rules"]
+        self.assertEqual(r["closed_weekdays"], (0, 4, 5, 6))
+        self.assertEqual(r["min_inches"], 34.0)
+        self.assertEqual(r["sub_fishery"], "general_category")
+
+    def test_one_row_can_name_several_fish(self):
+        """The pelagic shark group is one rule covering three species this
+        project scores, and each gets the cell it came from."""
+        out = self.parse(self.row(
+            "Coastal Sharks- Pelagic Group - Porbeagle, common thresher, blue",
+            "No minimum", "1/1 - 12/31", "Unlimited"))
+        self.assertEqual({r["species_key"] for r in out["rules"]},
+                         {"porbeagle", "thresher", "blue_shark"})
+        for r in out["rules"]:
+            self.assertIn("Porbeagle", r["quote"])
+
+    def test_a_full_width_note_is_a_note_not_a_row(self):
+        """The winter flounder spatial closure covers the water this app is
+        about, and it is written as a banner spanning every column."""
+        note = ("The harvesting or possession of winter flounder is PROHIBITED "
+                "in Narragansett Bay north of the Colregs Line of Demarcation")
+        out = self.parse([[note]] * 7)
+        self.assertEqual(out["rules"], [])
+        self.assertEqual(len(out["notes"]), 1)
+        self.assertIn("Colregs", out["notes"][0]["text"])
+
+    # --------------------------------------------------- names are not guessed
+
+    def test_an_unknown_species_is_refused_by_name(self):
+        """No fuzzy fallback anywhere. "Coastal Sharks- Blacknose" contains
+        "Cod" nowhere, but "American Shad" and "Atlantic Salmon" are exactly
+        the kind of row a substring match turns into somebody else's fish."""
+        out = self.parse(self.row("American Shad", "NA", "1/1 - 12/31",
+                                  "Prohibited in state waters"))
+        self.assertEqual(out["rules"], [])
+        self.assertEqual(out["refused"][0]["reason"], "unknown species")
+
+    def test_sub_fisheries_use_the_notice_parsers_spelling(self):
+        """`reconcile._identity` keys on sub_fishery, so "general category"
+        here and "general_category" from a notice are two rules rather than
+        one -- and scup then holds 10,000 lbs/week and 50,000 lbs/day at once
+        with nothing to say which is live. Measured, 18 September 2026."""
+        out = self.parse(
+            self.row("Scup", ["General Category", '9"'], "5/1 - 9/30",
+                     "10,000 lbs/week"),
+            self.row("Summer Flounder (Fluke)",
+                     ["with Exemption Certificate", '14"'], "5/1 - 9/15",
+                     "400 lbs/day"))
+        got = {r["sub_fishery"] for r in out["rules"]}
+        self.assertEqual(got, {"general_category", "with_exemption_certificate"})
+        for name in got:
+            self.assertIn(name, ridem_sub_vocabulary())
+
+    def test_an_unknown_sub_fishery_is_refused(self):
+        out = self.parse(self.row("Scup", ["Gillnet Category", '9"'],
+                                  "5/1 - 9/30", "10,000 lbs/week"))
+        self.assertFalse(out["rules"][0]["size_known"])
+
+    # ------------------------------------------------------ the page's shape
+
+    def test_the_commercial_table_is_found_by_its_header_not_its_position(self):
+        rec = [[["Species"], ["Minimum Size"], ["Season"], ["Possession Limit"]],
+               [["Scup"], ['11"'], ["5/1 - 12/31"], ["30 fish/person/day"]]]
+        out = limitsmod.parse_page(
+            [rec, [self.HEAD, self.row("Tautog", '16"', "1/1 - 12/31", "No limit")]],
+            "Rev. 9/14/2026", self.URL)
+        self.assertEqual(out["kinds"], ["recreational", "commercial"])
+        self.assertEqual([r["species_key"] for r in out["rules"]], ["tautog"])
+
+    def test_no_commercial_table_reads_nothing_and_says_so(self):
+        """The page shape changing must not read as a page with no limits."""
+        out = limitsmod.parse_page([[[["Something"], ["Else"]]]],
+                                   "Rev. 9/14/2026", self.URL)
+        self.assertEqual(out["rules"], [])
+        self.assertTrue(any("no commercial table" in w for w in out["warnings"]))
+
+
+def ridem_sub_vocabulary():
+    """Every sub_fishery spelling `ridem.py` can produce, read out of it.
+
+    Read rather than restated: a list retyped here would keep agreeing with
+    itself after ridem.py changed, which is the failure this whole pairing is
+    about.
+
+    Walked with `ast` rather than grepped, because a regex for `sub = "..."`
+    finds the four plain assignments and silently misses the two written as a
+    ternary -- which is exactly the half-empty vocabulary this test caught on
+    its first run.
+    """
+    found = set()
+
+    class V(ast.NodeVisitor):
+        def visit_Assign(self, node):
+            if any(isinstance(t, ast.Name) and t.id == "sub" for t in node.targets):
+                for sub in ast.walk(node.value):
+                    if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                        found.add(sub.value)
+            self.generic_visit(node)
+
+    V().visit(ast.parse(inspect.getsource(ridem)))
+    # Its own floor: a walk that found nothing would let any spelling through.
+    assert len(found) >= 4, f"read only {found} out of ridem.py"
+    return found
 
 
 class Reconcile(unittest.TestCase):
@@ -8114,15 +8374,38 @@ class TheDeskPageIsReachable(unittest.TestCase):
 
     def test_the_regs_tab_says_whether_each_page_changed(self):
         """Matt: "just go in and see if anything's changed at all." One
-        verdict per RIDEM page, and the limits table gets its own flag,
-        because a change there is the one that still needs a person."""
+        verdict per RIDEM page.
+
+        The limits table's own flag used to be the point of this: a change
+        there was the one event that still needed a person, so the tab said
+        so and asked him to read the diff. Since 18 September 2026 the table
+        is parsed, so what the tab owes him is no longer a summons -- it is
+        what the parse got, and above all what it could NOT get. The route
+        still computes `baseline_moved`; the renderer no longer asks anyone
+        to act on it."""
         route = self.server.split('url.path == "/api/regs"')[1].split("if url.path ==")[0]
         for key in ('"sources":', '"baseline_moved":', "ridem_amendments",
                     "ridem_limits", "scrapelog.baseline_moved(", "COMMERCIAL_CHECKED_ON"):
             self.assertIn(key, route, key)
         regs = self._regs_renderer()
         for key in ("change_observed", "changed_today", "unchanged since",
-                    "watched since", "baseline_moved", "p.diff"):
+                    "watched since", "p.diff"):
+            self.assertIn(key, regs, key)
+
+    def test_the_regs_tab_shows_what_the_table_parse_could_not_read(self):
+        """The refusals are the loud half, and they have to reach the screen.
+
+        A parser that read 30 of 41 rows and reported success would be the
+        most dangerous thing in the project, so the tab prints the revision it
+        read, how many rows became rules, and every row it declined -- with
+        the reason. Asserted against the code, not the comment explaining it."""
+        route = self.server.split('url.path == "/api/regs"')[1].split("if url.path ==")[0]
+        for key in ('"table": table', "limits as limitsmod", "parse_page(",
+                    '"unreadable"', '"not_scored"', '"notes"'):
+            self.assertIn(key, route, key)
+        regs = self._regs_renderer()
+        for key in ("d.table", "t.unreadable", "t.rev", "could not be read",
+                    "rather than guessed", "t.notes"):
             self.assertIn(key, regs, key)
         # The Sources tab tells the same fact in miniature, and "unchanged 0 d"
         # on a first sighting is the same false claim the regs tab avoids.
@@ -9555,6 +9838,144 @@ class SpeciesCard(unittest.TestCase):
                 self.assertEqual(rule["min_inches"], table[sp.key].min_inches)
                 checked += 1
         self.assertGreater(checked, 5, "only %d rules examined" % checked)
+
+
+class PhotographsNoManifestNamesAreDeleted(unittest.TestCase):
+    """A photograph the manifest no longer points at is worse than clutter.
+
+    `photo_path` resolves through the manifest, so a stranded file is already
+    unreachable — but it is still somebody's Creative Commons work sitting on
+    disk with nothing left to credit it, which is the one condition the
+    licence actually imposes.
+
+    Measured 18 September 2026, after the source moved from iNaturalist to
+    Wikipedia: five species changed extension, `fetch_all` wrote the new file
+    and rewrote the manifest entry, and 0.9 MB of the old photographs stayed
+    behind. Nothing removed them and the next source change would have done it
+    again.
+    """
+
+    def _dir(self, files, manifest):
+        import json, os, tempfile, unittest.mock as mock
+        from tiderace import fishpic
+        d = tempfile.mkdtemp()
+        for name, blob in files.items():
+            with open(os.path.join(d, name), "wb") as fh:
+                fh.write(blob)
+        with open(os.path.join(d, "manifest.json"), "w") as fh:
+            json.dump(manifest, fh)
+        return d, mock.patch.multiple(
+            fishpic, PHOTO_DIR=d, MANIFEST=os.path.join(d, "manifest.json"))
+
+    def test_a_superseded_file_goes_when_the_name_changes(self):
+        import os
+        from tiderace import fishpic
+        d, patched = self._dir({"tautog.jpg": b"old", "tautog.png": b"new"},
+                               {"tautog": {"file": "tautog.png"}})
+        with patched:
+            self.assertTrue(fishpic._drop_superseded(
+                "tautog.jpg", "tautog.png", log=lambda *a: None))
+        self.assertFalse(os.path.exists(os.path.join(d, "tautog.jpg")))
+        self.assertTrue(os.path.exists(os.path.join(d, "tautog.png")),
+                        "it deleted the photograph that replaced it")
+
+    def test_it_never_deletes_the_file_just_written(self):
+        """Same name means `cache.write_bytes` has already replaced it
+        atomically. Removing it here would delete the new photograph and leave
+        a manifest entry pointing at nothing."""
+        import os
+        from tiderace import fishpic
+        d, patched = self._dir({"tautog.jpg": b"new"},
+                               {"tautog": {"file": "tautog.jpg"}})
+        with patched:
+            self.assertFalse(fishpic._drop_superseded("tautog.jpg", "tautog.jpg"))
+            self.assertFalse(fishpic._drop_superseded("", "tautog.jpg"))
+            self.assertFalse(fishpic._drop_superseded(None, "tautog.jpg"))
+        self.assertTrue(os.path.exists(os.path.join(d, "tautog.jpg")))
+
+    def test_a_manifest_field_cannot_point_outside_the_directory(self):
+        """The manifest is ours, but a path that escaped this directory would
+        be deleting somebody else's file on the strength of a JSON field."""
+        import os, tempfile
+        from tiderace import fishpic
+        outside = os.path.join(tempfile.mkdtemp(), "keep.jpg")
+        with open(outside, "wb") as fh:
+            fh.write(b"not ours")
+        d, patched = self._dir({"tautog.png": b"new"},
+                               {"tautog": {"file": "tautog.png"}})
+        with patched:
+            for evil in ("../keep.jpg", "/etc/passwd",
+                         "../../" + os.path.basename(outside)):
+                self.assertFalse(fishpic._drop_superseded(evil, "tautog.png"),
+                                 evil)
+        self.assertTrue(os.path.exists(outside), "it deleted a file outside")
+
+    def test_prune_removes_orphans_and_keeps_what_the_manifest_names(self):
+        import os
+        from tiderace import fishpic
+        d, patched = self._dir(
+            {"tautog.png": b"keep", "scup.jpg": b"keep",
+             "bluefish.jpg": b"orphan", "squid.jpg": b"orphan"},
+            {"tautog": {"file": "tautog.png"},
+             "scup": {"file": "scup.jpg"},
+             "bluefish": {"file": "bluefish.png"},   # name moved on
+             "bigeye": {"resolved": False}})          # never had one
+        with patched:
+            out = fishpic.prune(log=lambda *a: None)
+        self.assertEqual(sorted(out["removed"]), ["bluefish.jpg", "squid.jpg"])
+        self.assertEqual(out["bytes"], len(b"orphan") * 2)
+        self.assertTrue(os.path.exists(os.path.join(d, "tautog.png")))
+        self.assertTrue(os.path.exists(os.path.join(d, "scup.jpg")))
+        self.assertFalse(os.path.exists(os.path.join(d, "bluefish.jpg")))
+
+    def test_prune_leaves_the_manifest_and_anything_not_an_image(self):
+        """It runs over a directory, so the one thing it must not do is treat
+        every file there as a photograph. The manifest holds every binomial,
+        licence and attribution this module has."""
+        import os
+        from tiderace import fishpic
+        d, patched = self._dir({"tautog.png": b"keep", "notes.txt": b"mine",
+                                "README": b"mine"},
+                               {"tautog": {"file": "tautog.png"}})
+        with patched:
+            out = fishpic.prune(log=lambda *a: None)
+        self.assertEqual(out["removed"], [])
+        for name in ("manifest.json", "notes.txt", "README", "tautog.png"):
+            self.assertTrue(os.path.exists(os.path.join(d, name)), name)
+
+    def test_a_fetch_that_changes_extension_strands_nothing(self):
+        """The whole bug, end to end. A species whose photograph arrives as a
+        .png where the manifest held a .jpg must leave one file behind, not
+        two."""
+        import os, unittest.mock as mock
+        from tiderace import fishpic, species as speciesmod
+        d, patched = self._dir({"tautog.jpg": b"old-inaturalist-jpeg"},
+                               {"tautog": {"file": "tautog.jpg",
+                                           "source": "inaturalist"}})
+        sp = speciesmod.get("tautog")
+        hit = {"url": "https://example.test/Tautoga.png", "source": "wikipedia",
+               "scientific": "Tautoga onitis", "licence": "CC0",
+               "attribution": "no rights reserved", "verified": "taxon name"}
+
+        class _Resp:
+            def read(self_inner): return b"new-wikipedia-png"
+            def __enter__(self_inner): return self_inner
+            def __exit__(self_inner, *a): return False
+
+        with patched, \
+                mock.patch.object(fishpic, "_from_wikipedia",
+                                  lambda *a, **k: hit), \
+                mock.patch.object(fishpic, "_from_inaturalist",
+                                  lambda *a, **k: None), \
+                mock.patch.object(fishpic.urllib.request, "urlopen",
+                                  lambda *a, **k: _Resp()), \
+                mock.patch.object(fishpic.time, "sleep", lambda *a: None):
+            fishpic.fetch_all([sp], refresh=True, log=lambda *a: None)
+            left = sorted(f for f in os.listdir(d) if f != "manifest.json")
+            entry = fishpic.load()["tautog"]
+        self.assertEqual(left, ["tautog.png"],
+                         "the superseded .jpg was left on disk")
+        self.assertEqual(entry["file"], "tautog.png")
 
 
 class ReferencePhotos(unittest.TestCase):

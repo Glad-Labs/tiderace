@@ -35,48 +35,55 @@ async function walk(url) {
 
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await ready(page);
-  await page.evaluate(() => map.panBy([1, 0], { duration: 0 }));
-
-  // The grid cache is keyed by the hour, so the first load after the top of
-  // the hour rebuilds cold: about 25 s for thirty positions. A fixed sleep
-  // here failed 3 of 26 the first time a run straddled an hour boundary, on
-  // "No forecast loaded yet." -- the harness's assumption, not the app's
-  // fault. Wait for the grid, however long the water takes.
+  // MAP_READY is a fact about the map, not about the data. The markers are
+  // drawn by syncMarkers when the grid arrives, and the grid cache is keyed
+  // by the hour, so the first load after the top of the hour rebuilds cold:
+  // about 25 s for thirty positions. Measured against a live server on
+  // 18 September 2026 -- warm the markers are up 0.1 s after ready(), cold
+  // 24.8 s. That gap is what this step used to assert into: its condition was
+  // the literal `true` and it read the count on the next line, so it printed
+  // "ok -- 0 markers" on two full runs while the theme check at the end of
+  // the same run counted 28. A name that is false at the moment it runs.
   //
-  // The markers are waited for in the same breath, and that is the fix to a
-  // check that could not fail. `map loads with markers` passed `true` as its
-  // condition and ran BEFORE this wait, so it reported "0 markers" on a cold
-  // grid and "32 markers" on a warm one and was green both times -- the
-  // empty-MARKERS state check.mjs's own header calls out as proving nothing.
-  // `ready` waits for the map style; the markers come from the grid, which
-  // is a separate fetch, and `syncMarkers` returns early until both are in.
-  // The timeout stays swallowed: a grid that never arrives should be
-  // reported by the check below in the app's own numbers, not thrown as a
-  // harness exception.
-  await page.waitForFunction(
-    () => typeof GRID !== 'undefined' && GRID && GRID.spots && GRID.spots.length > 0
-       && typeof MARKERS !== 'undefined'
-       && Object.keys(MARKERS).length === GRID.spots.length,
-    null, { timeout: 120000 }).catch(() => {});
-
-  // One marker per position the grid returned, on the map, counted against
-  // the app's own number rather than a literal -- a hardcoded 32 would go
-  // stale the day `prospect` returns a thirty-third and would then be wrong
-  // in the reassuring direction. `syncMarkers` keys MARKERS by `spot.key`,
-  // so a duplicate key silently drops a position and this catches that too.
+  // A fixed sleep is the other way to get this wrong: one here failed 3 of 26
+  // the first time a run straddled an hour boundary, on "No forecast loaded
+  // yet." -- the harness's assumption, not the app's fault. So wait for the
+  // markers themselves, on the grid's budget rather than the style's. The
+  // wait subsumes the grid it replaces: syncMarkers builds the one from the
+  // other, and both turned up inside the same 250 ms sample in every run
+  // measured, cold and warm alike.
+  const markers = await page.waitForFunction(
+    () => typeof MARKERS !== 'undefined' && Object.keys(MARKERS).length,
+    null, { timeout: 120000 }).then(h => h.jsonValue()).catch(() => 0);
+  // Headless fires no map move, so a marker that was added before the first
+  // one keeps its anchor offset and sits in the corner. These are built after
+  // the map has gone idle and arrive projected already (measured: 32 markers,
+  // 32 distinct transforms, with no pan at all) -- but the pan is what
+  // guarantees that, and it has to come after the wait to reach a marker at
+  // all. Above it, it was projecting an empty object.
+  await page.evaluate(() => map.panBy([1, 0], { duration: 0 }));
+  // One marker per position the grid returned, and on the map. The wait
+  // above settles whether any arrived at all; this is what they have to add
+  // up to, counted against the app's own number rather than a literal -- a
+  // hardcoded 32 goes stale the day `prospect` returns a thirty-third, and
+  // would then be wrong in the reassuring direction. `syncMarkers` keys
+  // MARKERS by `spot.key`, so a duplicate key silently drops a position and
+  // the equality is what sees it. `drawn` is the other half: a marker built
+  // and then knocked off the map is the 2 September wind-farm bug, and an
+  // object count cannot see that one.
   const mk = await page.evaluate(() => {
-    const spots = (typeof GRID !== 'undefined' && GRID && GRID.spots)
-      ? GRID.spots.length : 0;
     const ms = typeof MARKERS !== 'undefined' ? Object.values(MARKERS) : [];
-    return { spots, markers: ms.length,
-             // In the document, not merely constructed. A marker built and
-             // then knocked off the map is the 2 September wind-farm bug,
-             // and an object count alone cannot see it.
+    return { spots: (typeof GRID !== 'undefined' && GRID && GRID.spots)
+               ? GRID.spots.length : 0,
+             markers: ms.length,
              drawn: ms.filter(m => m.el && m.el.isConnected).length };
   });
   step('map draws a marker for every position the grid returned',
-       mk.spots > 0 && mk.markers === mk.spots && mk.drawn === mk.spots,
-       `${mk.drawn} drawn of ${mk.markers} markers for ${mk.spots} positions`);
+       markers > 0 && mk.spots > 0 && mk.markers === mk.spots
+         && mk.drawn === mk.spots,
+       markers ? `${mk.drawn} drawn of ${mk.markers} markers for `
+                 + `${mk.spots} positions`
+               : 'none after 120 s');
 
   // --- open a coordinate, then every tab in the sheet -------------------
   await page.evaluate(() => window.showConditions(41.4344, -71.3975, 'walkthrough'));
@@ -223,10 +230,13 @@ async function walk(url) {
 
   await page.screenshot({ path: 'walkthrough-map.png' });
 
-  // --- the desk, and all six of its tabs ---------------------------------
+  // --- the desk, and all seven of its tabs -------------------------------
+  // Does every screen render at all -- this file's own question. What they
+  // each SAY is desk.mjs's, and it covers the seven in three viewports.
   await page.goto(url.replace(/\/$/, '') + '/desk', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2500);
-  for (const s of ['history', 'reports', 'regs', 'hms', 'fish', 'sources']) {
+  for (const s of ['history', 'reports', 'confirm', 'regs', 'hms', 'fish',
+                   'sources']) {
     await page.click(`nav button[data-s=${s}]`);
     await page.waitForTimeout(2200);
     const txt = await page.evaluate(id =>
@@ -234,79 +244,15 @@ async function walk(url) {
     step(`desk tab: ${s}`, txt.length > 40 && !/could not load/i.test(txt),
          `${txt.length} chars`);
   }
-  // The species card's whole reason for existing is telling a cited band from
-  // a hand-set prior, so a card that renders both without that distinction
-  // would pass the length check above and be worth nothing. Tautog is the
-  // right fish to check: its substrate and temperature come out of named
-  // documents and its current and light curves come out of nobody.
-  {
-    await page.click('nav button[data-s=fish]');
-    await page.waitForTimeout(1600);
-    const card = await page.evaluate(async () => {
-      const b = [...document.querySelectorAll('#fish .pick button')]
-        .find(x => /Tautog/.test(x.textContent));
-      if (!b) return null;
-      b.click();
-      await new Promise(r => setTimeout(r, 1200));
-      const marks = [...document.querySelectorAll('#fishcard .tmark')]
-        .map(m => m.textContent.trim().toLowerCase());
-      // A BAND's claim, not the first `.tclaim` on the card. The Wikipedia
-      // natural-history note carries the same class and renders above the
-      // terms, so `querySelector` returned the encyclopedia disclaimer and
-      // this check never looked at a citation at all. Every band marked
-      // `cited` is collected rather than the first, and the count is
-      // reported below: a selector that matched nothing must not pass on an
-      // empty set.
-      const bands = [...document.querySelectorAll('#fishcard details.term')]
-        .filter(t => t.querySelector('.tmark.cited'))
-        .map(t => ((t.querySelector('.tclaim') || {}).textContent || '').trim());
-      // The credit for the PHOTO is the paragraph immediately after it. The
-      // same shared class, one line down: `.credit` is also on the natural-
-      // history licence line, which would vouch for an image it has nothing
-      // to do with. desk.mjs learned this first.
-      const img = document.querySelector('#fishcard img.photo');
-      const cr = img ? img.nextElementSibling : null;
-      return {
-        fish: document.querySelectorAll('#fish .pick button').length,
-        cited: marks.filter(m => m === 'cited').length,
-        prior: marks.filter(m => m === 'prior').length,
-        bands,
-        img: !!img,
-        credit: cr && cr.classList.contains('credit') ? cr.textContent.trim() : '',
-      };
-    });
-    step('desk fish: every loggable fish is pickable',
-         card && card.fish > 30, card ? `${card.fish} fish` : 'no picker');
-    step('desk fish: cited bands and hand-set priors are told apart',
-         card && card.cited > 0 && card.prior > 0,
-         card ? `${card.cited} cited, ${card.prior} prior` : 'no card');
-    // Every band the card marks `cited` has to name the document it came
-    // from, which is the bracketed tag -- [EFH-TOG p.5], [BB-TOG]. A band
-    // marked cited whose claim names nothing is the exact failure this card
-    // exists to prevent, so it is reported by its own text.
-    const uncited = card ? card.bands.filter(c => !/\[/.test(c)) : [];
-    step('desk fish: every cited band names its document',
-         card && card.bands.length > 0 && uncited.length === 0,
-         !card ? 'no card'
-           : !card.bands.length ? 'no cited band on the card'
-           : uncited.length ? `${card.bands.length} cited, no document in `
-                              + JSON.stringify(uncited[0].slice(0, 50))
-           : `${card.bands.length} cited bands · ${card.bands[0].slice(0, 46)}`);
-    // Somebody else's photograph under a Creative Commons licence. The credit
-    // is a condition of using it, so an image without one is worse than no
-    // image at all -- and this is a check that could only pass against a real
-    // rendered page.
-    //
-    // Somebody, where it came from, and the licence: all three, or it is not
-    // an attribution. Naming ONE provider was wrong from the day the photo
-    // order changed to Wikipedia's taxobox first (2026-09-17), because it
-    // then failed on a correctly credited Wikimedia image. Same test as
-    // desk.mjs's sweep, deliberately -- one invariant, one expression of it.
-    step('desk fish: a photo carries its licence and credit',
-         card && (!card.img ||
-                  /\S.* · (Wikimedia Commons|iNaturalist) \(.+\)/.test(card.credit)),
-         card ? (card.img ? card.credit.slice(0, 70) : 'no photo for this fish') : '');
-  }
+  // The fish card's own checks are in desk.mjs, not here. Four of them lived
+  // in this file until 18 September 2026 and two had been failing since the
+  // Fish tab was reworked (#8) -- they read `#fishcard .tclaim` and
+  // `#fishcard .credit`, both of which now find the encyclopedia section that
+  // was added above the forecast. desk.mjs was already asserting the same
+  // things against the API rather than against a shape, and a second copy
+  // here could only ever drift out of step with the page a second time. What
+  // this file keeps is the walkthrough's own question -- does the tab render
+  // at all -- which is the `desk tab:` loop above.
 
   // Regs replaced Review, and the point of the swap was the link: a rule you
   // cannot check against its notice is the thing Matt said he did not want.

@@ -444,6 +444,26 @@ async function run(url) {
         const r = c.getBoundingClientRect();
         return r.width > 0 && (r.right > br.right + 1 || r.left < br.left - 1);
       }).map(c => c.id || c.className);
+      // Clipping is not spilling, and for a fortnight that difference was the
+      // whole bug: `charts` and `scan` were ellipsised down to "cha..." and
+      // "sc..." on an honest 412px phone while every check above went green,
+      // because a label cut off INSIDE its own box never crosses the bar's
+      // edge. scrollWidth against clientWidth is the only way an ellipsis is
+      // visible to script. #layers is excluded -- it is the chart menu, a
+      // fixed-position child that is legitimately taller than its box.
+      const labels = [...bar.children].filter(c => {
+        if (c.id === 'layers') return false;
+        const s = getComputedStyle(c);
+        return s.display !== 'none' && s.visibility !== 'hidden'
+            && c.getBoundingClientRect().width > 0;
+      }).map(c => ({ id: c.id || c.className,
+                     want: c.scrollWidth, got: c.clientWidth,
+                     // A <select> reports its widest OPTION as scrollWidth,
+                     // not the selected text, so it would read as permanently
+                     // clipped. Its own truncation is the browser's and the
+                     // full name is one tap away; the buttons' is not.
+                     exempt: c.tagName === 'SELECT' }));
+      const clipped = labels.filter(l => !l.exempt && l.want > l.got + 1);
       // Get the sheet out of the way first. It is z-index 40 and the menu is
       // 6 inside a bar at 5, so with the sheet up the hit test at the menu's
       // location correctly returns the SHEET -- which says nothing about
@@ -474,7 +494,7 @@ async function run(url) {
         menuWins = !!(hit && hit.closest('#layers'));
       }
       document.getElementById('layersbtn').click();
-      return { spill, stowed: stowed.length, menuWins,
+      return { spill, stowed: stowed.length, menuWins, labels, clipped,
                barW: Math.round(bar.scrollWidth),
                barH: Math.round(bar.getBoundingClientRect().height),
                kids: [...bar.children].map(c => c.id || c.className),
@@ -485,6 +505,16 @@ async function run(url) {
        controls.spill.length === 0 && controls.fits,
        `${controls.barW}px in ${controls.barH}px tall, spilling: ` +
        `${controls.spill.join(', ') || 'none'}`);
+    // The floor: a run that examined no labels proved nothing, exactly like
+    // the empty-MARKERS runs. Two buttons stay on the bar at this width and
+    // both must be whole.
+    ok(`phone/${scheme}: no control is clipped to an ellipsis`,
+       controls.labels.filter(l => !l.exempt).length >= 2
+         && controls.clipped.length === 0,
+       controls.clipped.length
+         ? controls.clipped.map(c => `${c.id} wants ${c.want} has ${c.got}`).join(', ')
+         : `${controls.labels.filter(l => !l.exempt).length} labels whole, ` +
+           `${controls.labels.filter(l => l.exempt).length} exempt`);
     ok(`phone/${scheme}: stowed controls are in the chart menu`,
        controls.stowed === 5, `${controls.stowed} of 5`);
     ok(`phone/${scheme}: the chart menu outranks a marker`,
