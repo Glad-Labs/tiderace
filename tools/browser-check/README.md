@@ -7,6 +7,7 @@ labels or the panel covering them.
 
     node tools/browser-check/preflight.mjs   # REQUIRED before any UI commit
     node tools/browser-check/desk.mjs        # the desk page, which preflight does not cover
+    node tools/browser-check/walkthrough.mjs # drive both pages the way a person does
     node tools/browser-check/check.mjs       # just the panel-overlap check
 
 `preflight` is the one to run. Thirty checks across both viewports and both
@@ -69,6 +70,34 @@ the ones to preserve:
   summary line, so a run that had found six real failures printed nothing
   and looked like a crash. Each tab is trapped; a tab that throws fails
   itself and the run still reports.
+
+`walkthrough.mjs` is the other half of `preflight`: preflight checks invariants
+that must hold of any build, and the walkthrough opens every screen, presses
+every control and switches every mode, watching for a screen that renders
+nothing or a console that fills up. It takes a URL and defaults to
+`http://localhost:8765`, so pointing it at a server of your own is
+`node tools/browser-check/walkthrough.mjs http://localhost:8799`.
+
+Its own checks are the ones no single page owns: the map renders with its
+markers, the sheet's tabs say something, the slider moves the forecast and
+leaves the observations alone, the theme survives a round trip. The fish
+card's checks are NOT among them -- four lived here until 18 September 2026
+and moved to `desk.mjs`, for the reason the `.tclaim` bullet above gives.
+
+One lesson of its own, and it is the same shape as that one:
+
+* **A check whose condition is the literal `true` cannot fail.**
+  `step('map loads with markers', true, ...)` printed the count and passed on
+  any of it, including none: on 18 September 2026 it printed "ok -- 0
+  markers" on two full runs against a live server. The empty-MARKERS state is
+  the one `check.mjs`'s own header calls out as proving nothing, and this
+  check was reporting it as a pass. It ran in a real gap, too -- `ready()` is
+  a fact about the map style, the markers are drawn when the grid arrives,
+  measured 0.1 s apart warm and 24.8 s cold. It waits for the markers now, on
+  the grid's budget, and asserts the count it reports: one per position
+  `GRID` returned, each of them in the document. Every `step`/`ok` condition
+  in this directory was audited for the same shape afterwards; this was the
+  only one.
 
 ## Why this exists
 
